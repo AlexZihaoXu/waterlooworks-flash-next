@@ -31,7 +31,7 @@ STEPS = (
     "enter username",
     "next",
     "enter password",
-    "pause",
+    "password ready",
 )
 USERNAME_SELECTOR = (
     "input:visible:not([type=hidden]):not([type=password])"
@@ -182,7 +182,7 @@ def start_login(credentials_path: Path) -> LoginSession:
             lambda: enter_secret("password", "input[type=password]:visible"),
         )
         step(STEPS[9], lambda: None)
-        log.warning("Paused before password submission; waiting for user instructions.")
+        log.info("Password entry complete; returning control to the caller.")
         return LoginSession(playwright, context, page)
     except Exception:
         # Log only a fixed stage label, never exception text or page data.
