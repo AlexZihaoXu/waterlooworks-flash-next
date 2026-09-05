@@ -8,6 +8,15 @@ Use Conventional Commits: `type(scope): description`. Scopes are optional; mark 
 
 Before committing, run the checks documented in the README. CI runs the same quality gates; repository branch protection must be configured separately by the owner to require them before merging.
 
+## UI components
+
+Follow the [HeroUI UI component rules in AGENTS.md](AGENTS.md#ui-component-rules):
+
+- Check the official HeroUI v3 component list, reference designs/examples, and component-specific usage documentation before using a component.
+- Do not make CSS-level modifications to HeroUI components. Use documented props and variants, not custom CSS, inline styles, or class overrides.
+- Do not invent custom UI components without explicit user permission. First confirm that no HeroUI component or documented composition provides a close fit, explain the gap, and ask for approval.
+- Explicitly highlight any approved custom component in the handoff, including the reason and affected files.
+
 ## Privacy and platform exploration
 
 - Keep `.experiment/` in `.gitignore` at all times.

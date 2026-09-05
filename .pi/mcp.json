@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "heroui-react": {
+      "lifecycle": "keep-alive",
+      "directTools": true,
+      "disabled": false
+    }
+  }
+}

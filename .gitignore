@@ -1,4 +1,10 @@
 .experiment/
+.pi/npm/
+.pi/git/
+.pi/sessions/
+.pi/mcp-cache.json
+.pi/mcp-oauth/
+.pi/mcp-traces/
 .env
 .env.*
 !.env.example

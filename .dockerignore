@@ -1,4 +1,6 @@
 .git
+.pi
+.mcp.json
 .experiment
 **/node_modules
 **/dist
