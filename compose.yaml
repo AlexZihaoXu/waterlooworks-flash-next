@@ -1,0 +1,25 @@
+services:
+  frontend-dev:
+    profiles: [dev]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: dev
+    ports:
+      - '127.0.0.1:5173:5173'
+    volumes:
+      - ./frontend/src:/app/frontend/src:ro
+      - ./frontend/public:/app/frontend/public:ro
+    init: true
+
+  frontend-prod:
+    profiles: [prod]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: prod
+    ports:
+      - '127.0.0.1:8080:8080'
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,12 @@
+.git
+.experiment
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/.*_cache
+**/.env
+**/.env.*
+**/coverage
+**/test-results
+**/playwright-report

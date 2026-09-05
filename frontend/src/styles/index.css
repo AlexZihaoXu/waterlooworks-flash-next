@@ -1,0 +1,19 @@
+@import 'tailwindcss';
+@import '@heroui/styles';
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  max-width: 60rem;
+  margin-inline: auto;
+  padding: 2rem;
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
