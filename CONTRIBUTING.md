@@ -2,7 +2,7 @@
 
 ## Workflow
 
-Use test-driven development: write a failing test, make the smallest passing change, then refactor. Initial tests cover only package import and the placeholder UI; no WaterlooWorks behavior is assumed or tested yet.
+Use test-driven development: write a failing test, make the smallest passing change, then refactor. Tests cover package import, credential-free logging, and the placeholder UI. The real credential-involving login flow is verified through explicit user-guided runs, not unit tests. Never load personal credentials during routine tests.
 
 Use Conventional Commits: `type(scope): description`. Scopes are optional; mark breaking changes with `!` or a `BREAKING CHANGE:` footer. Commit enforcement is currently a review responsibility.
 

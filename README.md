@@ -171,6 +171,12 @@ Start Pi **from the repository root**, trust the project when prompted, and rest
 
 The HeroUI server configuration remains project-scoped; no global MCP settings are needed or changed. Local Pi packages, caches, traces, and session artifacts are ignored. Other MCP clients may read `.mcp.json`, but their startup and trust behavior is client-specific; `.pi/mcp.json` applies only to Pi.
 
+## Local credentials
+
+Put your WaterlooWorks credentials in the root `.credentials.json`, using the `username` and `password` keys. The local placeholder contains empty values; fill it in yourself. It is ignored by Git and Prettier and excluded from Docker build contexts.
+
+Agents must not view or inspect this file. The login script loads it dynamically only when needed, without printing credentials or including them in logs, errors, or artifacts. Never commit the file or bake it into an image; future container access requires an explicit runtime secret or read-only mount. This is plaintext storage, so restrict local filesystem access; Git ignore rules are not encryption.
+
 ## Agent workspace
 
 The `.experiment/` folder is a local scratch workspace where agents can run quick tests and clone or inspect other repositories. It must always remain in `.gitignore`; its contents must not be committed.
@@ -200,6 +206,6 @@ Use placeholders for anything not yet provided, verified, or implemented. Do not
 
 ## Status
 
-Initial scaffold only: a placeholder UI, an importable Python package, and development tooling. No WaterlooWorks automation, job models, mock data, API, or persistence is implemented. Fetching details, update frequency, analysis approach, and the functional interface are still to be discussed.
+The scaffold includes a placeholder UI, development tooling, and a guided login script that stops after password entry without submitting. See [the verified flow and run instructions](docs/scraping-workflow.md). The private browser profile persists locally under `.experiment/browser-profile/`; returning-session branches are not implemented yet. No job retrieval, job models, mock data, API, or application database is implemented.
 
 Access should respect WaterlooWorks policies and protect students’ credentials and personal data. This is an independent project, not an official WaterlooWorks product.

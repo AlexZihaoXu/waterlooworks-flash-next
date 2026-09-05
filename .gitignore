@@ -1,4 +1,5 @@
 .experiment/
+.credentials.json
 .pi/npm/
 .pi/git/
 .pi/sessions/

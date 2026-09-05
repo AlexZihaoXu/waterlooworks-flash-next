@@ -2,6 +2,12 @@
 
 Follow `README.md` and `CONTRIBUTING.md`, including TDD, Conventional Commits, and the no-mock-data policy. Keep `.experiment/` ignored and private data out of Git.
 
+## Credentials
+
+The root `.credentials.json` is user-managed and must stay gitignored, excluded from Docker build contexts, and excluded from formatting tools. Agents must never view, read through tools, search, print, or otherwise expose its contents. Exclude it from broad repository searches and diagnostic collection.
+
+Only application or authentication code may load it dynamically at runtime when credentials are needed, using the `username` and `password` keys. Never hardcode, copy, log, return, or include these values in tool output, exceptions, screenshots, traces, or other artifacts. Validation errors must not include credential values. Do not overwrite the file or modify user-provided credentials. Future container access must use an explicit runtime secret or read-only mount, never a Docker image layer.
+
 ## Pi plugins
 
 Do not install Pi plugins or add them to project settings for automatic installation. If a plugin is needed, explain why and ask the user to install it themselves. This applies to both global and project-local installations.

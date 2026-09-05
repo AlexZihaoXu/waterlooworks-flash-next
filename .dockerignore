@@ -1,4 +1,5 @@
 .git
+.credentials.json
 .pi
 .mcp.json
 .experiment
