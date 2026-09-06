@@ -133,6 +133,7 @@ Temporary launchers and execution scripts have been removed. Core modules under 
 - `listings.py`: construct `ListingCollection(source)` and immediately call `.run()` for paced, sequential collection. Inspect safe aggregate values such as `.pages_completed`, `.complete`, and `len(.postings)`. Catch `ListingFetchError` at the application boundary and close the session; never log raw exceptions.
 - `export.py`: `export_listings(collection, output_directory)` exports a completed collection only. Use a private ignored directory such as `.experiment/output/`.
 - `logging.py`: safe stage-log formatting and logger configuration.
+- `database.py`: SQLite schema v2, transactional migration, empty run creation, the `StoredListing` model, and atomic `save_listings()` upserts with SHA-256 revision history. Automatic collector wiring is not implemented.
 
 Do not auto-run these modules on import. Callers own browser cleanup through `session.close()` on completion, cancellation, or failure. Chromium uses ignored `.experiment/browser-profile/` with normal caching and service workers enabled. Cookies/storage can persist, but the site controls expiration. Do not inspect, log, commit, ship, or concurrently open the profile.
 
@@ -150,6 +151,8 @@ Format: `[HH:MM:SS] [scope/LEVEL]: message`, local time, scopes `login`, `duo`, 
 
 Authorized code message: `Detected verification code: [NNN] (waiting...)`, using the detected code once. Never log username/password, input values, page dumps, authentication URLs, or raw exceptions. Keep console output private.
 
-## Next steps
+## SQLite model and next steps
 
-**Placeholder — per-posting detail retrieval, storage, and analysis await further user-guided work.**
+The [SQLite storage model in README](../README.md#sqlite-storage-model) defines `collection_runs`, latest-snapshot `postings`, and append-only `posting_revisions`. SHA-256 hashes of canonical allowlisted listing JSON identify changes. Repeated unchanged observations only update last-seen metadata; changes and reversions append full snapshots with run references. Timestamps record persistence time, not a claimed server-side change time. Migrated v1 snapshots become marked baselines; unavailable earlier history is not invented. Local database files live under ignored `data/`, separate from browser-profile experiments. Only allowlisted listing fields belong in the database; no runtime action/cookie/request data.
+
+Schema migration and revision persistence are implemented; the local database remains empty. Tests cover generic hashing, empty migrations/rollback, and transaction boundaries without invented postings. Populated revision writes/backfill have not been verified with real data. Automatic collector-to-database wiring and run finalization remain **placeholders**, as do per-posting details and analysis.

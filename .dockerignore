@@ -3,6 +3,7 @@
 .pi
 .mcp.json
 .experiment
+data
 **/node_modules
 **/dist
 **/.venv

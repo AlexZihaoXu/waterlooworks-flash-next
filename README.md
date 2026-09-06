@@ -31,6 +31,119 @@ Missing or ambiguous details should be clearly marked rather than presented as c
 
 Prefer direct requests when practical, using Playwright for browser interaction and authentication. The listing collector currently uses Python's standard-library HTTP client; per-posting retrieval remains to be implemented.
 
+## Data schematic (observed so far)
+
+This describes the fields observed during guided exploration and the current core/export mapping—not a finalized API contract. No mock postings or sample values are included.
+
+```text
+Paged listing response
+├── totalResults: integer
+├── page: integer
+└── data: row[]
+    ├── id: platform row identifier (not used by the collector)
+    └── data: cell[]
+        ├── key: field name
+        └── value: JSON value (type depends on the field)
+
+Collected listings
+└── keyed by posting ID from the "Id" cell
+    └── listing row, retained in memory
+
+Private JSON export
+├── exported_at: UTC timestamp string
+├── complete: boolean
+├── pages_completed: integer
+├── records_received: integer
+├── unique_postings: integer
+├── duplicates: integer
+└── postings: exported listing[]
+```
+
+### Listing fields and export mapping
+
+| Observed source field   | Export field        | Meaning / current handling                                     |
+| ----------------------- | ------------------- | -------------------------------------------------------------- |
+| `Id`                    | `id`                | Posting ID; normalized to a string and used for deduplication  |
+| `JobTitle.postingTitle` | `title`             | Title extracted from the `JobTitle` cell's object value        |
+| `Organization`          | `organization`      | Organization name                                              |
+| `Division`              | `division`          | Organization division                                          |
+| `Openings`              | `openings`          | Number of openings as supplied                                 |
+| `City`                  | `city`              | Listed city/location text                                      |
+| `Level`                 | `level`             | Posting's level field                                          |
+| `ApplicationCount`      | `application_count` | Application count as supplied                                  |
+| `Deadline`              | `deadline`          | Display deadline as supplied; not yet normalized to a datetime |
+
+Apart from ID and title handling, exported values retain their source JSON types; numeric/date normalization is not implemented. Fields absent from a row are omitted, not invented.
+
+Other observed cells: `postingId`, lowercase `deadline`, `canApply`, `hasApplication`, `online`, and `apply`. The `JobTitle` object also contains `new`, `featured`, `applied`, and `viewed` flags. These are **not exported**. `postingId` is distinct from the row-level `id` and the `Id` cell; their equivalence has not been established.
+
+### Per-posting detail response (exploratory only)
+
+Clicking a title produced two POSTs with `action` and `postingId`: one returned JSON metadata, the other markup. The metadata contained:
+
+- Strings: `div`, `internalStatus`, `org`, `position`, `status`.
+- Integers: `id`, `divId`.
+- Boolean: `hasPreScreening`.
+- Objects: `applicationData`, `geoData`.
+- Arrays: `defaultLocations`, `tags`.
+
+Nested schemas and markup extraction remain **placeholders**; no detail collector is implemented. Salary, keywords, and remote/hybrid/in-person analysis also remain **placeholders** until their sources and extraction rules are verified.
+
+## SQLite storage model
+
+Schema v2 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
+
+```mermaid
+erDiagram
+    collection_runs ||--o{ postings : first_seen_in
+    collection_runs ||--o{ postings : last_seen_in
+    postings ||--o{ posting_revisions : has_history
+    collection_runs ||--o{ posting_revisions : observed_in
+    collection_runs {
+        TEXT id PK "UUID"
+        TEXT started_at "UTC ISO timestamp"
+        TEXT finished_at "nullable while running"
+        TEXT status "running, completed, failed, interrupted"
+        INTEGER pages_completed
+        INTEGER records_received
+        INTEGER unique_postings
+        INTEGER duplicates
+        TEXT error_category "nullable; safe category only"
+    }
+    postings {
+        TEXT posting_id PK "verified Id cell, stored as text"
+        TEXT listing_json "allowlisted current listing fields"
+        TEXT content_hash "SHA-256 of canonical listing JSON"
+        TEXT title "generated from listing_json"
+        TEXT organization "generated from listing_json"
+        TEXT first_seen_at
+        TEXT last_seen_at
+        TEXT first_seen_run_id FK
+        TEXT last_seen_run_id FK
+    }
+    posting_revisions {
+        INTEGER revision_id PK "append order"
+        TEXT posting_id FK
+        TEXT content_hash "SHA-256; deliberately not unique"
+        TEXT hash_version "sha256-json-v1"
+        TEXT listing_json "full snapshot for this revision"
+        TEXT run_id FK
+        TEXT observed_at "persistence time in UTC"
+        INTEGER is_baseline "1 only for migrated v1 snapshots"
+    }
+```
+
+- **`collection_runs`:** Collection-level provenance and counters. Completed/failed/interrupted runs require a finish timestamp. Counts must be nonnegative, and records must equal unique postings plus duplicates. Never store exception text, credentials, cookies, or request templates.
+- **`postings`:** One latest listing snapshot per posting ID. `listing_json` uses the export field names above and rejects extra root keys. It preserves unnormalized JSON types for fields such as openings, level, and deadline; missing fields are distinct from explicit nulls. Title and organization are generated, indexed columns for search.
+- **`posting_revisions`:** Append-only full snapshots, with a hash, run reference, and observation timestamp. SQL triggers reject updates/deletes. Order a posting's history by `revision_id`; compare adjacent `listing_json` values to see changed fields.
+- **Change detection:** `sha256-json-v1` hashes compact UTF-8 JSON with recursively sorted object keys. Object key order and formatting do not create changes; array order, field values/types, and missing versus explicit null do. Run IDs and observation timestamps are excluded; all allowlisted listing fields—including application count—are included. NaN/Infinity are rejected. This is change detection, not encryption or tamper-proof auditing.
+- **Repeat observations:** First observation creates a revision. An identical current hash updates only the latest snapshot's last-seen metadata. A changed hash appends a revision and updates the current snapshot atomically. Reverting to an earlier hash creates another revision, so history does not collapse reversions.
+- **Relationships:** First/last-seen runs and revision run references are protected by foreign keys. No deletion/inactive state is inferred from absence. Unchanged observations are not separate revisions; every run-to-posting membership is not retained.
+- **SQLite settings:** Transactional v1-to-v2 migration (`user_version=2`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
+- **Core API:** `open_database(path)` initializes/migrates the database; the caller closes it. `start_collection_run(connection)` creates empty run metadata only. `save_listings(connection, run_id, listings)` takes validated `StoredListing` objects, saves a batch in one transaction, and returns the number of new revisions. It requires a running run, rejects duplicate IDs within a batch, and does not commit a caller's pre-existing transaction. Run counters/finalization remain the caller's responsibility.
+
+**Scope:** Schema, hashing, revision persistence, and posting upserts are implemented. Automatic collector-to-database wiring, run finalization, and details/analysis tables remain placeholders. Tests cover generic JSON/hash behavior, empty-schema migration/rollback, and transaction boundaries; populated history and backfill have not been verified with real postings. No private postings or mock data are seeded. Use local disk, restrict filesystem access, and back up SQLite consistently (including WAL state); this database is not encrypted. Future Docker access requires a runtime volume, never image contents.
+
 ## Frontend stack
 
 - **React + Vite:** Frontend UI and development/build tooling.
@@ -67,6 +180,7 @@ waterlooworks-flash-next/
 │   │       ├── jobs.py      # Board navigation and passive request capture
 │   │       ├── listings.py  # Paced direct listing fetches and models
 │   │       ├── export.py    # Private, allowlisted JSON exports
+│   │       ├── database.py  # SQLite schema, initialization, and listing model
 │   │       ├── logging.py   # Safe colored stage logs
 │   │       ├── config.py    # Planned runtime configuration
 │   │       ├── models/     # Pydantic data models
@@ -102,8 +216,8 @@ waterlooworks-flash-next/
 
 - Keep scraping, analysis, and UI concerns separate. Promote verified experimental work into the backend rather than depending on `.experiment/` at runtime.
 - Tooling: npm workspaces with a root `package-lock.json`, pytest for Python, Vitest and Testing Library for React, mypy for Python type checks, and GitHub Actions for CI. E2E tooling remains undecided.
-- Backend API framework, persistence, scheduling, and runtime entry points: **Placeholder — to be decided.** No routes, schemas, or storage layout are assumed yet.
-- Private runtime data and authentication state stay out of Git and container images. Their storage and Docker volume configuration: **Placeholder — to be defined.**
+- Backend API framework, scheduling, and runtime entry points: **Placeholder — to be decided.** SQLite schema v2 includes hashed revision history; integration with the collector remains pending.
+- Private database files live under ignored `data/`; browser state remains under ignored `.experiment/`. Docker runtime volume configuration: **Placeholder — to be defined.**
 - Test directories do not imply mock datasets or fixtures; follow the placeholder policy below.
 
 ## Deployment model
@@ -222,6 +336,6 @@ Use placeholders for anything not yet provided, verified, or implemented. Do not
 
 Placeholder frontend plus a reusable backend core. Guided live runs verified authentication branches, direct board navigation, and a complete listing pass of **25 pages / 1,216 unique postings / zero duplicates** after correcting response-capture timing and ISO-8859-1 decoding. The dedicated browser profile stays private under `.experiment/browser-profile/`.
 
-Launch scripts have been removed. Credential-free tests cover pacing, retry policy, encoding, destination checks, logging, and JSON writing. Live transient-retry behavior and full-data JSON export remain unverified. No per-posting detail collector, mock data, application API, or database is implemented.
+Launch scripts have been removed. Credential-free tests cover pacing, retry policy, encoding, destination checks, logging, and JSON writing. Live transient-retry behavior and full-data JSON export remain unverified. SQLite schema v2 and hashed revision persistence are implemented but not yet wired to collection. No per-posting detail collector, mock data, or application API is implemented.
 
 Access should respect WaterlooWorks policies and protect students’ credentials and personal data. This is an independent project, not an official WaterlooWorks product.
