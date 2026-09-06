@@ -38,7 +38,29 @@ flowchart TD
     I -->|250 ms| J[Password ready]
     J -->|250 ms| K[Click Sign in exactly once]
     K -->|500 ms| L{WaterlooWorks host plus Dashboard and logout?}
-    L -->|Yes: challenge completed or trusted-device redirect| DONE[Log arrival; return browser to interactive shell]
+    L -->|Yes: challenge completed or trusted-device redirect| DONE[Log confirmed WaterlooWorks arrival]
+    DONE -->|250 ms| BOARD[Start passive capture; open board URL; wait for load]
+    BOARD -->|250 ms| ALL[Find All Jobs button at runtime and click]
+    ALL --> CAPTURE[Reuse latest captured page 1; do not require a new request]
+    CAPTURE --> PAUSE[Pause; listing collection is explicit opt-in]
+    CAPTURE -->|Caller starts collection immediately after fresh login| BATCH[Sequential batch of at most 3 listing pages]
+    BATCH --> SEED{Captured page 1?}
+    SEED -->|Yes| REUSE[Reuse captured response; no replay]
+    SEED -->|No| WAIT[Wait until 2 seconds after previous completed fetch]
+    WAIT --> FETCH[One direct POST for next listing page]
+    FETCH --> VALID{Valid response and requested page?}
+    VALID -->|No| RETRY{Transient error and fewer than 3 attempts?}
+    RETRY -->|Yes: 4s then 8s after failed completion| FETCH
+    RETRY -->|No| STOP[Raise safe error; caller must close browser and return failure]
+    VALID -->|Yes| STORE[Deduplicate by posting ID]
+    REUSE --> STORE
+    STORE --> PROGRESS[Log page/count/unique/duplicates/ETA]
+    PROGRESS --> MORE{More pages in initial page bound?}
+    MORE -->|Yes: same delay across batch boundaries| BATCH
+    MORE -->|No| LISTDONE[In-memory listing collection complete; no details]
+    LISTDONE --> EXPORT{JSON export requested?}
+    EXPORT -->|Yes| JSON[Atomically save allowed listing fields to ignored output directory]
+    EXPORT -->|No| MEMORY[Keep results in memory only]
     L -->|No| M{Known HTTPS authentication host?}
     M -->|No| UNKNOWN[Pause for guidance; do not assume success]
     M -->|Yes| N{Duo timeout or Invalid verification code visible?}
@@ -71,31 +93,63 @@ flowchart TD
 - Known-host transitions have a 60-second bound, reset while a visible code awaits approval and after accepting device trust. Timeout or exhausted code detection closes after three seconds and exits 1.
 - Unknown destinations pause for guidance. No automatic retry, reload, fetch, extra navigation, or additional Duo push is performed by polling. The page itself may perform normal background authentication requests.
 
-## Script and local execution
+## Job-board navigation
 
-- `backend/src/waterlooworks_flash_next/login.py`: persistent browser startup and credential entry; returns at the password checkpoint.
-- `backend/src/waterlooworks_flash_next/duo.py`: single sign-in submission, code/trust/invalid-code/timeout branches, and WaterlooWorks arrival detection.
-- `backend/scripts/login.py`: connects both parts. **Running it submits once and may trigger a Duo notification.**
+Observed manual path: **Toggle Main Menu → Co-op Jobs → View Full Cycle Service Job Board**. The resulting URL was `https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm`, with no query or fragment. Refresh preserved the URL and visible Job Board/Search markers.
 
-Chromium uses ignored `.experiment/browser-profile/` with normal caching and service workers enabled. Cookies and browser storage can persist, but cache alone does not preserve authentication; the site controls expiration. Treat the profile as sensitive: never inspect, log, commit, copy into an image, or use it concurrently. Close with `session.close()` before rerunning.
+After confirmed dashboard arrival, the script now navigates directly to that observed route, waits for page load, then finds the **All Jobs** button by its accessible name and clicks it. All Jobs is a runtime action, not a URL-derived link. Each step adds 250 ms. The My Program filter is left untouched. Listing-response capture starts **before navigation**, because the initial board load already fetches the list and the All Jobs click may send no new request. After the single click, wait for outstanding board XHR/fetch activity to finish and a short 250 ms quiet interval, then reuse the latest matching response in memory. Never click again or replay page 1 just to obtain a response.
 
-Typing is approximately **33.3 ms per character** (360 words/min at five characters/word). Username/password load only at runtime on the verified authentication origin. No credential export or job retrieval is implemented.
+A saved-profile end-to-end rerun verified the direct dashboard-to-board shortcut and runtime All Jobs click. The browser remained open afterward for guided exploration; a later inspection identified the list POST and verified direct single-page fetches. The initial batching test completed seven pages with 350 unique postings and zero duplicates, then failed on page 8. The original sanitized error did not identify its cause. The first fresh-login retry run stopped before collection: it waited for a response after clicking All Jobs, but the listing had already loaded during navigation. A passive diagnostic confirmed the click completed and all observed board XHRs finished before it. Capture was moved before navigation and passed the next live run. That run then isolated the page-8 failure as JSON/encoding validation rather than transport.
 
-From the repository root, after backend setup and Chromium installation, in a private **Git Bash** terminal:
+## Listing collection: sequential and opt-in
 
-```sh
-cd .experiment/test
-FORCE_COLOR=1 WW_LOG_LEVEL=DEBUG uv run --project ../../backend --locked python -u -i ../../backend/scripts/login.py
-```
+The observed listing request is a form-encoded POST to the job-board route with `page`, `itemsPerPage`, `sort`, `filters`, `columns`, `keyword`, `action`, and `isDataViewer`. Response content is JSON despite its HTML content type: `totalResults`, `page`, and `data`. Rows contain key/value cells, including posting ID, title, and organization. The opaque action and authenticated cookies are captured dynamically; never log, hardcode, or persist them.
 
-At confirmed WaterlooWorks arrival or an unknown destination, the interactive shell exposes `session` and `page`. Close with `session.close()` and `exit()`. Timeout and invalid-code shutdown exit 1 even with `python -i`. Keep `DEBUG` and `PWDEBUG` unset.
+Direct page 1 and page 5 requests succeeded during exploration. Page 1 counts and totals matched the captured browser response, but full record equality did not; equivalence was not claimed. Page 5 returned 50 records. The parser also validated the existing page-1 response and 50 unique IDs offline, without another network request.
+
+A fresh-login, single-request page-8 diagnostic returned HTTP 200 and 50 records: the response was not valid UTF-8 but was valid JSON when decoded as its declared **ISO-8859-1** charset. Both browser-captured and direct responses now prefer strict UTF-8 decoding (including BOM), falling back to declared ISO-8859-1/Windows-1252 only when UTF-8 fails. No replacement characters, body logging, or charset guessing is used. JSON syntax and schema validation remain separate fail-closed checks. Codec tests contain no posting fixtures or authentication data.
+
+The corrected fresh-login collection passed end-to-end: **25 pages, 1,216 records, 1,216 unique posting IDs, zero duplicates**. The last page contained 16 records. Page 1 was reused from browser capture; pages 2–25 were fetched sequentially, in batches of at most three with the 2-second minimum interval. No detail requests were made. Retry exhaustion and transient-retry behavior remain policy-tested rather than live-failure-tested.
+
+Callers must perform a fresh login, capture the runtime action/cookies and page 1, then start `ListingCollection.run()` immediately. The temporary execution scripts have been removed; the reusable core does not start a collection automatically. Do not reuse an old interactive shell's request template: sessions may expire quickly. A capture older than 30 seconds is rejected before starting (a conservative guard, not a claim about actual cookie lifetime).
+
+The captured page 1 is reused as the first completed fetch, then **one direct Python HTTP POST runs at a time**. Pages are grouped into batches of **at most three**, not fetched concurrently. There is a minimum **2-second completion-to-next-start interval** after every fetch, including between batches. Time spent processing results counts toward that interval; there is no additional batch cooldown. The browser bootstrap itself may make its normal UI requests; the pacing governs subsequent collector requests.
+
+Every completed page logs page/total, rows received, cumulative records, unique IDs, duplicates, and ETA. ETA is a rolling estimate from observed request durations plus remaining 2-second intervals, assuming no further retries; it is not a guarantee. Page 1 is explicitly marked as a captured response rather than a new request.
+
+The initial `totalResults/itemsPerPage` determines the bounded pass. If totals change, log a warning without expanding the crawl indefinitely. Deduplication uses posting ID; it cannot prevent omissions if a live list changes during pagination. Retry a page at most **twice** for network/timeouts, interrupted responses, or HTTP 408/500/502/503/504: initial attempt after the normal **2 seconds**, then retries **4 seconds** and **8 seconds** after the respective failed attempt finishes. Do not stack an extra normal delay on a retry. Stop after the third failed attempt.
+
+Authentication failures (401/403), rate limits (429), redirects, TLS failures, invalid JSON/encoding, schema mismatches, unexpected empty pages, or a page adding no new IDs are not blindly retried. No automatic relogin or detail requests. Logs include only safe category, page, attempt/maximum, numeric HTTP status when available, and retry decision—not exception text, response bodies, or headers.
+
+Results remain only in `listing_collection.postings`. The collector raises a sanitized error and retains partial results in memory. Its caller must close the browser and propagate failure (a future CLI should exit nonzero). The removed runner previously implemented this boundary; the library does not terminate its caller on listing failures. Partial results are lost when the process exits. `complete` means the bounded page pass finished, not that the changing platform was captured atomically. A source is single-use to prevent accidental replay. There is no partial checkpoint/resume yet. An optional completed-pass JSON export is available; no fetched data or mock fixtures are committed. Do not print or serialize the collector or its runtime source.
+
+## Reusable core API
+
+Temporary launchers and execution scripts have been removed. Core modules under `backend/src/waterlooworks_flash_next/` remain:
+
+- `login.py`: `start_login(credentials_path)` creates the persistent browser and enters credentials, returning a `LoginSession` at the password checkpoint.
+- `duo.py`: `submit_and_observe_duo(session)` submits once and observes code/trust/failure branches until authenticated arrival or an unknown destination. **Calling it may trigger a Duo notification.** Its existing Duo failure handler closes the browser and exits 1; application-level lifecycle integration remains future work.
+- `jobs.py`: `open_all_jobs(session.page)` confirms authentication, navigates to the board, clicks All Jobs, and returns a fresh `ListingSource` or `None`.
+- `listings.py`: construct `ListingCollection(source)` and immediately call `.run()` for paced, sequential collection. Inspect safe aggregate values such as `.pages_completed`, `.complete`, and `len(.postings)`. Catch `ListingFetchError` at the application boundary and close the session; never log raw exceptions.
+- `export.py`: `export_listings(collection, output_directory)` exports a completed collection only. Use a private ignored directory such as `.experiment/output/`.
+- `logging.py`: safe stage-log formatting and logger configuration.
+
+Do not auto-run these modules on import. Callers own browser cleanup through `session.close()` on completion, cancellation, or failure. Chromium uses ignored `.experiment/browser-profile/` with normal caching and service workers enabled. Cookies/storage can persist, but the site controls expiration. Do not inspect, log, commit, ship, or concurrently open the profile.
+
+Typing is approximately **33.3 ms per character**. Credentials load only at runtime on the verified authentication origin. Keep `DEBUG` and `PWDEBUG` unset. No per-posting detail collector is implemented.
+
+## Private JSON export
+
+`export_listings()` atomically writes UTF-8 JSON with a unique timestamped filename in the supplied output directory. Exported fields are allowlisted: ID, title, organization, division, openings, city, level, application count, and deadline, plus collection counts and export time. Runtime actions, cookies, request headers, credentials, internal apply controls, and raw response objects are never serialized. Keep outputs private and ignored; incomplete collections cannot be exported as complete results.
+
+The writer is tested with empty data only, without mock postings or live requests. Full-data export has not been live-verified.
 
 ## Logs
 
-Format: `[HH:MM:SS] [scope/LEVEL]: message`, local time, scopes `login`, `duo`, `shell`. Colors: gray DEBUG, green INFO, yellow WARN, red ERROR, cyan scope. `FORCE_COLOR=1` forces color; `NO_COLOR=1` disables it. `WW_LOG_LEVEL` supports DEBUG, INFO (default), WARN, ERROR.
+Format: `[HH:MM:SS] [scope/LEVEL]: message`, local time, scopes `login`, `duo`, `jobs`, `listings`, `shell`. Colors: gray DEBUG, green INFO, yellow WARN, red ERROR, cyan scope. `FORCE_COLOR=1` forces color; `NO_COLOR=1` disables it. `WW_LOG_LEVEL` supports DEBUG, INFO (default), WARN, ERROR.
 
 Authorized code message: `Detected verification code: [NNN] (waiting...)`, using the detected code once. Never log username/password, input values, page dumps, authentication URLs, or raw exceptions. Keep console output private.
 
 ## Next steps
 
-**Placeholder — job navigation and retrieval await user-guided exploration.**
+**Placeholder — per-posting detail retrieval, storage, and analysis await further user-guided work.**

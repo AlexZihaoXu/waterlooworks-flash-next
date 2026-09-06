@@ -29,7 +29,7 @@ Missing or ambiguous details should be clearly marked rather than presented as c
 - **Playwright:** Browser automation for complex scraping flows.
 - **Direct HTTP requests:** Fast data retrieval where browser automation is unnecessary.
 
-Prefer direct requests when practical, using Playwright for flows that require browser interaction or rendering. The HTTP client and scraping details are still to be decided.
+Prefer direct requests when practical, using Playwright for browser interaction and authentication. The listing collector currently uses Python's standard-library HTTP client; per-posting retrieval remains to be implemented.
 
 ## Frontend stack
 
@@ -62,7 +62,13 @@ waterlooworks-flash-next/
 │   ├── src/
 │   │   └── waterlooworks_flash_next/
 │   │       ├── __init__.py
-│   │       ├── config.py    # Validated runtime configuration
+│   │       ├── login.py     # Browser startup and credential entry
+│   │       ├── duo.py       # Duo branches and authenticated arrival
+│   │       ├── jobs.py      # Board navigation and passive request capture
+│   │       ├── listings.py  # Paced direct listing fetches and models
+│   │       ├── export.py    # Private, allowlisted JSON exports
+│   │       ├── logging.py   # Safe colored stage logs
+│   │       ├── config.py    # Planned runtime configuration
 │   │       ├── models/     # Pydantic data models
 │   │       ├── scraping/   # Verified Playwright and direct HTTP flows
 │   │       ├── analysis/   # Field extraction and normalization
@@ -119,7 +125,15 @@ docker compose --profile dev up --build
 docker compose --profile prod up -d --build
 ```
 
-Both profiles bind to localhost. Development mounts frontend source for hot reload; rebuild after dependency or configuration changes. Backend services, private storage, and authenticated retrieval remain placeholders until their runtime design is established. Container execution requires a running Docker daemon.
+Both profiles bind to localhost. Development mounts frontend source for hot reload; rebuild after dependency or configuration changes. Containerized backend services, private storage mounts, and automated scheduling remain placeholders; authenticated exploration currently runs locally. Container execution requires a running Docker daemon.
+
+## Backend core
+
+Reusable modules under `backend/src/waterlooworks_flash_next/` provide authentication, Duo handling, job-board navigation, paced listing collection, logging, and private JSON export. Temporary launchers and execution scripts have been removed; no collection starts automatically. The next application layer will compose these modules.
+
+Collection must immediately follow fresh authentication and runtime request capture. Listings are fetched sequentially in batches of up to three pages, with a 2-second completion-to-next-start interval and at most two transient-error retries at 4 and 8 seconds. Progress logs report counts and ETA. No per-posting detail fetching is implemented.
+
+`export_listings()` writes only completed results to a caller-supplied private directory, normally ignored `.experiment/output/`. Its allowlist excludes credentials, cookies, action tokens, and internal apply controls. See [the workflow and core API notes](docs/scraping-workflow.md).
 
 ## Local setup and checks
 
@@ -175,7 +189,7 @@ The HeroUI server configuration remains project-scoped; no global MCP settings a
 
 Put your WaterlooWorks credentials in the root `.credentials.json`, using the `username` and `password` keys. The local placeholder contains empty values; fill it in yourself. It is ignored by Git and Prettier and excluded from Docker build contexts.
 
-Agents must not view or inspect this file. The login script loads it dynamically only when needed, without printing credentials or including them in logs, errors, or artifacts. Never commit the file or bake it into an image; future container access requires an explicit runtime secret or read-only mount. This is plaintext storage, so restrict local filesystem access; Git ignore rules are not encryption.
+Agents must not view or inspect this file. Authentication code loads it dynamically only when needed, without printing credentials or including them in logs, errors, or artifacts. Never commit the file or bake it into an image; future container access requires an explicit runtime secret or read-only mount. This is plaintext storage, so restrict local filesystem access; Git ignore rules are not encryption.
 
 ## Agent workspace
 
@@ -206,6 +220,8 @@ Use placeholders for anything not yet provided, verified, or implemented. Do not
 
 ## Status
 
-The scaffold includes a placeholder UI, development tooling, and a guided login script that submits once and observes Duo using DOM-only polling. It logs a Duo code once when challenged, handles the optional device trust prompt, exits on timeout or invalid verification code, and recognizes WaterlooWorks after either approval or a trusted-device redirect. The full Duo approval/device-trust path, saved-trust login, and automatic Duo timeout shutdown passed live runs. The flow document distinguishes these from defensive branches that have not been live-tested. See [the flow, verification status, and run instructions](docs/scraping-workflow.md). The private browser profile persists locally under `.experiment/browser-profile/`; device trust can skip manual Duo approval, though credential entry was still required on the observed subsequent login. No job retrieval, job models, mock data, API, or application database is implemented.
+Placeholder frontend plus a reusable backend core. Guided live runs verified authentication branches, direct board navigation, and a complete listing pass of **25 pages / 1,216 unique postings / zero duplicates** after correcting response-capture timing and ISO-8859-1 decoding. The dedicated browser profile stays private under `.experiment/browser-profile/`.
+
+Launch scripts have been removed. Credential-free tests cover pacing, retry policy, encoding, destination checks, logging, and JSON writing. Live transient-retry behavior and full-data JSON export remain unverified. No per-posting detail collector, mock data, application API, or database is implemented.
 
 Access should respect WaterlooWorks policies and protect students’ credentials and personal data. This is an independent project, not an official WaterlooWorks product.

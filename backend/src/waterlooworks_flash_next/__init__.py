@@ -1,1 +1,1 @@
-"""WaterlooWorks Flash Next backend; platform integration is not implemented."""
+"""Reusable WaterlooWorks authentication, listing collection, and export core."""
