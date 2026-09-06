@@ -1,0 +1,726 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WaterlooWorks Flash Next local API",
+    "description": "Loopback-only listings API. Manual, single-flight refresh with a 300-second post-run cooldown. No individual detail collection. Never expose this service publicly.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspace": {
+      "get": {
+        "summary": "Workspace",
+        "operationId": "getWorkspace",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/refresh": {
+      "get": {
+        "summary": "Refresh Status",
+        "operationId": "getRefresh",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshSnapshot"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Start Refresh",
+        "operationId": "startRefresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshAccepted"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/refresh/events": {
+      "get": {
+        "summary": "Events",
+        "operationId": "streamRefresh",
+        "parameters": [
+          {
+            "name": "once",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Once"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE events named refresh; data is RefreshSnapshot JSON. Reconnect sends current state and up to 200 sanitized logs. Connecting never starts a refresh.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "x-event-payload": {
+              "$ref": "#/components/schemas/RefreshSnapshot"
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["detail"],
+        "title": "ErrorResponse"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "default": "ok"
+          },
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["status", "schema_version"],
+        "title": "HealthResponse"
+      },
+      "JsonValue": {},
+      "ListingRevision": {
+        "properties": {
+          "revision_id": {
+            "type": "integer",
+            "title": "Revision Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "hash_version": {
+            "type": "string",
+            "title": "Hash Version"
+          },
+          "observed_at": {
+            "type": "string",
+            "title": "Observed At"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/StoredListing"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision_id",
+          "content_hash",
+          "hash_version",
+          "observed_at",
+          "run_id",
+          "snapshot"
+        ],
+        "title": "ListingRevision"
+      },
+      "PostingResponse": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "listing": {
+            "$ref": "#/components/schemas/StoredListing"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "title": "Last Seen At"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "country": {
+            "type": "null",
+            "title": "Country",
+            "description": "Unverified; never inferred from city."
+          },
+          "listing_revisions": {
+            "items": {
+              "$ref": "#/components/schemas/ListingRevision"
+            },
+            "type": "array",
+            "title": "Listing Revisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "listing",
+          "first_seen_at",
+          "last_seen_at",
+          "location",
+          "country",
+          "listing_revisions"
+        ],
+        "title": "PostingResponse"
+      },
+      "RefreshAccepted": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "running",
+            "title": "Status",
+            "default": "running"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["run_id", "status"],
+        "title": "RefreshAccepted"
+      },
+      "RefreshLog": {
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "level": {
+            "type": "string",
+            "enum": ["debug", "info", "warning", "error", "critical"],
+            "title": "Level"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Reviewed log message with scope and safe arguments; never a token, Duo code, or raw exception."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["sequence", "at", "level", "message"],
+        "title": "RefreshLog"
+      },
+      "RefreshRequest": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RefreshRequest",
+        "description": "An explicit empty JSON object starts one guarded listings-only refresh."
+      },
+      "RefreshSnapshot": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["idle", "running", "completed", "failed", "interrupted"],
+            "title": "Status",
+            "default": "idle"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "default": "idle"
+          },
+          "pages_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pages Completed",
+            "default": 0
+          },
+          "total_pages": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Pages"
+          },
+          "records_received": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Records Received",
+            "default": 0
+          },
+          "unique_postings": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unique Postings",
+            "default": 0
+          },
+          "duplicates": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Duplicates",
+            "default": 0
+          },
+          "retry_after": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Retry After",
+            "default": 0
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Seconds",
+            "description": "Latest collector-emitted ETA, not a live countdown; null when unestimated."
+          },
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/RefreshLog"
+            },
+            "type": "array",
+            "title": "Logs",
+            "description": "Bounded to the latest 200 sanitized events."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "stage",
+          "pages_completed",
+          "total_pages",
+          "records_received",
+          "unique_postings",
+          "duplicates",
+          "retry_after",
+          "eta_seconds",
+          "logs"
+        ],
+        "title": "RefreshSnapshot"
+      },
+      "StoredListing": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "title": "Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization"
+          },
+          "division": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "openings": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "city": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "level": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "application_count": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id"],
+        "title": "StoredListing",
+        "description": "Allowlisted listing snapshot; unknown field types remain JSON values.\n\nUse model_dump_json(exclude_unset=True) to preserve missing versus null fields.\nNo raw action, apply control, cookie, or request fields are accepted."
+      },
+      "WorkspaceResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status",
+            "default": "ready"
+          },
+          "postings": {
+            "items": {
+              "$ref": "#/components/schemas/PostingResponse"
+            },
+            "type": "array",
+            "title": "Postings"
+          },
+          "manual_refresh_available": {
+            "type": "boolean",
+            "title": "Manual Refresh Available"
+          },
+          "details_available": {
+            "type": "boolean",
+            "const": false,
+            "title": "Details Available",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "postings",
+          "manual_refresh_available",
+          "details_available"
+        ],
+        "title": "WorkspaceResponse"
+      }
+    }
+  }
+}

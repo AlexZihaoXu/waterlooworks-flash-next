@@ -8,6 +8,7 @@ import pytest
 
 from waterlooworks_flash_next.database import (
     _SCHEMA,
+    SCHEMA_VERSION,
     DatabaseError,
     canonical_snapshot,
     open_database,
@@ -48,7 +49,7 @@ def test_v1_migration_preserves_real_run_metadata(tmp_path: Path) -> None:
     run_id = start_collection_run(connection)
     connection.close()
     connection = open_database(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert connection.execute("SELECT id FROM collection_runs").fetchone()[0] == run_id
     assert (
         connection.execute("SELECT COUNT(*) FROM posting_revisions").fetchone()[0] == 0

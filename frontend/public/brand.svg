@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Canonical ring geometry, also referenced by the animated header mark. -->
+  <g
+    id="outer-ring"
+    fill="none"
+    stroke-width="4.5"
+    stroke-dasharray="96 264"
+    stroke-linecap="butt"
+  >
+    <circle
+      cx="24"
+      cy="24"
+      r="20"
+      pathLength="360"
+      transform="rotate(-90 24 24)"
+      stroke="#258DF4"
+    />
+    <circle
+      cx="24"
+      cy="24"
+      r="20"
+      pathLength="360"
+      transform="rotate(30 24 24)"
+      stroke="#0876DC"
+    />
+    <circle
+      cx="24"
+      cy="24"
+      r="20"
+      pathLength="360"
+      transform="rotate(150 24 24)"
+      stroke="#55AFFB"
+    />
+  </g>
+  <g
+    id="inner-ring"
+    transform="rotate(60 24 24)"
+    fill="none"
+    stroke-width="4.5"
+    stroke-dasharray="96 264"
+    stroke-linecap="butt"
+  >
+    <circle
+      cx="24"
+      cy="24"
+      r="11"
+      pathLength="360"
+      transform="rotate(-90 24 24)"
+      stroke="#258DF4"
+    />
+    <circle
+      cx="24"
+      cy="24"
+      r="11"
+      pathLength="360"
+      transform="rotate(30 24 24)"
+      stroke="#0876DC"
+    />
+    <circle
+      cx="24"
+      cy="24"
+      r="11"
+      pathLength="360"
+      transform="rotate(150 24 24)"
+      stroke="#55AFFB"
+    />
+  </g>
+</svg>

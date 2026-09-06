@@ -1,4 +1,4 @@
-"""SQLite schema v2 for private listing snapshots and append-only change history.
+"""SQLite schema v3 for listings, detail snapshots, attempts, and revision history.
 
 No network calls, credential loading, or collection writes happen on import.
 """
@@ -15,7 +15,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-SCHEMA_VERSION = 2
+from waterlooworks_flash_next.detail_schema import migrate_details
+
+SCHEMA_VERSION = 3
 
 
 class DatabaseError(Exception):
@@ -321,6 +323,10 @@ def open_database(path: Path) -> sqlite3.Connection:
             if version == 1:
                 _migrate_history(connection)
                 connection.execute("PRAGMA user_version = 2")
+                version = 2
+            if version == 2:
+                migrate_details(connection)
+                connection.execute("PRAGMA user_version = 3")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
     except Exception as error:

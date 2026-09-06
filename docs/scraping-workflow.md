@@ -101,6 +101,18 @@ After confirmed dashboard arrival, the script now navigates directly to that obs
 
 A saved-profile end-to-end rerun verified the direct dashboard-to-board shortcut and runtime All Jobs click. The browser remained open afterward for guided exploration; a later inspection identified the list POST and verified direct single-page fetches. The initial batching test completed seven pages with 350 unique postings and zero duplicates, then failed on page 8. The original sanitized error did not identify its cause. The first fresh-login retry run stopped before collection: it waited for a response after clicking All Jobs, but the listing had already loaded during navigation. A passive diagnostic confirmed the click completed and all observed board XHRs finished before it. Capture was moved before navigation and passed the next live run. That run then isolated the page-8 failure as JSON/encoding validation rather than transport.
 
+### Single-posting retest status
+
+The latest single-posting retest **passed** after fresh trusted-device login and page-1 capture. Two earlier attempts stopped before making detail requests because two visible anchors shared the exact same title. The successful attempt scoped the title anchor to a row containing the captured posting ID, resolving one unique target.
+
+One title click generated two POSTs to the board route, each carrying runtime `action` and `postingId` fields:
+
+- **HTTP 200 JSON metadata:** expected metadata keys were present and its `id` matched the selected posting.
+- **HTTP 200 markup:** nonempty markup contained the selected posting title.
+- **One direct Python markup replay:** HTTP 200, with the selected title present again. The opaque action and current cookies stayed in memory. Redirects were forbidden; a 2-second pause preceded the direct request, and no retry was needed.
+
+Browser and direct markup were **not textually identical**. This verifies retrieval of title-bearing detail markup, not complete field extraction or exact response equivalence. The metadata request was not separately replayed through direct HTTP. No full-board collection, application action, export, or database write occurred. The browser closed and the private diagnostic was removed. Playwright emitted `Target closed` asynchronous cleanup warnings after the successful checks; these did not prevent the fetches but remain a cleanup caveat. No reusable detail collector is implemented yet.
+
 ## Listing collection: sequential and opt-in
 
 The observed listing request is a form-encoded POST to the job-board route with `page`, `itemsPerPage`, `sort`, `filters`, `columns`, `keyword`, `action`, and `isDataViewer`. Response content is JSON despite its HTML content type: `totalResults`, `page`, and `data`. Rows contain key/value cells, including posting ID, title, and organization. The opaque action and authenticated cookies are captured dynamically; never log, hardcode, or persist them.
@@ -128,12 +140,13 @@ Results remain only in `listing_collection.postings`. The collector raises a san
 Temporary launchers and execution scripts have been removed. Core modules under `backend/src/waterlooworks_flash_next/` remain:
 
 - `login.py`: `start_login(credentials_path)` creates the persistent browser and enters credentials, returning a `LoginSession` at the password checkpoint.
-- `duo.py`: `submit_and_observe_duo(session)` submits once and observes code/trust/failure branches until authenticated arrival or an unknown destination. **Calling it may trigger a Duo notification.** Its existing Duo failure handler closes the browser and exits 1; application-level lifecycle integration remains future work.
+- `duo.py`: `submit_and_observe_duo(session)` submits once and observes code/trust/failure branches until authenticated arrival or an unknown destination. **Calling it may trigger a Duo notification.** Its existing Duo failure handler closes the browser and exits 1; the refresh worker catches failures and finalizes the run safely.
 - `jobs.py`: `open_all_jobs(session.page)` confirms authentication, navigates to the board, clicks All Jobs, and returns a fresh `ListingSource` or `None`.
 - `listings.py`: construct `ListingCollection(source)` and immediately call `.run()` for paced, sequential collection. Inspect safe aggregate values such as `.pages_completed`, `.complete`, and `len(.postings)`. Catch `ListingFetchError` at the application boundary and close the session; never log raw exceptions.
 - `export.py`: `export_listings(collection, output_directory)` exports a completed collection only. Use a private ignored directory such as `.experiment/output/`.
 - `logging.py`: safe stage-log formatting and logger configuration.
-- `database.py`: SQLite schema v2, transactional migration, empty run creation, the `StoredListing` model, and atomic `save_listings()` upserts with SHA-256 revision history. Automatic collector wiring is not implemented.
+- `database.py`: SQLite schema v3, transactional migration, empty run creation, the `StoredListing` model, and atomic `save_listings()` upserts with SHA-256 revision history. The explicit API refresh worker now saves completed listing passes and finalizes run counters/status.
+- `details.py`, `detail_schema.py`, `detail_storage.py`: strict detail metadata models, null-only unverified content fields, independent detail history, and explicit fetch-attempt lifecycle APIs. See [the posting model](posting-model.md).
 
 Do not auto-run these modules on import. Callers own browser cleanup through `session.close()` on completion, cancellation, or failure. Chromium uses ignored `.experiment/browser-profile/` with normal caching and service workers enabled. Cookies/storage can persist, but the site controls expiration. Do not inspect, log, commit, ship, or concurrently open the profile.
 
@@ -155,4 +168,12 @@ Authorized code message: `Detected verification code: [NNN] (waiting...)`, using
 
 The [SQLite storage model in README](../README.md#sqlite-storage-model) defines `collection_runs`, latest-snapshot `postings`, and append-only `posting_revisions`. SHA-256 hashes of canonical allowlisted listing JSON identify changes. Repeated unchanged observations only update last-seen metadata; changes and reversions append full snapshots with run references. Timestamps record persistence time, not a claimed server-side change time. Migrated v1 snapshots become marked baselines; unavailable earlier history is not invented. Local database files live under ignored `data/`, separate from browser-profile experiments. Only allowlisted listing fields belong in the database; no runtime action/cookie/request data.
 
-Schema migration and revision persistence are implemented; the local database remains empty. Tests cover generic hashing, empty migrations/rollback, and transaction boundaries without invented postings. Populated revision writes/backfill have not been verified with real data. Automatic collector-to-database wiring and run finalization remain **placeholders**, as do per-posting details and analysis.
+SQLite v3 adds current detail snapshots, independent append-only detail revisions, and per-posting fetch attempts. Verified metadata has a strict storage contract; unverified body fields are null-only placeholders. Failed attempts preserve valid content. One authorized API refresh populated the local database with 1,216 listings and initial listing revisions; detail tables remain empty.
+
+Tests cover generic hashing, empty migrations/rollback, schema/model constraints, and transaction boundaries without invented postings. Initial populated listing revisions were verified; populated historical backfill and detail success/failure cycles remain unverified. Content extraction, detail collection, and analysis remain **placeholders**.
+
+## Local API and frontend verification
+
+Exactly one authorized live API refresh was tested: POST **202**, concurrent duplicate **409**, **34 SSE frames**, completion after **25 pages / 1,216 unique listings**, persisted listing/revision identity checks, and cooldown **429**. It made no individual detail requests. Swagger `/doc` and `/doc/openapi.json` responded successfully. API logs suppress Duo codes and raw exception text; only fixed messages and numeric progress enter SSE.
+
+Subsequent browser checks used only the stored listings: 12-card pagination, required card fields, title search, location/organization Autocomplete, disabled unverified country, mobile layout, light/dark toggle and reload persistence, and a collapsible monospace console. The console initially follows the bottom, preserves a scrolled-up reading position, and resumes through “Jump to latest”; generic DOM tests cover appended-content follow behavior. Individual posting pages/modals/history UI are intentionally absent. Final browser checks recorded zero refresh POSTs, zero WaterlooWorks requests, and zero page errors. No containers were started.

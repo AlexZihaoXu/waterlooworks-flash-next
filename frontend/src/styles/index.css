@@ -1,19 +1,327 @@
 @import 'tailwindcss';
 @import '@heroui/styles';
 
+/* Native layout plus the explicitly approved pagination panel below.
+   HeroUI components use documented props unchanged. */
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
 }
-
-main {
-  max-width: 60rem;
+.workspace {
+  --workspace-gap: 1rem;
+  max-width: 90rem;
   margin-inline: auto;
-  padding: 2rem;
+  padding: clamp(1rem, 2.5vw, 2.5rem);
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
+  gap: var(--workspace-gap);
 }
-
-h1 {
-  font-size: 2rem;
-  font-weight: 700;
-  margin-bottom: 1rem;
+.postings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.brand-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+}
+.brand-icon {
+  flex: none;
+}
+.theme-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.workspace-header,
+.workspace-toolbar,
+.inline-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+.workspace-header,
+.workspace-toolbar {
+  justify-content: space-between;
+  width: 100%;
+}
+.stack,
+.stack-small {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.stack-small {
+  gap: 0.25rem;
+}
+.browser-layout {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: 16rem minmax(0, 1fr);
+  grid-template-areas: 'filters search' 'filters results';
+  gap: 1rem 1.5rem;
+  align-items: stretch;
+}
+.browse-search {
+  grid-area: search;
+}
+.filter-sidebar {
+  grid-area: filters;
+  padding: 0.25rem 0.375rem 0.75rem;
+  align-self: start;
+  max-height: 100%;
+  overflow: auto;
+  min-width: 0;
+}
+.posting-results {
+  grid-area: results;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-height: 0;
+}
+.results-scroll {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.results-scroll-content {
+  padding: 0.125rem 0.25rem 6rem 0.125rem;
+}
+.pagination-dock {
+  position: absolute;
+  bottom: 0.75rem;
+  inset-inline: 0.75rem;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 1;
+}
+/* User-approved custom outer panel; HeroUI pagination controls remain unchanged. */
+.pagination-panel {
+  max-width: 100%;
+  width: fit-content;
+  padding: 0.375rem 0.75rem;
+  display: flex;
+  justify-content: center;
+  border-radius: 1.25rem;
+  background: color-mix(in oklab, var(--surface) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 8%);
+  backdrop-filter: blur(24px);
+  pointer-events: auto;
+}
+.picker-options {
+  height: 50dvh;
+  overflow-anchor: none;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.picker-list {
+  display: grid;
+}
+.picker-letter,
+.picker-option {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.picker-option {
+  padding-inline-start: 1rem;
+}
+.picker-option-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.filter-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.filter-trigger-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+  width: 100%;
+}
+.posting-title {
+  padding-bottom: 0.5rem;
+}
+.sort-layout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+.filter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+}
+.filter-slot {
+  min-width: 0;
+}
+.results-transition {
+  display: grid;
+  isolation: isolate;
+}
+.results-layer {
+  grid-area: 1 / 1;
+  min-width: 0;
+  align-self: start;
+}
+.skeleton-title-block {
+  display: grid;
+  align-content: center;
+  gap: 0.5rem;
+  height: 3.5rem;
+}
+.skeleton-title-space {
+  height: 1.125rem;
+}
+.skeleton-short-title {
+  width: 65%;
+}
+.skeleton-icon-space {
+  height: 1rem;
+}
+.skeleton-text-line {
+  display: grid;
+  align-items: center;
+  height: 1.5rem;
+}
+.skeleton-company-line {
+  width: 75%;
+}
+.skeleton-id-line {
+  width: 3rem;
+}
+.skeleton-deadline-line {
+  width: 4.5rem;
+}
+.skeleton-line-space {
+  height: 0.875rem;
+}
+.posting-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+.posting-field {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.posting-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.posting-details {
+  display: grid;
+  gap: 0.5rem;
+}
+.sort-control {
+  width: 16rem;
+  max-width: 100%;
+}
+.horizontal-overflow {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.log-heading-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.log-preview {
+  display: block;
+  max-width: 100%;
+  text-align: start;
+}
+.log-preview-lines {
+  display: block;
+  height: 4.5rem;
+  overflow: hidden;
+}
+.log-preview-line {
+  display: block;
+  line-height: 1.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-window {
+  height: min(18rem, 25dvh);
+  max-height: min(18rem, 25dvh);
+  overflow: auto;
+  overflow-anchor: none;
+}
+.refresh-panel {
+  overflow: hidden;
+  flex-shrink: 0;
+  margin-bottom: calc(-1 * var(--workspace-gap, 1rem));
+}
+.refresh-panel-content {
+  padding-bottom: var(--workspace-gap, 1rem);
+}
+.console-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+  vertical-align: top;
+  white-space: pre;
+}
+.console-line {
+  width: max-content;
+  min-width: 100%;
+  padding-block: 0.125rem;
+}
+@media (max-width: 56rem) {
+  .browser-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'search' 'filters' 'results';
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+  .filter-sidebar {
+    max-height: none;
+  }
+  .filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 40rem) {
+  .filter-grid {
+    gap: 0.5rem;
+  }
+  .pagination-word {
+    display: none;
+  }
+  .workspace {
+    --workspace-gap: 0.75rem;
+    padding: 0.75rem;
+  }
+  .browser-layout {
+    gap: 0.75rem;
+  }
 }

@@ -6,6 +6,8 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace frontend",
+    "api:generate": "uv run --project backend --locked python -m waterlooworks_flash_next.openapi docs/openapi.json && openapi-typescript docs/openapi.json -o frontend/src/lib/api.generated.ts && prettier --write docs/openapi.json frontend/src/lib/api.generated.ts",
+    "api:check": "uv run --project backend --locked python -m waterlooworks_flash_next.openapi docs/openapi.json --check && node scripts/check-api-contract.mjs",
     "build": "npm run build --workspace frontend",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -15,6 +17,8 @@
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
-    "prettier": "^3.6.2"
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3"
   }
 }

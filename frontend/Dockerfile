@@ -7,7 +7,7 @@ RUN npm ci
 FROM dependencies AS dev
 COPY frontend ./frontend
 EXPOSE 5173
-CMD ["npm", "run", "dev", "--workspace", "frontend"]
+CMD ["npm", "run", "dev", "--workspace", "frontend", "--", "--host", "0.0.0.0"]
 
 FROM dependencies AS build
 COPY frontend ./frontend

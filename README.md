@@ -1,6 +1,6 @@
 # WaterlooWorks Flash Next
 
-WaterlooWorks Flash Next is a planned WaterlooWorks wrapper that automatically fetches the latest job postings and analyzes their key details, helping students find relevant opportunities faster.
+WaterlooWorks Flash Next is a private, single-user WaterlooWorks listing browser with explicit manual refresh, search, filters, and SQLite history. Individual posting pages, detail collection, and analysis are deferred.
 
 ## The idea
 
@@ -73,7 +73,7 @@ Private JSON export
 | `ApplicationCount`      | `application_count` | Application count as supplied                                  |
 | `Deadline`              | `deadline`          | Display deadline as supplied; not yet normalized to a datetime |
 
-Apart from ID and title handling, exported values retain their source JSON types; numeric/date normalization is not implemented. Fields absent from a row are omitted, not invented.
+Apart from ID and title handling, exported values retain their source JSON types; numeric/date normalization is not applied to storage or export. The frontend separately derives validated numeric ordering and deadline countdowns. Fields absent from a row are omitted, not invented.
 
 Other observed cells: `postingId`, lowercase `deadline`, `canApply`, `hasApplication`, `online`, and `apply`. The `JobTitle` object also contains `new`, `featured`, `applied`, and `viewed` flags. These are **not exported**. `postingId` is distinct from the row-level `id` and the `Id` cell; their equivalence has not been established.
 
@@ -91,7 +91,7 @@ Nested schemas and markup extraction remain **placeholders**; no detail collecto
 
 ## SQLite storage model
 
-Schema v2 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
+Schema v3 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
 
 ```mermaid
 erDiagram
@@ -139,20 +139,49 @@ erDiagram
 - **Change detection:** `sha256-json-v1` hashes compact UTF-8 JSON with recursively sorted object keys. Object key order and formatting do not create changes; array order, field values/types, and missing versus explicit null do. Run IDs and observation timestamps are excluded; all allowlisted listing fields—including application count—are included. NaN/Infinity are rejected. This is change detection, not encryption or tamper-proof auditing.
 - **Repeat observations:** First observation creates a revision. An identical current hash updates only the latest snapshot's last-seen metadata. A changed hash appends a revision and updates the current snapshot atomically. Reverting to an earlier hash creates another revision, so history does not collapse reversions.
 - **Relationships:** First/last-seen runs and revision run references are protected by foreign keys. No deletion/inactive state is inferred from absence. Unchanged observations are not separate revisions; every run-to-posting membership is not retained.
-- **SQLite settings:** Transactional v1-to-v2 migration (`user_version=2`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
+- **SQLite settings:** Transactional upgrades through v3 (`user_version=3`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
 - **Core API:** `open_database(path)` initializes/migrates the database; the caller closes it. `start_collection_run(connection)` creates empty run metadata only. `save_listings(connection, run_id, listings)` takes validated `StoredListing` objects, saves a batch in one transaction, and returns the number of new revisions. It requires a running run, rejects duplicate IDs within a batch, and does not commit a caller's pre-existing transaction. Run counters/finalization remain the caller's responsibility.
 
-**Scope:** Schema, hashing, revision persistence, and posting upserts are implemented. Automatic collector-to-database wiring, run finalization, and details/analysis tables remain placeholders. Tests cover generic JSON/hash behavior, empty-schema migration/rollback, and transaction boundaries; populated history and backfill have not been verified with real postings. No private postings or mock data are seeded. Use local disk, restrict filesystem access, and back up SQLite consistently (including WAL state); this database is not encrypted. Future Docker access requires a runtime volume, never image contents.
+**Scope:** Listing refresh is wired through a local FastAPI API to SQLite and listing history. Detail storage models exist, but per-posting detail collection, content extraction, and analysis remain placeholders. Tests cover schema/migration behavior and API safety without invented postings. A single authorized live API run persisted 1,216 postings; populated historical migrations and detail lifecycles remain unverified. No private postings or mock data are seeded. Use local disk, restrict filesystem access, and back up SQLite consistently (including WAL state); this database is not encrypted. Future Docker access requires a runtime volume, never image contents.
+
+### Detail model and independent history
+
+The database also contains **`posting_details`**, **`posting_detail_revisions`**, and **`posting_fetch_attempts`**, linked by the same posting ID. Details use separate hashes from listings. Changed content and reversions append revisions; unchanged successes reference the current revision. Failed fetches never replace valid data.
+
+Strict detail metadata models cover title, organization/division, division ID, status/internal status, and pre-screening flag. Description, compensation text, work term, and other unverified content fields are explicitly **null-only placeholders**, not claimed extracted values.
+
+See **[the complete posting model](docs/posting-model.md)** for the six-table relationship diagram, field types, hashing rules, attempt lifecycle, and storage APIs. SQLite v3 is ready locally. The listings-only refresh pipeline is wired; individual detail collection and content extraction are deferred.
 
 ## Frontend stack
 
 - **React + Vite:** Frontend UI and development/build tooling.
 - **HeroUI v3:** UI component library.
 - **Framer Motion:** Animations and transitions.
+- **React Icons:** Lucide icons for fields and controls; no custom HeroUI style overrides.
+
+## Local application
+
+- **Posting cards:** stronger title, building icon + company, hash icon + posting ID beside a quiet deadline label (colored Chips when urgent), a divider, then stacked location/application/opening rows; 18 cards per page. Building/pin/hash icons replace redundant visible field labels but retain accessible names. People/calendar icons accompany correctly pluralized counts.
+- **Search:** title-only, case-insensitive, applied after 125 ms of idle typing. Clearing applies immediately.
+- **Filters:** a slightly wider HeroUI card with outer shadow clearance contains Organization, Country, and City (the stored location), with a Clear button that resets filters without clearing title search. Unselected controls and labels are neutral/muted; selected controls receive subtle emphasis through documented HeroUI props. Smaller centered HeroUI modals show searchable checkbox lists grouped under A–Z and Others headings with option counts, one indented option per row. Compact 40px rows use viewport-sized buffered virtualization without pagination. Scroll measurements are coalesced per animation frame, existing HeroUI rows are memoized, and scrolling state is isolated from the workspace. HeroUI ScrollShadow handles scrolling. Search keeps modal dimensions stable and retains selections. Closing preserves the modal content until its exit animation finishes. Apply commits, Cancel discards, and Clear selection resets the draft. Selections are OR within each filter and AND across filters. Options come only from stored data; country stays disabled while unverified.
+- **Manual refresh:** neutral while idle, subtly emphasized while active; an explicit action with sanitized SSE logs and page progress. One run at a time, a 5-minute cooldown, and existing 2-second sequential fetch pacing. Cooldown/running clicks show top-centered explanatory toasts without another POST; there is no cooldown countdown. Server 409/429 race responses are handled the same way. Offline, disabled-server, and request-in-flight guards remain. Loading/reconnecting never starts scraping.
+- **Progress:** stage, page/record/duplicate counts, and an approximate client ETA seeded from the collector estimate. The display drops one second every 1,200 ms between samples and resets to each completed page's latest collector estimate, including upward revisions. When a sample expires, it shows “Updating ETA…” rather than remaining at one second or implying completion. Unestimated stages and retries show unavailable; a new run resets the countdown. The API's `eta_seconds` remains the unchanged collector estimate. Log messages appear only in the console, not repeated below the progress bar.
+- **Focused layout:** follows HeroUI's semantic hierarchy and progressive disclosure: compact header, desktop filter sidebar, search-first mobile order, and title-focused cards. No summary tiles or individual posting pages/modals. Listing history is retained in SQLite, not shown as an individual view. HeroUI skeleton cards mirror the header, title, company, ID/deadline row, divider, and three icon/detail rows before crossfading into loaded cards; reduced motion disables animation. The results fill remaining viewport space and scroll through HeroUI ScrollShadow with the scrollbar hidden. Page changes scroll smoothly to the top unless reduced motion is requested. Total count, current/total pages, and the number shown on the current page share one status line; only filtered listings are called results.
+- **Sort by:** default (posting ID ascending), recently added, time remaining, most applications, most openings, and organization. Applied before pagination; changing sort returns to page 1. Recently added uses local `first_seen_at`, not source publication dates. Unknown counts sort last; ties use posting ID. Time remaining puts upcoming deadlines nearest-first, then passed deadlines most-recent-first, then unknowns.
+- **Deadlines:** the verified abbreviated-month/12-hour display format is interpreted in `America/Toronto` using `@internationalized/date`. Waterloo's [official recruiting schedule](https://uwaterloo.ca/co-operative-education/important-dates) explicitly labels “Job postings close (ET)”. Day/hour countdowns update every minute and on tab return; the original value remains unchanged and is available on hover. Invalid dates, unsupported formats, and ambiguous/nonexistent DST times stay unknown. “Deadline passed” does not claim the source posting is closed. Over three days uses muted regular text; one–three days uses soft amber; under 24 hours uses soft red, and under one hour uses the strongest red variant.
+- **Hierarchy and contrast:** documented HeroUI typography and semantic color props make titles larger/stronger and metadata quieter—no opacity or component CSS overrides. Following [W3C text contrast guidance](https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html) and [NN/g hierarchy guidance](https://www.nngroup.com/articles/visual-hierarchy-ux-definition/), rendered card text was measured in both themes: minimum 4.83:1 light and 6.75:1 dark (above the 4.5:1 ordinary-text threshold). This is not a full accessibility audit.
+- **Approved custom pagination wrapper:** `frontend/src/app/App.tsx` and `frontend/src/styles/index.css` contain the explicitly user-approved floating outer panel because HeroUI's Card has no padding/blur props. Its intrinsic width follows the page links; background uses 55% surface color and 24px backdrop blur. The HeroUI pagination controls themselves remain unmodified. This exception does not authorize other component CSS overrides.
+- **Console:** appears for an observed active refresh as a clickable three-line preview, without a separately styled button. HeroUI's unstyled disclosure trigger retains keyboard/focus semantics; expanding shows timestamped monospace logs up to the existing viewport-relative height cap. Three seconds after completion, failure, or interruption it fades and collapses smoothly, moving the content below without a final gap jump; reduced motion is immediate. Old terminal runs do not flash on page load. Displays the latest 200 reviewed entries with muted timestamps/debug text, blue INFO, amber WARNING, and red ERROR/CRITICAL severity labels using unmodified HeroUI components. Critical entries use a stronger filled badge. Messages remain escaped plain text; secrets and private diagnostics remain excluded. Expanded logs follow new entries only when already at the bottom. Scrolling up pauses following; “Jump to latest” resumes it.
+- **Shareable view:** `q`, `page`, `sort`, and repeated `organization`, `country`, and `city` URL parameters restore title search, pagination, sorting, and multi-select filters across reloads and Back/Forward. Defaults are omitted. Invalid pages/sorts are normalized; pages are clamped only after stored data loads. Unmatched filter values remain explicit and produce no matches rather than silently broadening the search. Links describe the view, not the data: recipients need access to the application and its authorized dataset. Transient dialogs/log state and credentials are not included.
+- **Theme:** HeroUI System/Light/Dark tabs with monitor/sun/moon icons. System follows OS changes; only the theme preference is saved in browser local storage, separate from shared URLs.
+- **Brand mark:** the user-requested original SVG in `frontend/public/brand.svg` uses two concentric circular rings, each split into three blue arcs, with the inner ring rotated 60 degrees so their gaps alternate, inspired by the supplied WaterlooWorks favicon rather than the university crest. It appears to the left of the title; it is not an official WaterlooWorks logo. The user-requested custom `frontend/src/app/BrandMark.tsx` animation reuses that SVG geometry: during login/refresh the outer ring turns clockwise every 4.8 seconds while the inner turns counterclockwise every 3.2 seconds. It settles back to the original mark when work ends and stays static with reduced motion. Only the custom brand asset is animated; HeroUI controls remain unmodified.
+- **API docs:** Swagger UI at `/doc`; machine OpenAPI at `/doc/openapi.json`. Generated frontend types and CI drift checks keep the contract synchronized.
+
+See [local API setup and safeguards](docs/local-api.md). Start the API on loopback port 8787, then `npm run dev -- --host 127.0.0.1` for the frontend on port 5173 (or use `npm run dev --workspace frontend -- --host 127.0.0.1`). Vite proxies `/api` and `/doc`; no cross-origin browser credentials are needed. **Containers have not been started; backend container integration remains pending.**
 
 ## Proposed project structure
 
-A single repository with separate backend and frontend applications. The initial scaffold implements the placeholder frontend, Python package, tests, and quality tooling. The tree below also includes planned modules; unimplemented directories and files will be added only when needed.
+A single repository with separate backend and frontend applications, a local listings API, tests, and quality tooling. The tree below also includes planned modules; unimplemented directories and files will be added only when needed.
 
 ```text
 waterlooworks-flash-next/
@@ -180,7 +209,10 @@ waterlooworks-flash-next/
 │   │       ├── jobs.py      # Board navigation and passive request capture
 │   │       ├── listings.py  # Paced direct listing fetches and models
 │   │       ├── export.py    # Private, allowlisted JSON exports
-│   │       ├── database.py  # SQLite schema, initialization, and listing model
+│   │       ├── database.py  # SQLite initialization and listing persistence
+│   │       ├── details.py   # Verified metadata and reserved content models
+│   │       ├── detail_schema.py # Detail-history schema migration
+│   │       ├── detail_storage.py # Atomic detail attempt/history APIs
 │   │       ├── logging.py   # Safe colored stage logs
 │   │       ├── config.py    # Planned runtime configuration
 │   │       ├── models/     # Pydantic data models
@@ -215,8 +247,8 @@ waterlooworks-flash-next/
 ```
 
 - Keep scraping, analysis, and UI concerns separate. Promote verified experimental work into the backend rather than depending on `.experiment/` at runtime.
-- Tooling: npm workspaces with a root `package-lock.json`, pytest for Python, Vitest and Testing Library for React, mypy for Python type checks, and GitHub Actions for CI. E2E tooling remains undecided.
-- Backend API framework, scheduling, and runtime entry points: **Placeholder — to be decided.** SQLite schema v2 includes hashed revision history; integration with the collector remains pending.
+- Tooling: npm workspaces with a root `package-lock.json`, pytest for Python, Vitest and Testing Library for React, mypy for Python type checks, and GitHub Actions for CI. Explicit local browser verification uses Playwright; no live platform access runs in CI.
+- Backend API: FastAPI + Uvicorn, with OpenAPI-generated frontend types. Listings are wired to SQLite v3; detail fetching and automated scheduling remain deferred.
 - Private database files live under ignored `data/`; browser state remains under ignored `.experiment/`. Docker runtime volume configuration: **Placeholder — to be defined.**
 - Test directories do not imply mock datasets or fixtures; follow the placeholder policy below.
 
@@ -229,7 +261,7 @@ The deployment goal is to start the service with a single Docker Compose command
 - **`dev`:** Local development.
 - **`prod`:** Normal self-hosted use.
 
-The initial Compose configuration runs **only the placeholder frontend**:
+The initial Compose configuration builds **only the frontend**, without a backend service. Local API integration is tested outside Docker; container API/proxy wiring remains pending:
 
 ```sh
 # Development: http://localhost:5173
@@ -243,9 +275,9 @@ Both profiles bind to localhost. Development mounts frontend source for hot relo
 
 ## Backend core
 
-Reusable modules under `backend/src/waterlooworks_flash_next/` provide authentication, Duo handling, job-board navigation, paced listing collection, logging, and private JSON export. Temporary launchers and execution scripts have been removed; no collection starts automatically. The next application layer will compose these modules.
+Reusable modules under `backend/src/waterlooworks_flash_next/` provide authentication, Duo handling, job-board navigation, paced listing collection, logging, and private JSON export. Temporary launchers and execution scripts have been removed; no collection starts automatically. The local API now composes them only after an accepted explicit refresh request.
 
-Collection must immediately follow fresh authentication and runtime request capture. Listings are fetched sequentially in batches of up to three pages, with a 2-second completion-to-next-start interval and at most two transient-error retries at 4 and 8 seconds. Progress logs report counts and ETA. No per-posting detail fetching is implemented.
+Collection must immediately follow fresh authentication and runtime request capture. During API refresh, the browser closes after capturing page 1 and copying the request/session information into memory, before direct HTTP collection starts. No logout request is made; failure cleanup remains in place. This early-close handoff has an offline structural regression but has not yet been exercised in a live refresh. Listings are fetched sequentially in batches of up to three pages, with a 2-second completion-to-next-start interval and at most two transient-error retries at 4 and 8 seconds. Progress logs report counts and ETA. No per-posting detail fetching is implemented.
 
 `export_listings()` writes only completed results to a caller-supplied private directory, normally ignored `.experiment/output/`. Its allowlist excludes credentials, cookies, action tokens, and internal apply controls. See [the workflow and core API notes](docs/scraping-workflow.md).
 
@@ -301,7 +333,7 @@ The HeroUI server configuration remains project-scoped; no global MCP settings a
 
 ## Local credentials
 
-Put your WaterlooWorks credentials in the root `.credentials.json`, using the `username` and `password` keys. The local placeholder contains empty values; fill it in yourself. It is ignored by Git and Prettier and excluded from Docker build contexts.
+Put your WaterlooWorks credentials in the root `.credentials.json`, using the `username` and `password` keys. Manage its values yourself; agents do not inspect or overwrite it. It is ignored by Git and Prettier and excluded from Docker build contexts.
 
 Agents must not view or inspect this file. Authentication code loads it dynamically only when needed, without printing credentials or including them in logs, errors, or artifacts. Never commit the file or bake it into an image; future container access requires an explicit runtime secret or read-only mount. This is plaintext storage, so restrict local filesystem access; Git ignore rules are not encryption.
 
@@ -334,8 +366,10 @@ Use placeholders for anything not yet provided, verified, or implemented. Do not
 
 ## Status
 
-Placeholder frontend plus a reusable backend core. Guided live runs verified authentication branches, direct board navigation, and a complete listing pass of **25 pages / 1,216 unique postings / zero duplicates** after correcting response-capture timing and ISO-8859-1 decoding. The dedicated browser profile stays private under `.experiment/browser-profile/`.
+HeroUI posting browser plus a local listings API and SQLite history. A single live API E2E verified fresh authentication, **25 pages / 1,216 unique postings**, persisted revisions, SSE progress, duplicate-refresh rejection (409), and cooldown rejection (429). The dedicated browser profile stays private under `.experiment/browser-profile/`.
 
-Launch scripts have been removed. Credential-free tests cover pacing, retry policy, encoding, destination checks, logging, and JSON writing. Live transient-retry behavior and full-data JSON export remain unverified. SQLite schema v2 and hashed revision persistence are implemented but not yet wired to collection. No per-posting detail collector, mock data, or application API is implemented.
+Read-only browser checks against the current 1,218 stored listings verified the stacked card fields, deadline parsing, all six sorts, debounced title search, city/organization grouped multi-select checkbox lists, disabled unknown country, persistent pagination, inner scrolling, mobile overflow containment, theme persistence, and console scroll pause/resume. Deadline checks also ran with the browser timezone set to Asia/Tokyo. No individual posting views are present. Browser checks made zero refresh POSTs and zero WaterlooWorks requests, with no page errors.
+
+Credential-free tests cover pacing, retry policy, encoding, destination checks, logging, API contracts/guards, empty UI states, theme persistence, and console follow behavior. No mock postings are shipped. Live transient-retry behavior, populated historical migrations, and full-data JSON export remain unverified. Individual detail fetching is intentionally not part of manual refresh.
 
 Access should respect WaterlooWorks policies and protect students’ credentials and personal data. This is an independent project, not an official WaterlooWorks product.
