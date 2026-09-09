@@ -2,18 +2,18 @@
 
 Schema10 adds a separate, read-only `country_inference` contract to workspace postings and posting detail. Existing country source facts/nulls and pay/keyword authority are unchanged. The explicit local country CLI, source-current selection, SVG flag UI, and deployment/pilot safeguards are documented in [inferred work country](country-inference.md). No model calls run on API GET/startup/SSE.
 
-The API is **single-user and loopback-only**. Do not expose it publicly or run multiple Uvicorn workers. No containers are required for local verification.
+The API requires **server-verified Google login** for every saved-data, FX, refresh/status/log and SSE endpoint. Any Google account may browse; the first successful app login becomes the sole admin, and only admin may mutate. Keep one Uvicorn worker. Complete [Firebase configuration, owner-first bootstrap, schema11 migration and safe transport](firebase-auth.md) before starting it. No containers are required.
 
 ## Start explicitly
 
-From the repository root, in Git Bash:
+From the repository root, in Git Bash, after configuring backend-only `FIREBASE_SERVICE_ACCOUNT` and the explicit loopback HTTP development settings documented in [Firebase setup](firebase-auth.md):
 
 ```sh
 # Read-only server: manual collection is disabled by default.
-uv run --project backend --locked uvicorn waterlooworks_flash_next.api:create_app --factory --host 127.0.0.1 --port 8787 --no-access-log
+uv run --project backend --locked uvicorn waterlooworks_flash_next.api:create_app --factory --host 127.0.0.1 --port 8787 --no-access-log --no-proxy-headers
 
 # Enable explicit manual collection instead (may open Chromium and prompt for Duo).
-WW_ENABLE_REFRESH=1 uv run --project backend --locked uvicorn waterlooworks_flash_next.api:create_app --factory --host 127.0.0.1 --port 8787 --no-access-log
+WW_ENABLE_REFRESH=1 uv run --project backend --locked uvicorn waterlooworks_flash_next.api:create_app --factory --host 127.0.0.1 --port 8787 --no-access-log --no-proxy-headers
 ```
 
 Run only one of these commands. Do not enable reload while a collection is active. Chromium must already be installed through Playwright. `WW_DATABASE` optionally selects a database path; `WW_PROJECT_ROOT` selects the repository containing the user-managed runtime credentials and private browser profile. Defaults assume the repository root working directory.
@@ -23,7 +23,7 @@ Run only one of these commands. Do not enable reload while a collection is activ
 - **Tracked schema:** [`openapi.json`](openapi.json), generated from the same FastAPI models.
 - **Generated frontend types:** `frontend/src/lib/api.generated.ts`.
 
-Swagger UI's Execute button is a real API call. Executing the refresh operation starts collection only when enabled; it obeys exactly the same lock/cooldown as the frontend. Swagger UI assets currently use FastAPI's default CDN.
+Swagger UI's Execute button is a real API call. Protected operations require the app cookie; mutations additionally require an allowed Origin, JSON and `X-WW-Request: 1`. Executing the refresh operation starts collection only when enabled; it obeys exactly the same lock/cooldown as the frontend. Swagger UI assets currently use FastAPI's default CDN.
 
 ## Routes
 
@@ -40,9 +40,11 @@ Swagger UI's Execute button is a real API call. Executing the refresh operation 
 | POST   | `/api/refresh`                   | Explicit `{}` JSON body; 202 with run ID if accepted                                             |
 | GET    | `/api/refresh/events`            | SSE events named `refresh`; data conforms to `RefreshSnapshot`                                   |
 
+Additional auth routes: `POST /api/auth/prepare` (bounded anonymous cookie), `POST /api/auth/exchange` (verified login/renewal), `GET /api/auth/session` (current UID/role/expiry), and `POST /api/auth/logout` (app-only invalidation). GET `/api/exchange-rates` is also protected. Public health is minimal; documentation/schema contain no saved data. Auth transport and lifecycle details are in [Firebase authentication](firebase-auth.md).
+
 `?once=true` returns one SSE snapshot and closes, for clients testing the stream format. Normal streams send current state on connection and changes thereafter, with keep-alive comments. Reconnection never starts collection. Event payloads are documented in OpenAPI using the `RefreshSnapshot` schema and an `x-event-payload` reference.
 
-Workspace and keyword-index responses have bounded, single-entry in-memory caches. Each cache uses a persistent read-only SQLite connection's `PRAGMA data_version` plus database file identity, not a time-based freshness guess. Any commit invalidates reuse; a commit during assembly prevents publishing that result to the cache. Concurrent loads are coalesced, and observers close at shutdown. Large responses use gzip; `text/event-stream` is excluded so progress remains unbuffered. Browser cache directives and keyword ETag behavior are unchanged.
+Workspace and keyword-index responses have bounded, single-entry in-memory caches. Each cache uses a persistent read-only SQLite connection's `PRAGMA data_version` plus database file identity, not a time-based freshness guess. Any commit invalidates reuse; a commit during assembly prevents publishing that result to the cache. Concurrent loads are coalesced, and observers close at shutdown. Large responses use gzip; `text/event-stream` is excluded so progress remains unbuffered. All authenticated responses use `Cache-Control: no-store`; keyword ETag revalidation remains available to the session-scoped worker. Identity and role are never stored in the shared cache; refresh capability is attached per request.
 
 The workspace endpoint is a read-only local snapshot, not a live WaterlooWorks request. It currently returns all stored listings/history for client-side filtering and pagination. Larger histories will require server-side paging later. Country remains null in this listing-only response; stored content is not joined or exposed as a detail view. `details_available=false` describes that UI/API scope, not the absence of content collection.
 
@@ -84,7 +86,7 @@ A crashed process can leave a durable `running` collection and content attempt. 
 
 Every emitted refresh-stage log is forwarded to the console with its scope, level, reviewed message, and safe arguments, rather than replaced with generic stage summaries. This includes authentication/navigation steps, batch/page counts, ETA, retries, and warnings/errors. DEBUG entries are included when enabled by `WW_LOG_LEVEL=DEBUG`. A reviewed format/text allowlist redacts unknown arguments and withholds unreviewed messages; a regression test requires review of newly added stage log formats. Duo codes, usernames/passwords, request actions, cookies, response bodies, and raw exceptions are excluded. The frontend should display server-supplied errors only through bounded safe messages, never debug dumps. Workspace responses use `Cache-Control: no-store`; the browser must not persist postings, logs, or authentication data in local storage. The frontend persists only the light/dark theme preference (`heroui-theme`). Logs stay in memory, bounded to 200 entries; the console does not pull a reader back to the bottom after they scroll up.
 
-The API rejects unexpected Host headers. Refresh requests reject unapproved browser origins and require `application/json`; approved origins are localhost/127.0.0.1 on ports 5173 and 8787. Bind only to loopback. There is no remote-user authentication system. Frontend dev/preview scripts also bind to loopback by default. Vite denies direct filesystem access to credentials, private experiments, the SQLite data directory, and Pi state, in addition to its standard secret-file exclusions.
+The API rejects unexpected Host headers and requires exact configured origins, JSON and `X-WW-Request: 1` for auth/mutation POSTs. HTTPS/Secure cookies are the default. Explicit loopback-only HTTP development is possible; insecure LAN HTTP is not supported. Do not trust arbitrary forwarded headers. Frontend dev/preview scripts bind to loopback by default. See [transport configuration](firebase-auth.md#transport-and-csrf). Vite denies direct filesystem access to credentials, private experiments, the SQLite data directory, and Pi state, in addition to its standard secret-file exclusions.
 
 ## Contract generation
 

@@ -10,7 +10,8 @@ export type ListingRevision = components['schemas']['ListingRevision'];
 export type RefreshSnapshot = components['schemas']['RefreshSnapshot'];
 export type WorkspaceResponse = components['schemas']['WorkspaceResponse'];
 export type WorkspaceState =
-  WorkspaceResponse | { status: 'disconnected' | 'loading' | 'error' };
+  | WorkspaceResponse
+  | { status: 'disconnected' | 'loading' | 'error' | 'signed-out' };
 export type FilterKey =
   'location' | 'country' | 'organization' | 'targeted_disciplines';
 export type PostingFilters = Record<FilterKey, readonly string[]>;

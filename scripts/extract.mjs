@@ -25,7 +25,7 @@ Options: --database PATH (default data/waterlooworks.sqlite3), --hours 10.
 Opt-in: --shared-job-prefix uses v8-shared-job-prefix and sequential slices per posting.
 Omit it for the validated v7 prompt/scheduling. Resume must repeat the original flag and bounds.
 Shared prefix is experimental: no guaranteed provider slot affinity or KV retention.
-Requires schema9, tested loaded Gemma Q2_K_XL at context65536/four slots.
+Requires schema9/10/11, tested loaded Gemma Q2_K_XL at context65536/four slots.
 No refresh, model loading, source updates or replacement of existing projections.
 Checkpointed source index/pay candidates are separate from authoritative UI analyses.`);
     return;
@@ -86,7 +86,9 @@ Checkpointed source index/pay candidates are separate from authoritative UI anal
   const dbPath = safeDatasetPath(await fs.realpath(safeDatasetPath(database)));
   const db = new DatabaseSync(dbPath, { readOnly: action === 'status' });
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
-  if (![9, 10].includes(db.prepare('PRAGMA user_version').get().user_version)) {
+  if (
+    ![9, 10, 11].includes(db.prepare('PRAGMA user_version').get().user_version)
+  ) {
     db.close();
     throw new Error(
       'Schema9 required; migrate a backed-up database with the backend first',

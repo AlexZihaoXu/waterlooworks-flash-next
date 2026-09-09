@@ -1,6 +1,7 @@
-"""Loopback-only local API. Swagger UI /doc; OpenAPI /doc/openapi.json."""
+"""Google-authenticated shared API; admin-only explicit collection."""
 
 import asyncio
+import json
 import os
 import sqlite3
 from collections.abc import AsyncIterator, Callable
@@ -8,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi import Path as ApiPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -36,6 +37,15 @@ from waterlooworks_flash_next.api_models import (
     RefreshSnapshot,
     WorkspaceResponse,
 )
+from waterlooworks_flash_next.app_auth import (
+    COOKIE,
+    AuthTransport,
+    FirebaseVerifier,
+    SessionStore,
+    require_admin,
+    require_session,
+)
+from waterlooworks_flash_next.auth_api import install_auth
 from waterlooworks_flash_next.compact_history import HistoryReader
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
@@ -61,7 +71,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     path = database_path or Path(
         os.environ.get("WW_DATABASE", "data/waterlooworks.sqlite3")
     )
-    # Test-specific paths never enable authentication through environment inheritance.
+    # Explicit database paths never enable collection through environment inheritance.
+    # Google authentication remains mandatory regardless of this collection setting.
     enabled = database_path is None and os.environ.get("WW_ENABLE_REFRESH") == "1"
     root = Path(os.environ.get("WW_PROJECT_ROOT", str(Path.cwd())))
     detail_limit = (
@@ -73,16 +84,21 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         path, root / ".credentials.json" if enabled else None, detail_limit=detail_limit
     )
 
+    verifier = FirebaseVerifier(root if database_path is None else path.parent)
+    sessions = SessionStore(path)
     workspace_cache = SnapshotCache[bytes](path)
     keyword_cache = SnapshotCache[tuple[bytes, str]](path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        verifier.load_environment()
+        app.state.transport = AuthTransport.from_environment()
         open_database(path).close()
         service.restore()
         try:
             yield
         finally:
+            verifier.close()
             workspace_cache.close()
             keyword_cache.close()
 
@@ -90,12 +106,14 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         title="WaterlooWorks Flash Next local API",
         version="0.1.0",
         description=(
-            "Loopback-only listings API. Manual, single-flight refresh with "
+            "Google-authenticated shared listings API. Admin-only refresh with "
             "a 300-second post-run cooldown and sequential detail content "
             "after the full listing save. "
-            "Never expose this service publicly."
+            "Configure safe HTTPS and owner-first bootstrap before opening access."
         ),
         responses={
+            401: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
             403: {"model": ErrorResponse},
             422: {"model": ErrorResponse},
             500: {"model": ErrorResponse},
@@ -111,40 +129,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         code: {"model": ErrorResponse} for code in (403, 409, 415, 422, 429, 500, 503)
     }
 
-    @app.middleware("http")
-    async def local_guard(request: Request, call_next: object) -> Response:
-        from typing import cast
-
-        from starlette.middleware.base import RequestResponseEndpoint
-
-        host = request.headers.get("host", "").split(":")[0]
-        hosts = {"localhost", "127.0.0.1"}
-        if database_path is not None:
-            hosts.add("testserver")
-        if host not in hosts:
-            return JSONResponse(
-                status_code=403, content={"detail": "Local host required."}
-            )
-        if request.method == "POST":
-            allowed = {
-                f"http://{name}:{port}"
-                for name in ("localhost", "127.0.0.1")
-                for port in (5173, 8787)
-            }
-            origin = request.headers.get("origin")
-            if origin is not None and origin not in allowed:
-                return JSONResponse(
-                    status_code=403, content={"detail": "Origin is not allowed."}
-                )
-            if (
-                request.headers.get("content-type", "").split(";")[0].lower()
-                != "application/json"
-            ):
-                return JSONResponse(
-                    status_code=415,
-                    content={"detail": "Explicit application/json is required."},
-                )
-        return await cast(RequestResponseEndpoint, call_next)(request)
+    install_auth(app, verifier, sessions)
+    protected = APIRouter(dependencies=[Depends(require_session)])
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(
@@ -157,7 +143,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     exchange_rates = ExchangeRates()
 
-    @app.get(
+    @protected.get(
         "/api/exchange-rates",
         response_model=ExchangeRateResponse,
         operation_id="getExchangeRates",
@@ -174,18 +160,25 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     def health() -> HealthResponse:
         return HealthResponse(schema_version=SCHEMA_VERSION)
 
-    @app.get(
+    @protected.get(
         "/api/workspace",
         response_model=WorkspaceResponse,
         responses=errors,
         operation_id="getWorkspace",
     )
-    def workspace() -> Response:
+    def workspace(request: Request) -> Response:
         try:
-            return Response(
+            # Cache only identity-free data; attach authorization outside the cache.
+            payload = json.loads(
                 workspace_cache.get(
                     lambda: workspace_snapshot().model_dump_json().encode()
-                ),
+                )
+            )
+            payload["manual_refresh_available"] = (
+                enabled and request.state.identity.role == "admin"
+            )
+            return Response(
+                json.dumps(payload),
                 media_type="application/json",
                 headers={"Cache-Control": "no-store"},
             )
@@ -247,9 +240,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                         ),
                     )
                 )
-            return WorkspaceResponse(
-                postings=postings, manual_refresh_available=enabled
-            )
+            return WorkspaceResponse(postings=postings, manual_refresh_available=False)
         except Exception:
             raise HTTPException(
                 500, "Stored workspace is unavailable; diagnostics suppressed."
@@ -257,7 +248,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         finally:
             connection.close()
 
-    @app.get(
+    @protected.get(
         "/api/postings/{posting_id}",
         response_model=JobDetailResponse,
         responses={404: {"model": ErrorResponse}},
@@ -340,7 +331,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             if connection is not None:
                 connection.close()
 
-    @app.get(
+    @protected.get(
         "/api/postings/{posting_id}/analysis",
         response_model=PostingAnalysisResponse,
         responses={404: {"model": ErrorResponse}},
@@ -353,7 +344,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return read_projection_endpoint(posting_id, read_analysis)  # type: ignore[return-value]
 
-    @app.get(
+    @protected.get(
         "/api/postings/{posting_id}/history",
         response_model=PostingHistoryResponse,
         responses={404: {"model": ErrorResponse}},
@@ -366,7 +357,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return read_projection_endpoint(posting_id, read_history)  # type: ignore[return-value]
 
-    @app.get(
+    @protected.get(
         "/api/postings/{posting_id}/comparisons",
         response_model=PostingComparisonResponse,
         responses={404: {"model": ErrorResponse}},
@@ -379,7 +370,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return read_projection_endpoint(posting_id, read_comparisons)  # type: ignore[return-value]
 
-    @app.get(
+    @protected.get(
         "/api/keyword-index",
         response_model=KeywordIndexResponse,
         responses={304: {"description": "Saved keyword index unchanged"}},
@@ -407,13 +398,16 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         finally:
             connection.close()
 
-    @app.get("/api/refresh", response_model=RefreshSnapshot, operation_id="getRefresh")
+    @protected.get(
+        "/api/refresh", response_model=RefreshSnapshot, operation_id="getRefresh"
+    )
     def refresh_status(response: Response) -> RefreshSnapshot:
         response.headers["Cache-Control"] = "no-store"
         return service.snapshot()
 
-    @app.post(
+    @protected.post(
         "/api/refresh",
+        dependencies=[Depends(require_admin)],
         status_code=202,
         response_model=RefreshAccepted,
         responses=errors,
@@ -422,19 +416,6 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     def start_refresh(
         request: Request, response: Response, body: RefreshRequest
     ) -> RefreshAccepted:
-        origin = request.headers.get("origin")
-        allowed = {
-            f"http://{host}:{port}"
-            for host in ("localhost", "127.0.0.1")
-            for port in (5173, 8787)
-        }
-        if origin is not None and origin not in allowed:
-            raise HTTPException(403, "Origin is not allowed to start a refresh.")
-        if (
-            request.headers.get("content-type", "").split(";")[0].lower()
-            != "application/json"
-        ):
-            raise HTTPException(415, "Explicit application/json is required.")
         if not enabled:
             raise HTTPException(503, "Manual refresh is disabled on this server.")
         try:
@@ -452,7 +433,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 500, "Could not start refresh; diagnostics suppressed."
             ) from None
 
-    @app.get(
+    @protected.get(
         "/api/refresh/events",
         response_class=StreamingResponse,
         operation_id="streamRefresh",
@@ -469,23 +450,34 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         },
     )
     async def events(request: Request, once: bool = False) -> StreamingResponse:
-        async def stream() -> AsyncIterator[str]:
-            previous = ""
-            while not await request.is_disconnected():
-                payload = service.snapshot().model_dump_json()
-                if payload != previous:
-                    yield "event: refresh\ndata: " + payload + "\n\n"
-                    previous = payload
-                else:
-                    yield ": keep-alive\n\n"
-                if once:
-                    break
-                await asyncio.sleep(1)
-
         return StreamingResponse(
-            stream(),
+            session_event_stream(request, service, sessions, once=once),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
+    app.include_router(protected)
     return app
+
+
+async def session_event_stream(
+    request: Request,
+    service: RefreshService,
+    sessions: SessionStore,
+    *,
+    once: bool = False,
+) -> AsyncIterator[str]:
+    """Recheck the persisted session before every SSE emission, not only connection."""
+    previous = ""
+    while not await request.is_disconnected():
+        if sessions.lookup(request.cookies.get(COOKIE)) is None:
+            break
+        payload = service.snapshot().model_dump_json()
+        if payload != previous:
+            yield "event: refresh\ndata: " + payload + "\n\n"
+            previous = payload
+        else:
+            yield ": keep-alive\n\n"
+        if once:
+            break
+        await asyncio.sleep(1)

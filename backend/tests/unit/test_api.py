@@ -3,15 +3,14 @@
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from auth_support import session_client
 
-from waterlooworks_flash_next.api import create_app
 from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 from waterlooworks_flash_next.refresh import RefreshConflict, claim_refresh
 
 
 def test_empty_workspace_and_sse_are_real_responses(tmp_path: Path) -> None:
-    with TestClient(create_app(tmp_path / "db.sqlite3")) as client:
+    with session_client(tmp_path / "db.sqlite3") as client:
         assert client.get("/api/health").json()["schema_version"] == SCHEMA_VERSION
         assert client.get("/doc").status_code == 200
         spec = client.get("/doc/openapi.json").json()
@@ -44,7 +43,7 @@ def test_empty_workspace_and_sse_are_real_responses(tmp_path: Path) -> None:
 
 
 def test_cross_origin_refresh_and_form_posts_are_rejected(tmp_path: Path) -> None:
-    with TestClient(create_app(tmp_path / "db.sqlite3")) as client:
+    with session_client(tmp_path / "db.sqlite3") as client:
         assert (
             client.post(
                 "/api/refresh", json={}, headers={"origin": "https://example.org"}

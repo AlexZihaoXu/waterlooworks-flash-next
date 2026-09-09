@@ -1,6 +1,8 @@
 # WaterlooWorks Flash Next
 
-WaterlooWorks Flash Next is a private, single-user WaterlooWorks listing browser with explicit manual refresh, search, filters, and SQLite history. Manual refresh collects plain-text detail content after saving the full listing pass, then normalizes saved postings and runs bounded local LLM-assisted extraction across the saved workspace. Individual posting pages read saved content, normalized analysis, history, and comparisons without fetching.
+WaterlooWorks Flash Next is a Google-authenticated shared WaterlooWorks listing browser with explicit manual refresh, search, filters, and SQLite history. Manual refresh collects plain-text detail content after saving the full listing pass, then normalizes saved postings and runs bounded local LLM-assisted extraction across the saved workspace. Individual posting pages read saved content, normalized analysis, history, and comparisons without fetching.
+
+Any server-verified Google account may browse saved jobs. The first successful app login atomically becomes the sole admin; only admin can refresh. Keep the instance closed until the owner signs in first. The signed-out app shell remains visible without loading protected data. See [Firebase setup, schema11 migration, HTTPS and acceptance gates](docs/firebase-auth.md).
 
 ## The idea
 
@@ -117,7 +119,7 @@ Nested metadata objects remain unmodeled. Detail extraction saves reviewed label
 
 ## SQLite storage model
 
-Schema v10 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
+Schema v11 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
 
 ```mermaid
 erDiagram
@@ -166,7 +168,7 @@ erDiagram
 - **Change detection:** `sha256-json-v1` hashes compact UTF-8 JSON with recursively sorted object keys. Object key order and formatting do not create changes; array order, field values/types, and missing versus explicit null do. Run IDs and observation timestamps are excluded; all allowlisted listing fields—including application count—are included. NaN/Infinity are rejected. This is change detection, not encryption or tamper-proof auditing.
 - **Repeat observations:** First observation creates a revision. An identical current hash updates the latest snapshot's last-seen metadata and appends a per-run observation without another revision. A changed hash appends a revision and updates the current snapshot atomically. Reverting to an earlier hash creates another revision, so history does not collapse reversions.
 - **Relationships:** First/last-seen runs and revision run references are protected by foreign keys. No deletion/inactive state is inferred from absence. Unchanged observations are not separate revisions; schema v5 retains every newly saved run-to-posting membership.
-- **SQLite settings:** Transactional upgrades through v10 (`user_version=10`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
+- **SQLite settings:** Transactional upgrades through v11 (`user_version=11`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
 - **Core API:** `open_database(path)` initializes/migrates the database; the caller closes it. `start_collection_run(connection)` creates empty run metadata only. `save_listings(connection, run_id, listings)` takes validated `StoredListing` objects, saves a batch in one transaction, and returns the number of new revisions. It requires a running run, rejects duplicate IDs within a batch, and does not commit a caller's pre-existing transaction. Run counters/finalization remain the caller's responsibility.
 
 **Scope:** Listing refresh is wired through a local FastAPI API to SQLite and listing history. Sequential detail-content collection follows the completed listing save. Per-posting content checkpoints survive later failures. After successful collection, manual refresh explicitly normalizes all saved detail content and runs local model extraction with validated-cache reuse. Startup and GET requests never start analysis. Tests cover schema/migration behavior and API safety without invented postings. A single authorized live API run persisted 1,216 postings. Populated listing/content migration and revision lifecycles are verified offline on private backup copies; production migration and live refresh verification remain separate gates. No private postings or mock data are seeded. Use local disk, restrict filesystem access, and back up SQLite consistently (including WAL state); this database is not encrypted. Future Docker access requires a runtime volume, never image contents.
@@ -251,7 +253,7 @@ See **[the complete posting model](docs/posting-model.md)** for v3 metadata and 
 - **Brand mark:** the user-requested original SVG in `frontend/public/brand.svg` uses two concentric circular rings, each split into three blue arcs, with the inner ring rotated 60 degrees so their gaps alternate, inspired by the supplied WaterlooWorks favicon rather than the university crest. It appears to the left of the title; it is not an official WaterlooWorks logo. The user-requested custom `frontend/src/app/BrandMark.tsx` animation reuses that SVG geometry: during login/refresh the outer ring turns clockwise every 4.8 seconds while the inner turns counterclockwise every 3.2 seconds. It settles back to the original mark when work ends and stays static with reduced motion. Only the custom brand asset is animated; HeroUI controls remain unmodified.
 - **API docs:** Swagger UI at `/doc`; machine OpenAPI at `/doc/openapi.json`. Generated frontend types and CI drift checks keep the contract synchronized.
 
-See [local API setup and safeguards](docs/local-api.md). Start the API on loopback port 8787, then `npm run dev -- --host 127.0.0.1` for the frontend on port 5173 (or use `npm run dev --workspace frontend -- --host 127.0.0.1`). Vite proxies `/api` and `/doc`; no cross-origin browser credentials are needed. **Containers have not been started; backend container integration remains pending.**
+See [local API setup and safeguards](docs/local-api.md) and complete [Firebase configuration](docs/firebase-auth.md) first. HTTP development requires the explicit loopback-only auth exception. Start the API on loopback port 8787, then `npm run dev -- --host 127.0.0.1` for the frontend on port 5173 (or use `npm run dev --workspace frontend -- --host 127.0.0.1`). Vite proxies `/api` and `/doc`; no cross-origin browser credentials are needed. **Containers have not been started; backend container integration remains pending.**
 
 ## Proposed project structure
 
@@ -328,7 +330,7 @@ waterlooworks-flash-next/
 
 ## Deployment model
 
-The project will be public, but each running instance is intended for **one person only**, not as a shared multi-user service. Credentials, personal data, and fetched postings should remain private to that instance and out of the public repository.
+The project code may be public. This instance intentionally permits **any server-verified Google account** to browse its shared saved dataset; the first login becomes its sole collection admin. Keep credentials, sessions and fetched postings out of the repository. The collector remains single-worker. Configure Firebase, exact origins and safe HTTPS before opening access; see [authentication deployment safeguards](docs/firebase-auth.md).
 
 The deployment goal is to start the service with a single Docker Compose command after initial configuration, with two profiles:
 

@@ -1,0 +1,81 @@
+# Google authentication and shared saved jobs
+
+## Authority and bootstrap
+
+Any successfully server-verified Google account may read the shared saved dataset. This is an intentional access policy, **not** an email/domain allowlist. The first successful app-session issuance becomes the sole administrator; every later Firebase UID becomes a read-only member. A Google popup alone does not claim admin. Firebase emails, client flags, custom admin claims and Firebase project roles do not assign app authority.
+
+Bootstrap and session issuance share one SQLite `BEGIN IMMEDIATE` transaction. `app_users.uid` is unique, a partial unique index permits only one admin, and update/delete guards prevent accidental role changes or reopening bootstrap. Repeat UID logins are idempotent. There is no public promotion, membership editing, deletion or admin-reset API. Owner recovery/transfer requires a separately reviewed offline procedure, not deleting a user through the app.
+
+**Keep the instance inaccessible to others until the owner completes the first real Google login and confirms Admin.** Simultaneous first logins are serialized, but the server cannot know which Google account is the owner. The owner must win that operational bootstrap race before opening access.
+
+The admin alone may POST refresh; `WW_ENABLE_REFRESH=1` is additionally required. All saved-data reads, FX, refresh status, logs and SSE require an app session. GET never provisions users, collects, normalizes or invokes a model. The collection service remains single-flight/single-worker; Google membership does not grant WaterlooWorks credentials or an independent collection identity.
+
+## Firebase console and private configuration
+
+1. Use project **alex-xu-central**. Enable **Authentication → Sign-in method → Google**, select the project support email and save. The application offers no other provider or account-linking flow.
+2. Add every actual browser hostname under **Authentication → Settings → Authorized domains**. Explicitly check localhost/127.0.0.1 for local development; newer projects may not include localhost automatically. Firebase authorized domains do not replace this application's exact origin allowlist.
+3. Owner supplies a private service-account JSON for this same project through **backend-only `FIREBASE_SERVICE_ACCOUNT`**, canonical standard base64 with padding, no whitespace or line wrapping. Base64 is encoding, not encryption. The account needs Firebase Auth user-read permission for the SDK's revoked/disabled-user check (review least privilege, e.g. Firebase Authentication Viewer). Do not supply an OAuth web client JSON or browser API key here.
+4. Copy the sanitized `.env.example` yourself to root `.env`, then set the value privately, or inject it through the runtime environment. Existing environment values take precedence. Only backend runtime auth code loads root `.env`; OpenAPI generation/imports do not. `.env` is Git-, Docker- and formatter-excluded. No real `.env` was created or modified by this implementation.
+5. Restrict filesystem access and secret-manager access. Never use a `VITE_` prefix, image build ARG, Dockerfile ENV, copied file, browser storage, logs, screenshots or a tracked config for the service account. Future containers must receive a runtime secret/environment or explicit read-only mount, never an image layer. Existing WaterlooWorks `.credentials.json` remains owner-managed and separately private.
+
+The tracked Firebase modular web config is public and contains no admin key. It initializes Firebase App/Auth only: no Analytics, measurement, Firestore or Storage usage. The Google button uses the existing local `react-icons` multicolored `FcGoogle`, not a remote image or a custom SVG.
+
+Runtime decoding rejects absent/noncanonical/oversized base64, invalid JSON, missing fields, a different project/account/token endpoint and an unusable signing key. No ambient Application Default Credentials fallback is used. An emulator environment is explicitly rejected. Unavailable/malformed configuration fails closed for session preparation, exchange and every protected read/mutation; logout can still invalidate an app cookie. Only fixed errors reach responses; SDK exceptions and token claims are never logged or returned.
+
+## Transport and CSRF
+
+HTTPS and Secure cookies are the default. `WW_AUTH_ORIGINS` is an exact comma-separated list of browser origins (scheme, hostname and port), without paths, wildcards or trailing slashes. Request Host must be localhost/127.0.0.1 or a configured origin hostname. No permissive CORS middleware is installed. Auth prepare/exchange/logout and all mutations require an allowed **Origin**, `Content-Type: application/json`, and **`X-WW-Request: 1`**. Bodies are capped at20,000 bytes before JSON parsing; validation diagnostics are sanitized. Google tokens travel in JSON, never URLs.
+
+For **loopback-only HTTP development**, explicitly set:
+
+```text
+WW_AUTH_ALLOW_LOOPBACK_HTTP=1
+WW_AUTH_ORIGINS=http://127.0.0.1:5173,http://127.0.0.1:8787
+```
+
+Use the same browser hostname consistently. Start the existing Vite and API servers bound to127.0.0.1. The Vite proxy changes Host but retains the browser Origin; validation compares Origin to this explicit list rather than deriving it from the rewritten Host. The HTTP exception also requires a loopback peer. The Vite `main-pc` HTTP host allowance was removed. **Never enable this exception for an HTTP LAN/public deployment.** `http://main-pc:5173` is not an acceptable auth origin and is rejected even with the development exception enabled.
+
+Start Uvicorn with **`--no-proxy-headers --no-access-log`**. Arbitrary forwarded headers must not turn HTTP into trusted HTTPS. For LAN deployment, the parent/owner must first establish trusted HTTPS and authorized domains, then use direct backend TLS or a reviewed TLS-to-TLS reverse proxy with matching Host and Origin. This implementation deliberately does not silently trust a TLS-terminating HTTP proxy's forwarded headers. Do not enable the loopback exception to work around that requirement. If running behind a proxy, configure request/time/rate limits there too; TLS certificates and private keys remain runtime-only. No existing services were restarted or exposed.
+
+## Sessions, races and revocation
+
+- The SDK verifies signature, key ID, issuer, project audience, expiry and subject using maintained Firebase Admin verification with `check_revoked=True` and zero clock skew. Issuance additionally requires `firebase.sign_in_provider=google.com` and a bounded nonempty Firebase UID. Email fields do not gate the intentionally any-Google membership policy. No user/admin/session identity is created before verification succeeds.
+- `POST /api/auth/prepare` creates a random256-bit opaque cookie and a five-minute anonymous database reservation, invalidating any previous cookie. Only SHA-256 digests are stored. At most1,000 unexpired anonymous reservations exist; expired rows are removed during preparation. At most four exchanges run SDK verification concurrently; missing/expired reservations are rejected before provider verification.
+- `POST /api/auth/exchange` handles initial login and renewal. It requires the still-existing reservation/session inside the issuance transaction, and never changes an existing session's UID. Session expiry is `min(verified ID-token exp, now + 3600 seconds)`. The cookie is HttpOnly, SameSite=Strict, host-only, Path=/api and Secure except for the explicit loopback development exception. The opaque cookie is reused across exchange, not a signed Firebase token.
+- `GET /api/auth/session` returns only UID, app role and expiry; it does not provision anything. Persistent hashed sessions survive API restart until their existing expiry. Anonymous rows cannot access protected routes.
+- `POST /api/auth/logout` deletes this app session and clears its cookie. It never invokes project-wide revoke-refresh-tokens, deletes a Firebase user, or changes other apps in the central project. A delayed verification cannot recreate a deleted reservation: logout wins atomically. A late Set-Cookie for the same deleted digest remains unusable. Logout cannot cancel an already accepted collection or bytes already in flight.
+- Existing sessions have a **bounded revocation window of at most one hour**, ending no later than their verified Firebase token expiry. They do not query Firebase on every GET. Firebase account disable/revoke is checked again at issuance/renewal. SSE rechecks persisted expiry/logout before each emission, approximately once per second, and closes when invalid. Polling/stream reconnection never renews a session or runs collection.
+- Auth and protected responses are `Cache-Control: no-store`; no role/UID is stored in the shared workspace snapshot. Per-user refresh availability is attached **after** reading the global cache. The keyword worker can retain its index only in that mounted session's memory and still uses ETag revalidation.
+
+## Browser lifecycle and signed-out shell
+
+The existing responsive header, theme, search, sort, filters, options and layout remain visible while signed out. The results area holds a centered standard HeroUI Card titled **Sign in to continue**, with a neutral secondary **Sign in with Google** button. No skeleton jobs, fabricated filter options, zero-job claims or saved job data are displayed. Search/filter/sort/refresh/pay controls are disabled. Deep-linked posting IDs and a saved foreign-currency preference do not trigger detail, workspace, keyword-index, FX, refresh or SSE reads before the gate opens. Only the bounded app-session check runs on startup.
+
+The protected App subtree mounts after the server returns a valid session. Logout, account change, renewal and errors unmount it, aborting readers and terminating the Similar worker; it is not merely hidden. A generation counter prevents stale exchange/renew/session reads from publishing an old identity. Auth writes are ordered, while server logout invalidation is sent immediately even during a pending popup/verification. Cross-tab logout uses BroadcastChannel, and ready sessions recheck on focus and every30seconds. Auth HTTP requests time out after15seconds with generic messages. Renewal has one15-second deadline covering queue wait, Firebase import/token renewal and the complete exchange response. The session expiry watchdog remains armed while refreshing; timeout or logout releases queued work and fences late continuations before further SDK calls, exchange or state publication. Logout invalidation is still sent immediately; its ordered SDK cleanup is also bounded so a stalled import cannot permanently block the next login. Initial sign-in module loading uses the same deadline/cancellation fence independently of the queue, so retrying after a stalled import cannot remain stuck in checking. The user-interactive Google popup stays outside the queue without a popup deadline. Already-started SDK/server work is not claimed to be cancelled.
+
+Manual refresh POST and its follow-up status GET share the current workspace mount's abort signal. Unmount invalidates both requests and fences late success/error/finally updates, including across a new mount. Aborting this client continuation does **not** cancel collection already accepted by the server.
+
+Firebase uses in-memory persistence, not localStorage/IndexedDB. An active signed-in tab renews its ID token before app-session expiry. A reloaded tab can use its surviving app cookie without launching Firebase, but must sign in again when renewal is required because it has no persisted Google refresh token. The UI shows checking/renewal and sanitized failure states. Account switching is sign out followed by the account-selecting Google popup. Real popup behavior, expiry/renewal timing and cross-tab acceptance remain owner-gated browser tests.
+
+## Account menu and optional profile
+
+The header uses an unmodified HeroUI ghost Button, Avatar and Dropdown composition: profile image beside the display name and muted email, with **Sign out** inside the menu. There is no topbar role chip. Missing fields or a failed lookup show **Account** with the generic avatar fallback, never a fabricated name/email. These display fields never establish authority or refresh permissions.
+
+After a ready session UID is available, a separate optional `GET /api/auth/profile` reads Firebase Admin `auth.get_user` using only that verified session's UID. Query parameters are rejected. The strict response includes only nullable `display_name`, `email` and `photo_url`; no tokens, provider records, app role or new stored user fields. This works after reload without persisting Google credentials. Responses are no-store, with no shared profile cache or database migration. Lookup failure does not block the workspace or change the session. The server allows four independent profile lookups and bounds its response wait to12seconds; a timed-out SDK call retains its slot until completion (SDK HTTP timeout10seconds with finite retries). The browser aborts after15seconds and on logout/account change, and fences late results.
+
+Photos are optional HTTPS URLs on the exact Google avatar hosts `lh3.googleusercontent.com` through `lh6.googleusercontent.com`, validated on both sides, rendered with `no-referrer`. Other hosts, credentials, ports and fragments are rejected; the server never fetches photo URLs. Display fields stay in the current tab's memory only. Credential-free checks cover field primitives, empty profiles, real empty-database authorization and click/keyboard sign-out. Real Google profile/photo rendering and visual acceptance remain parent/owner gates.
+
+## Schema11 migration and deployment gates
+
+Schema11 adds only `app_users`, `app_sessions`, their indexes and membership immutability triggers. Source/listing/detail/history/normalization/extraction/country tables and their triggers are untouched. No source rows are fabricated or migrated into auth records. CLI extraction accepts exactly schema9/10/11; country inference accepts exactly10/11. Older/newer compatibility checks remain strict.
+
+Owner/parent deployment recipe (not performed here):
+
+1. Confirm collection/extraction is idle and no other writer is running. Stop services only through the owner-approved deployment procedure.
+2. Make a consistent SQLite backup including WAL state, preserve it privately, and verify restore/integrity on an offline copy.
+3. On the **backup copy first**, call `open_database(copy_path).close()` with the new backend, inspect `PRAGMA user_version=11`, integrity/FK checks and all source/history table counts. No normalization, inference or collection is part of migration.
+4. Only after review, migrate the production database using the same explicit primitive or the next approved API startup (startup migrates but never creates an admin). Do not start old schema10 tools against the upgraded database.
+5. Configure the private backend service account, explicit origins and safe TLS. Start a single worker with proxy/access logging safeguards. Owner completes Google sign-in first and verifies Admin; then verify a second real Google account is Member and receives403 on refresh.
+6. Verify browser logout/account-switch clearing, expiry/renewal, existing SSE closure, restart session persistence, forged/non-Google/revoked token rejection and HTTPS/cookie behavior. Keep the instance closed until these live gates pass. No live sign-in/admin claim, production migration, refresh, collection, model invocation or deployment was performed by the implementation agent.
+
+Tracked tests use empty SQLite and UID/session/ASGI primitives. Test-only FastAPI overrides bypass **only Firebase configuration readiness**; real session hashing/lookup/expiry, role checks, CSRF and transport enforcement still execute. Tests do not mock the verifier/provider or fabricate postings/provider responses. Missing/malformed config tests have no override. SDK signature/revocation verification and populated production migration are explicitly not claimed as live-verified.

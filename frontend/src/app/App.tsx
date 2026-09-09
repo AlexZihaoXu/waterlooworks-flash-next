@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePayPreferences } from '../lib/usePayPreferences';
 import { compensationForSorting, presentSummary } from '../lib/hourlyPay';
 import { countryFlagUrl, inferredCountryName } from '../lib/countryInference';
@@ -88,8 +88,17 @@ const notice = {
   ],
 } as const;
 
-export function App({ state: suppliedState }: { state?: WorkspaceState }) {
-  const remote = useWorkspace(suppliedState === undefined);
+export function App({
+  state: suppliedState,
+  signedOutContent,
+  account,
+}: {
+  state?: WorkspaceState;
+  signedOutContent?: ReactNode;
+  account?: ReactNode;
+}) {
+  const signedOut = signedOutContent !== undefined;
+  const remote = useWorkspace(!signedOut && suppliedState === undefined);
   const state = suppliedState ?? remote.state;
   const refresh = suppliedState === undefined ? remote.refresh : null;
   const { theme, setTheme } = useTheme('system');
@@ -97,14 +106,14 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
   const navigation = useRef(true);
   const [jobId, setJobId] = useState(() => readJobId(window.location.search));
   const detail = useJobDetail(
-    jobId,
+    signedOut ? null : jobId,
     `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
   );
   const similarJobs = useSimilarJobs(
     detail,
     `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
   );
-  const detailOpen = jobId !== null;
+  const detailOpen = !signedOut && jobId !== null;
   const returnTarget = useRef<{
     element: HTMLAnchorElement;
     id: string;
@@ -192,8 +201,10 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
         (rate) => rate.currency !== null && rate.currency !== 'CAD',
       ),
     );
-  const { preferences, setPreferences, fx, fxStatus } =
-    usePayPreferences(needsTierFx);
+  const { preferences, setPreferences, fx, fxStatus } = usePayPreferences(
+    needsTierFx,
+    !signedOut,
+  );
   const connected = state.status === 'ready';
   const paySortAvailable =
     state.status === 'ready' && state.compensation_sort_available;
@@ -471,6 +482,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
         </div>
         <div className="stack-small">
           <div className="inline-layout">
+            {account}
             <Tabs
               selectedKey={theme}
               onSelectionChange={(key) => {
@@ -509,7 +521,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
             state.status === 'ready' &&
             !state.manual_refresh_available && (
               <Typography type="body-xs" color="muted">
-                Manual refresh is disabled on this server.
+                Manual refresh is unavailable for this account or server.
               </Typography>
             )}
         </div>
@@ -676,6 +688,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                       variant="tertiary"
                       aria-label="Clear filters"
                       isDisabled={
+                        !connected ||
                         !Object.values(activeFilters).some(
                           (values) => values.length > 0,
                         )
@@ -770,7 +783,8 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                               />
                             </span>
                           </Button>
-                          {key === 'country' &&
+                          {connected &&
+                            key === 'country' &&
                             options.country.length === 0 && (
                               <Typography type="body-xs" color="muted">
                                 No current country predictions yet.
@@ -791,6 +805,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                   <div className="stack">
                     <Select
                       fullWidth
+                      isDisabled={!connected}
                       value={preferences.format}
                       onChange={(value) => {
                         if (value === 'hour' || value === 'month') {
@@ -819,6 +834,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                     </Select>
                     <Select
                       fullWidth
+                      isDisabled={!connected}
                       value={preferences.currency}
                       onChange={(value) => {
                         if (
@@ -900,7 +916,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                   ? 'Loading saved postings…'
                   : 'Waiting for saved postings'}
             </Typography>
-            {hasFilters && (
+            {connected && hasFilters && (
               <Button
                 size="sm"
                 variant="tertiary"
@@ -977,347 +993,366 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
               CAD/hour pay.
             </Typography>
           )}
-          <div className="results-scroll">
-            <ScrollShadow
-              size={24}
-              ref={resultsScroll}
-              tabIndex={0}
-              role="region"
-              aria-label="Posting cards"
-              hideScrollBar
-            >
-              <div className="results-scroll-content">
-                <div className="results-transition">
-                  <AnimatePresence initial={false} mode="sync">
-                    <motion.div
-                      key={loading ? 'loading' : 'loaded'}
-                      className="results-layer"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={transition}
-                    >
-                      {loading ? (
-                        <div
-                          className="posting-grid"
-                          aria-hidden="true"
-                          data-loading-placeholder="true"
-                        >
-                          {Array.from({ length: PAGE_SIZE }, (_, index) => (
-                            <Card key={index} data-posting-skeleton="true">
-                              <Card.Header>
-                                <div className="posting-title">
-                                  <div className="skeleton-title-block">
-                                    <Skeleton animationType="none">
-                                      <div className="skeleton-title-space" />
-                                    </Skeleton>
-                                    <div className="skeleton-short-title">
+          {signedOut ? (
+            <div className="auth-results">
+              <div className="auth-card-layout">{signedOutContent}</div>
+            </div>
+          ) : (
+            <div className="results-scroll">
+              <ScrollShadow
+                size={24}
+                ref={resultsScroll}
+                tabIndex={0}
+                role="region"
+                aria-label="Posting cards"
+                hideScrollBar
+              >
+                <div className="results-scroll-content">
+                  <div className="results-transition">
+                    <AnimatePresence initial={false} mode="sync">
+                      <motion.div
+                        key={loading ? 'loading' : 'loaded'}
+                        className="results-layer"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={transition}
+                      >
+                        {loading ? (
+                          <div
+                            className="posting-grid"
+                            aria-hidden="true"
+                            data-loading-placeholder="true"
+                          >
+                            {Array.from({ length: PAGE_SIZE }, (_, index) => (
+                              <Card key={index} data-posting-skeleton="true">
+                                <Card.Header>
+                                  <div className="posting-title">
+                                    <div className="skeleton-title-block">
                                       <Skeleton animationType="none">
                                         <div className="skeleton-title-space" />
                                       </Skeleton>
+                                      <div className="skeleton-short-title">
+                                        <Skeleton animationType="none">
+                                          <div className="skeleton-title-space" />
+                                        </Skeleton>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                                <div className="posting-field">
-                                  <Skeleton animationType="none">
-                                    <div className="skeleton-icon-space" />
-                                  </Skeleton>
-                                  <div className="skeleton-text-line skeleton-company-line">
-                                    <Skeleton animationType="none">
-                                      <div className="skeleton-line-space" />
-                                    </Skeleton>
-                                  </div>
-                                </div>
-                                <div className="posting-identity">
                                   <div className="posting-field">
                                     <Skeleton animationType="none">
                                       <div className="skeleton-icon-space" />
                                     </Skeleton>
-                                    <div className="skeleton-text-line skeleton-id-line">
+                                    <div className="skeleton-text-line skeleton-company-line">
                                       <Skeleton animationType="none">
                                         <div className="skeleton-line-space" />
                                       </Skeleton>
                                     </div>
                                   </div>
-                                  <div className="skeleton-text-line skeleton-deadline-line">
-                                    <Skeleton animationType="none">
-                                      <div className="skeleton-line-space" />
-                                    </Skeleton>
-                                  </div>
-                                </div>
-                              </Card.Header>
-                              <Separator />
-                              <Card.Content>
-                                <div className="posting-details">
-                                  {[65, 60, 55, 50, 45].map((width) => (
-                                    <div className="posting-field" key={width}>
+                                  <div className="posting-identity">
+                                    <div className="posting-field">
                                       <Skeleton animationType="none">
                                         <div className="skeleton-icon-space" />
                                       </Skeleton>
-                                      <div
-                                        className="skeleton-text-line"
-                                        style={{ width: `${width}%` }}
-                                      >
+                                      <div className="skeleton-text-line skeleton-id-line">
                                         <Skeleton animationType="none">
                                           <div className="skeleton-line-space" />
                                         </Skeleton>
                                       </div>
                                     </div>
-                                  ))}
-                                </div>
-                              </Card.Content>
-                            </Card>
-                          ))}
-                        </div>
-                      ) : visible.length === 0 ? (
-                        <Card variant="secondary">
-                          <Card.Header>
-                            <Card.Title>{emptyText}</Card.Title>
-                            <Card.Description>
-                              {connected
-                                ? hasFilters
-                                  ? 'Try another title or clear your filters.'
-                                  : 'Use manual refresh to load postings when it is enabled.'
-                                : 'Connect the local API to browse your postings.'}
-                            </Card.Description>
-                          </Card.Header>
-                        </Card>
-                      ) : (
-                        <div className="posting-grid">
-                          {visible.map((posting) => {
-                            const deadline = parseDeadline(
-                              posting.listing.deadline,
-                            );
-                            const badge = deadlineBadge(deadline, now);
-                            return (
-                              <Card
-                                key={posting.posting_id}
-                                role="article"
-                                aria-labelledby={`posting-${posting.posting_id}`}
-                              >
-                                <Card.Header>
-                                  <div className="posting-title">
-                                    <Typography
-                                      type="h5"
-                                      weight="semibold"
-                                      role="heading"
-                                      aria-level={3}
-                                      id={`posting-${posting.posting_id}`}
-                                    >
-                                      <Link
-                                        id={`job-link-${posting.posting_id}`}
-                                        href={jobUrl(
-                                          window.location.href,
-                                          posting.posting_id,
-                                        )}
-                                        onClick={(event) => {
-                                          if (
-                                            !shouldOpenJob(event) ||
-                                            !(
-                                              event.currentTarget instanceof
-                                              HTMLAnchorElement
-                                            )
-                                          )
-                                            return;
-                                          event.preventDefault();
-                                          returnTarget.current = {
-                                            element: event.currentTarget,
-                                            id: posting.posting_id,
-                                            scroll:
-                                              resultsScroll.current
-                                                ?.scrollTop ?? 0,
-                                            windowScroll: window.scrollY,
-                                          };
-                                          // Store position on the listing entry too, so reload → Back
-                                          // restores without depending on an in-memory element ref.
-                                          window.history.replaceState(
-                                            {
-                                              ...window.history.state,
-                                              jobBrowsePosition: {
-                                                id: posting.posting_id,
-                                                scroll:
-                                                  returnTarget.current.scroll,
-                                                windowScroll:
-                                                  returnTarget.current
-                                                    .windowScroll,
-                                              },
-                                            },
-                                            '',
-                                          );
-                                          window.history.pushState(
-                                            {
-                                              ...window.history.state,
-                                              jobEntry: true,
-                                            },
-                                            '',
-                                            jobUrl(
-                                              window.location.href,
-                                              posting.posting_id,
-                                            ),
-                                          );
-                                          window.dispatchEvent(
-                                            new PopStateEvent('popstate'),
-                                          );
-                                        }}
-                                      >
-                                        {displayValue(posting.listing.title)}
-                                      </Link>
-                                    </Typography>
-                                  </div>
-                                  <div className="posting-field">
-                                    <LuBuilding2
-                                      size={16}
-                                      color="var(--muted)"
-                                      role="img"
-                                      aria-label="Company"
-                                    />
-                                    <Card.Description>
-                                      {displayValue(
-                                        posting.listing.organization,
-                                      )}
-                                    </Card.Description>
-                                  </div>
-                                  <div className="posting-identity">
-                                    <div className="posting-field">
-                                      <LuHash
-                                        size={16}
-                                        color="var(--muted)"
-                                        role="img"
-                                        aria-label="Posting ID"
-                                      />
-                                      <Typography type="body-sm" color="muted">
-                                        {posting.posting_id}
-                                      </Typography>
-                                    </div>
-                                    <div
-                                      title={
-                                        deadline === null
-                                          ? 'Deadline could not be verified'
-                                          : `${displayValue(posting.listing.deadline)} Eastern Time`
-                                      }
-                                    >
-                                      {badge.quiet ? (
-                                        <Typography
-                                          type="body-xs"
-                                          color="muted"
-                                          weight="normal"
-                                        >
-                                          {badge.label}
-                                        </Typography>
-                                      ) : (
-                                        <Chip
-                                          size="sm"
-                                          variant={badge.variant}
-                                          color={badge.color}
-                                        >
-                                          {badge.label}
-                                        </Chip>
-                                      )}
+                                    <div className="skeleton-text-line skeleton-deadline-line">
+                                      <Skeleton animationType="none">
+                                        <div className="skeleton-line-space" />
+                                      </Skeleton>
                                     </div>
                                   </div>
                                 </Card.Header>
                                 <Separator />
                                 <Card.Content>
                                   <div className="posting-details">
-                                    <div
-                                      className="posting-field"
-                                      aria-label="Compensation"
-                                    >
-                                      <LuDollarSign
-                                        size={16}
-                                        color="var(--muted)"
-                                        aria-hidden="true"
-                                      />
-                                      <Typography
-                                        type="body-sm"
-                                        color="muted"
-                                        weight="normal"
+                                    {[65, 60, 55, 50, 45].map((width) => (
+                                      <div
+                                        className="posting-field"
+                                        key={width}
                                       >
-                                        <span
-                                          className={`salary-value salary-${presentations.get(posting.posting_id)?.tier ?? 'neutral'}`}
+                                        <Skeleton animationType="none">
+                                          <div className="skeleton-icon-space" />
+                                        </Skeleton>
+                                        <div
+                                          className="skeleton-text-line"
+                                          style={{ width: `${width}%` }}
                                         >
-                                          {presentations.get(posting.posting_id)
-                                            ?.label ?? '--/--'}
-                                        </span>
+                                          <Skeleton animationType="none">
+                                            <div className="skeleton-line-space" />
+                                          </Skeleton>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </Card.Content>
+                              </Card>
+                            ))}
+                          </div>
+                        ) : visible.length === 0 ? (
+                          <Card variant="secondary">
+                            <Card.Header>
+                              <Card.Title>{emptyText}</Card.Title>
+                              <Card.Description>
+                                {connected
+                                  ? hasFilters
+                                    ? 'Try another title or clear your filters.'
+                                    : 'Use manual refresh to load postings when it is enabled.'
+                                  : 'Connect the local API to browse your postings.'}
+                              </Card.Description>
+                            </Card.Header>
+                          </Card>
+                        ) : (
+                          <div className="posting-grid">
+                            {visible.map((posting) => {
+                              const deadline = parseDeadline(
+                                posting.listing.deadline,
+                              );
+                              const badge = deadlineBadge(deadline, now);
+                              return (
+                                <Card
+                                  key={posting.posting_id}
+                                  role="article"
+                                  aria-labelledby={`posting-${posting.posting_id}`}
+                                >
+                                  <Card.Header>
+                                    <div className="posting-title">
+                                      <Typography
+                                        type="h5"
+                                        weight="semibold"
+                                        role="heading"
+                                        aria-level={3}
+                                        id={`posting-${posting.posting_id}`}
+                                      >
+                                        <Link
+                                          id={`job-link-${posting.posting_id}`}
+                                          href={jobUrl(
+                                            window.location.href,
+                                            posting.posting_id,
+                                          )}
+                                          onClick={(event) => {
+                                            if (
+                                              !shouldOpenJob(event) ||
+                                              !(
+                                                event.currentTarget instanceof
+                                                HTMLAnchorElement
+                                              )
+                                            )
+                                              return;
+                                            event.preventDefault();
+                                            returnTarget.current = {
+                                              element: event.currentTarget,
+                                              id: posting.posting_id,
+                                              scroll:
+                                                resultsScroll.current
+                                                  ?.scrollTop ?? 0,
+                                              windowScroll: window.scrollY,
+                                            };
+                                            // Store position on the listing entry too, so reload → Back
+                                            // restores without depending on an in-memory element ref.
+                                            window.history.replaceState(
+                                              {
+                                                ...window.history.state,
+                                                jobBrowsePosition: {
+                                                  id: posting.posting_id,
+                                                  scroll:
+                                                    returnTarget.current.scroll,
+                                                  windowScroll:
+                                                    returnTarget.current
+                                                      .windowScroll,
+                                                },
+                                              },
+                                              '',
+                                            );
+                                            window.history.pushState(
+                                              {
+                                                ...window.history.state,
+                                                jobEntry: true,
+                                              },
+                                              '',
+                                              jobUrl(
+                                                window.location.href,
+                                                posting.posting_id,
+                                              ),
+                                            );
+                                            window.dispatchEvent(
+                                              new PopStateEvent('popstate'),
+                                            );
+                                          }}
+                                        >
+                                          {displayValue(posting.listing.title)}
+                                        </Link>
                                       </Typography>
                                     </div>
-                                    <div className="location-with-arrangement">
-                                      <div className="location-field">
-                                        <LuMapPin
+                                    <div className="posting-field">
+                                      <LuBuilding2
+                                        size={16}
+                                        color="var(--muted)"
+                                        role="img"
+                                        aria-label="Company"
+                                      />
+                                      <Card.Description>
+                                        {displayValue(
+                                          posting.listing.organization,
+                                        )}
+                                      </Card.Description>
+                                    </div>
+                                    <div className="posting-identity">
+                                      <div className="posting-field">
+                                        <LuHash
                                           size={16}
                                           color="var(--muted)"
                                           role="img"
-                                          aria-label="Location"
+                                          aria-label="Posting ID"
                                         />
-                                        {inferredCountryName(
-                                          posting.country_inference,
-                                        ) && (
-                                          <img
-                                            className="country-flag"
-                                            src={countryFlagUrl(
-                                              posting.country_inference
-                                                .country_code,
-                                            )}
-                                            alt={
-                                              posting.country_inference
-                                                .country_name ?? ''
-                                            }
-                                            width={16}
-                                          />
-                                        )}
                                         <Typography
                                           type="body-sm"
                                           color="muted"
                                         >
-                                          {displayValue(posting.location)}
+                                          {posting.posting_id}
                                         </Typography>
                                       </div>
-                                      {posting.work_arrangement && (
-                                        <Chip size="sm" variant="soft">
-                                          {posting.work_arrangement}
-                                        </Chip>
-                                      )}
-                                    </div>
-                                    <div className="posting-field">
-                                      <LuUsers
-                                        size={16}
-                                        color="var(--muted)"
-                                        aria-hidden="true"
-                                      />
-                                      <Typography type="body-sm" color="muted">
-                                        {formatCount(
-                                          posting.listing.application_count,
-                                          'application',
+                                      <div
+                                        title={
+                                          deadline === null
+                                            ? 'Deadline could not be verified'
+                                            : `${displayValue(posting.listing.deadline)} Eastern Time`
+                                        }
+                                      >
+                                        {badge.quiet ? (
+                                          <Typography
+                                            type="body-xs"
+                                            color="muted"
+                                            weight="normal"
+                                          >
+                                            {badge.label}
+                                          </Typography>
+                                        ) : (
+                                          <Chip
+                                            size="sm"
+                                            variant={badge.variant}
+                                            color={badge.color}
+                                          >
+                                            {badge.label}
+                                          </Chip>
                                         )}
-                                      </Typography>
+                                      </div>
                                     </div>
-                                    <div className="posting-field">
-                                      <LuCalendarDays
-                                        size={16}
-                                        color="var(--muted)"
-                                        aria-hidden="true"
-                                      />
-                                      <Typography type="body-sm" color="muted">
-                                        {formatCount(
-                                          posting.listing.openings,
-                                          'opening',
+                                  </Card.Header>
+                                  <Separator />
+                                  <Card.Content>
+                                    <div className="posting-details">
+                                      <div
+                                        className="posting-field"
+                                        aria-label="Compensation"
+                                      >
+                                        <LuDollarSign
+                                          size={16}
+                                          color="var(--muted)"
+                                          aria-hidden="true"
+                                        />
+                                        <Typography
+                                          type="body-sm"
+                                          color="muted"
+                                          weight="normal"
+                                        >
+                                          <span
+                                            className={`salary-value salary-${presentations.get(posting.posting_id)?.tier ?? 'neutral'}`}
+                                          >
+                                            {presentations.get(
+                                              posting.posting_id,
+                                            )?.label ?? '--/--'}
+                                          </span>
+                                        </Typography>
+                                      </div>
+                                      <div className="location-with-arrangement">
+                                        <div className="location-field">
+                                          <LuMapPin
+                                            size={16}
+                                            color="var(--muted)"
+                                            role="img"
+                                            aria-label="Location"
+                                          />
+                                          {inferredCountryName(
+                                            posting.country_inference,
+                                          ) && (
+                                            <img
+                                              className="country-flag"
+                                              src={countryFlagUrl(
+                                                posting.country_inference
+                                                  .country_code,
+                                              )}
+                                              alt={
+                                                posting.country_inference
+                                                  .country_name ?? ''
+                                              }
+                                              width={16}
+                                            />
+                                          )}
+                                          <Typography
+                                            type="body-sm"
+                                            color="muted"
+                                          >
+                                            {displayValue(posting.location)}
+                                          </Typography>
+                                        </div>
+                                        {posting.work_arrangement && (
+                                          <Chip size="sm" variant="soft">
+                                            {posting.work_arrangement}
+                                          </Chip>
                                         )}
-                                      </Typography>
+                                      </div>
+                                      <div className="posting-field">
+                                        <LuUsers
+                                          size={16}
+                                          color="var(--muted)"
+                                          aria-hidden="true"
+                                        />
+                                        <Typography
+                                          type="body-sm"
+                                          color="muted"
+                                        >
+                                          {formatCount(
+                                            posting.listing.application_count,
+                                            'application',
+                                          )}
+                                        </Typography>
+                                      </div>
+                                      <div className="posting-field">
+                                        <LuCalendarDays
+                                          size={16}
+                                          color="var(--muted)"
+                                          aria-hidden="true"
+                                        />
+                                        <Typography
+                                          type="body-sm"
+                                          color="muted"
+                                        >
+                                          {formatCount(
+                                            posting.listing.openings,
+                                            'opening',
+                                          )}
+                                        </Typography>
+                                      </div>
                                     </div>
-                                  </div>
-                                </Card.Content>
-                              </Card>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </motion.div>
-                  </AnimatePresence>
+                                  </Card.Content>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </motion.div>
+                    </AnimatePresence>
+                  </div>
                 </div>
-              </div>
-            </ScrollShadow>
-          </div>
-          {!loading && (
+              </ScrollShadow>
+            </div>
+          )}
+          {!loading && !signedOut && (
             <div className="pagination-dock">
               <div className="pagination-panel">
                 <div className="horizontal-overflow">

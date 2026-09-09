@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { refreshAction } from './refreshAction';
+import { readManualRefresh } from './workspaceRefresh';
 import {
   createLatestWorkspaceRead,
   createWorkspaceReloadPolicy,
@@ -175,10 +176,12 @@ export function useWorkspace(enabled: boolean) {
   const [requesting, setRequesting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
+  const mountController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
+    mountController.current = controller;
     let events: EventSource | undefined;
     let active = true;
     const shouldReload = createWorkspaceReloadPolicy();
@@ -251,47 +254,54 @@ export function useWorkspace(enabled: boolean) {
     return () => {
       active = false;
       controller.abort();
+      mountController.current = null;
+      requestInFlight.current = false;
       events?.close();
     };
   }, [enabled]);
 
   const manualRefresh = useCallback(async () => {
+    const controller = mountController.current;
+    const current = () =>
+      controller !== null &&
+      mountController.current === controller &&
+      !controller.signal.aborted;
     const decision = refreshAction(
-      !requestInFlight.current &&
+      enabled &&
+        current() &&
+        !requestInFlight.current &&
         streamConnected &&
         state.status === 'ready' &&
         state.manual_refresh_available,
       refresh?.retry_after ?? 0,
       refresh?.status === 'running',
     );
-    if (decision !== 'request') return decision;
+    if (decision !== 'request' || !controller) return decision;
     requestInFlight.current = true;
     setRequesting(true);
     setActionError(null);
     try {
-      const response = await fetch('/api/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-        cache: 'no-store',
-      });
+      const response = await readManualRefresh(controller.signal);
+      if (!current()) return;
       if (![202, 409, 429].includes(response.status)) {
         setActionError('Refresh was not accepted. No automatic retry.');
       }
-      // Read authoritative status; never guess success or automatically retry POST.
-      setRefresh(parseRefresh(await readJson('/api/refresh')));
+      setRefresh(parseRefresh(response.snapshot));
       if (response.status === 409) return 'running';
       if (response.status === 429) return 'cooldown';
     } catch {
+      if (!current()) return;
       setActionError(
         'Refresh status is uncertain. Check the live stream before trying again.',
       );
       setStreamConnected(false);
     } finally {
-      requestInFlight.current = false;
-      setRequesting(false);
+      if (current()) {
+        requestInFlight.current = false;
+        setRequesting(false);
+      }
     }
-  }, [streamConnected, state, refresh]);
+  }, [enabled, streamConnected, state, refresh]);
 
   return {
     state,

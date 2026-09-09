@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from waterlooworks_flash_next.auth_schema import migrate_app_auth
 from waterlooworks_flash_next.compact_history import (
     HistoryReader,
     migrate_compact_history,
@@ -28,7 +29,7 @@ from waterlooworks_flash_next.normalized_schema import migrate_normalized_storag
 from waterlooworks_flash_next.observations import migrate_observations, utc_timestamp
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class DatabaseError(Exception):
@@ -425,6 +426,10 @@ def open_database(path: Path) -> sqlite3.Connection:
             if version == 9:
                 migrate_country_inference(connection)
                 connection.execute("PRAGMA user_version = 10")
+                version = 10
+            if version == 10:
+                migrate_app_auth(connection)
+                connection.execute("PRAGMA user_version = 11")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
     except Exception as error:

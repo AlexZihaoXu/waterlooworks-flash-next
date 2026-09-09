@@ -153,7 +153,7 @@ def test_analysis_endpoint_owns_read_transaction(tmp_path: Path) -> None:
     import sqlite3
 
     import pytest
-    from fastapi.testclient import TestClient
+    from auth_support import session_client
 
     from waterlooworks_flash_next import api
     from waterlooworks_flash_next.analysis_read import read_analysis
@@ -170,6 +170,8 @@ def test_analysis_endpoint_owns_read_transaction(tmp_path: Path) -> None:
     # Observe the real reader; do not manufacture a response or posting.
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(api, "read_analysis", observe)
-        with TestClient(api.create_app(tmp_path / "empty.sqlite3")) as client:
+        with session_client(
+            tmp_path / "empty.sqlite3", app=api.create_app(tmp_path / "empty.sqlite3")
+        ) as client:
             assert client.get("/api/postings/1/analysis").status_code == 404
     assert observed == [True]

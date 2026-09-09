@@ -2,15 +2,14 @@
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from auth_support import session_client
 
-from waterlooworks_flash_next.api import create_app
 from waterlooworks_flash_next.database import open_database
 
 
 def test_missing_posting_and_strict_id_leave_database_unchanged(tmp_path: Path) -> None:
     path = tmp_path / "db.sqlite3"
-    with TestClient(create_app(path)) as client:
+    with session_client(path) as client:
         connection = open_database(path)
         before = list(connection.iterdump())
         for posting_id in ("0", "00012", "999999999999999999999999"):

@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 
 
 def test_source_extraction_schema_is_additive_and_empty(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "empty.sqlite3")
     try:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         for name in (
             "source_extraction_runs",
             "source_extraction_items",

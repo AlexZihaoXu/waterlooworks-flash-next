@@ -76,6 +76,30 @@ body {
 .brand-icon {
   flex: none;
 }
+/* Native account content only; HeroUI trigger/avatar/menu remain unmodified. */
+.account-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: min(16rem, 45vw);
+  text-align: start;
+  line-height: 1.25;
+}
+.account-name,
+.account-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.account-email {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
 .theme-choice {
   display: inline-flex;
   align-items: center;
@@ -611,4 +635,16 @@ body {
   .detail-layer {
     grid-column: 1;
   }
+}
+
+/* Native results-area layout only; HeroUI Card and Button remain unmodified. */
+.auth-results {
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-height: 20rem;
+  padding: 1rem;
+}
+.auth-card-layout {
+  width: min(100%, 28rem);
 }

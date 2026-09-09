@@ -14,7 +14,7 @@ export function parsePayPreferences(value: unknown): PayPreferences {
       p.currency === 'CAD' || p.currency === 'USD' ? p.currency : 'original',
   };
 }
-export function usePayPreferences(needsTierFx = false) {
+export function usePayPreferences(needsTierFx = false, enabled = true) {
   const [preferences, setPreferences] = useState<PayPreferences>(() => {
     try {
       return parsePayPreferences(
@@ -36,7 +36,8 @@ export function usePayPreferences(needsTierFx = false) {
     }
   }, [preferences]);
   useEffect(() => {
-    if (preferences.currency === 'original' && !needsTierFx) return;
+    if (!enabled || (preferences.currency === 'original' && !needsTierFx))
+      return;
     const controller = new AbortController();
     let active = true;
     const timer = window.setTimeout(() => controller.abort(), 12000);
@@ -85,6 +86,6 @@ export function usePayPreferences(needsTierFx = false) {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [preferences.currency, needsTierFx]);
+  }, [preferences.currency, needsTierFx, enabled]);
   return { preferences, setPreferences, fx, fxStatus };
 }

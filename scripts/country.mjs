@@ -21,7 +21,7 @@ async function main() {
        npm run country -- stop RUN_ID
        npm run country -- resume RUN_ID
 Options: --database PATH (default data/waterlooworks.sqlite3), --hours 10.
-Requires schema10, tested loaded Gemma Q2_K_XL at context65536/four slots.
+Requires schema10/11, tested loaded Gemma Q2_K_XL at context65536/four slots.
 No refresh, model loading, source updates or replacement of existing projections.
 Country predictions are separate from verified source facts. No salary/keyword calls.
 Resume never reissues terminal results or lost in-flight calls; start a new explicit run to retry failures.`);
@@ -78,7 +78,9 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
   const dbPath = safeDatasetPath(await fs.realpath(safeDatasetPath(database)));
   const db = new DatabaseSync(dbPath, { readOnly: action === 'status' });
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
-  if (db.prepare('PRAGMA user_version').get().user_version !== 10) {
+  if (
+    ![10, 11].includes(db.prepare('PRAGMA user_version').get().user_version)
+  ) {
     db.close();
     throw new Error(
       'Schema10 required; migrate a backed-up database with the backend first',
@@ -222,7 +224,7 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
 }
 main().catch(() => {
   console.error(
-    'Country inference did not proceed; check schema10, CLI bounds, idle sources and the tested loaded model. Diagnostics suppressed.',
+    'Country inference did not proceed; check schema10/11, CLI bounds, idle sources and the tested loaded model. Diagnostics suppressed.',
   );
   process.exitCode = 1;
 });

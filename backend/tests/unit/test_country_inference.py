@@ -5,13 +5,13 @@ from pathlib import Path
 from waterlooworks_flash_next.api_models import CountryInference
 from waterlooworks_flash_next.country_inference import read_country_inferences
 from waterlooworks_flash_next.country_schema import COUNTRIES
-from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 
 
 def test_country_schema_empty_and_additive(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "empty.sqlite3")
     try:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert read_country_inferences(connection) == {}
         assert read_country_inferences(connection, "0") == {}
         assert (

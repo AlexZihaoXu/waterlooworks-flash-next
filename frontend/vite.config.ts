@@ -6,7 +6,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     host: '127.0.0.1',
-    allowedHosts: ['main-pc'],
     fs: {
       deny: [
         '.env',

@@ -9,6 +9,8 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn>=0.30,<1",
     "tzdata>=2026.3",
+    "firebase-admin>=7.5.0",
+    "python-dotenv>=1.2.3",
 ]
 
 [build-system]
