@@ -1,5 +1,7 @@
 import type { components } from './api.generated';
-import { matchesSelection } from './filterSelection';
+import { inferredCountryName } from './countryInference';
+import { groupNumber } from './numberFormat';
+import { matchesSelection, matchesAnySelection } from './filterSelection';
 
 // API types are generated from the same OpenAPI served at /doc/openapi.json.
 export type Posting = components['schemas']['PostingResponse'];
@@ -9,17 +11,20 @@ export type RefreshSnapshot = components['schemas']['RefreshSnapshot'];
 export type WorkspaceResponse = components['schemas']['WorkspaceResponse'];
 export type WorkspaceState =
   WorkspaceResponse | { status: 'disconnected' | 'loading' | 'error' };
-export type FilterKey = 'location' | 'country' | 'organization';
+export type FilterKey =
+  'location' | 'country' | 'organization' | 'targeted_disciplines';
 export type PostingFilters = Record<FilterKey, readonly string[]>;
 export const emptyFilters: PostingFilters = {
   location: [],
   country: [],
   organization: [],
+  targeted_disciplines: [],
 };
 export const filterLabels = {
   organization: 'Organization',
   country: 'Country',
   location: 'City',
+  targeted_disciplines: 'Targeted disciplines',
 } as const;
 export const listingFields = [
   ['id', 'Posting ID'],
@@ -42,11 +47,15 @@ export function displayValue(value: unknown): string {
   return JSON.stringify(value) ?? 'Not recorded';
 }
 
+export function displayNumber(value: unknown): string {
+  return groupNumber(displayValue(value));
+}
+
 export function formatCount(
   value: unknown,
   noun: 'application' | 'opening',
 ): string {
-  const text = displayValue(value);
+  const text = displayNumber(value);
   if (text === 'Not recorded')
     return `${noun === 'application' ? 'Applications' : 'Openings'} not recorded`;
   const singular =
@@ -67,20 +76,30 @@ export function displayTime(value: string | null | undefined): string {
   );
 }
 
-export function matchesTitle(
-  title: string | null | undefined,
+/** Every query word must match a real text field; words may span fields. */
+export function matchesSearch(
+  values: readonly unknown[],
   query: string,
 ): boolean {
   const term = query.trim().toLocaleLowerCase();
-  return !term || (title ?? '').toLocaleLowerCase().includes(term);
+  if (!term) return true;
+  const fields = values
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.toLocaleLowerCase());
+  return term
+    .split(/\s+/)
+    .every((word) => fields.some((field) => field.includes(word)));
 }
 
-export function filterValue(posting: Posting, key: FilterKey): string | null {
+export function filterValue(
+  posting: Posting,
+  key: Exclude<FilterKey, 'targeted_disciplines'>,
+): string | null {
   const value =
     key === 'organization'
       ? posting.listing.organization
       : key === 'country'
-        ? posting.country
+        ? inferredCountryName(posting.country_inference)
         : posting.location;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -89,6 +108,12 @@ export function filterOptions(
   postings: readonly Posting[],
   key: FilterKey,
 ): string[] {
+  if (key === 'targeted_disciplines')
+    return [
+      ...new Set(
+        postings.flatMap((posting) => posting.targeted_disciplines ?? []),
+      ),
+    ].sort((a, b) => a.localeCompare(b));
   const options = new Map<string, string>();
   postings.forEach((posting) => {
     const value = filterValue(posting, key);
@@ -104,9 +129,28 @@ export function filterPostings(
 ): Posting[] {
   return postings.filter(
     (posting) =>
-      matchesTitle(posting.listing.title, query) &&
+      matchesSearch(
+        [
+          posting.posting_id,
+          posting.listing.title,
+          posting.listing.organization,
+          posting.location,
+          posting.listing.city,
+          posting.country,
+          inferredCountryName(posting.country_inference),
+          posting.country_inference?.state === 'accepted'
+            ? posting.country_inference.country_code
+            : null,
+        ],
+        query,
+      ) &&
       (Object.keys(filters) as FilterKey[]).every((key) =>
-        matchesSelection(filterValue(posting, key), filters[key]),
+        key === 'targeted_disciplines'
+          ? matchesAnySelection(
+              posting.targeted_disciplines ?? [],
+              filters[key],
+            )
+          : matchesSelection(filterValue(posting, key), filters[key]),
       ),
   );
 }

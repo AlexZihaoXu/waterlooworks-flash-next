@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "EvidenceCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": ["field", "text"],
+      "title": "EvidenceCandidate",
+      "type": "object"
+    },
+    "RateCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "bound_type": {
+          "enum": ["fixed", "range", "minimum", "maximum"],
+          "title": "Bound Type",
+          "type": "string"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "eligibility": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eligibility"
+        },
+        "eligibility_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceCandidate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceCandidate"
+        },
+        "hours_per_week": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hours Per Week"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "maximum_inclusive": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Maximum Inclusive"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "minimum_inclusive": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Minimum Inclusive"
+        },
+        "payout_frequency": {
+          "anyOf": [
+            {
+              "enum": ["weekly", "biweekly", "semi-monthly", "monthly"],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Payout Frequency"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "enum": ["hour", "day", "week", "month", "year"],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Period"
+        }
+      },
+      "required": [
+        "bound_type",
+        "minimum_inclusive",
+        "maximum_inclusive",
+        "period",
+        "payout_frequency",
+        "evidence",
+        "eligibility_evidence"
+      ],
+      "title": "RateCandidate",
+      "type": "object"
+    },
+    "SkillCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/EvidenceCandidate"
+        },
+        "requirement": {
+          "enum": ["required", "preferred", "unspecified"],
+          "title": "Requirement",
+          "type": "string"
+        },
+        "requirement_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceCandidate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skill": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Skill",
+          "type": "string"
+        }
+      },
+      "required": ["skill", "requirement", "evidence", "requirement_evidence"],
+      "title": "SkillCandidate",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "base_rates": {
+      "items": {
+        "$ref": "#/$defs/RateCandidate"
+      },
+      "maxItems": 20,
+      "title": "Base Rates",
+      "type": "array"
+    },
+    "skills": {
+      "items": {
+        "$ref": "#/$defs/SkillCandidate"
+      },
+      "maxItems": 100,
+      "title": "Skills",
+      "type": "array"
+    }
+  },
+  "required": ["base_rates", "skills"],
+  "title": "ExtractionCandidate",
+  "type": "object"
+}

@@ -41,6 +41,57 @@ export function useRefreshEta(
   return state.remaining;
 }
 
+// Local observation only: no listing time, server ETA, or persisted baseline.
+export function useDetailEta(
+  runId: string | null,
+  running: boolean,
+  stage: string,
+  completed: number,
+  total: number,
+) {
+  const active = running && stage.startsWith('detail');
+  const [now, setNow] = useState(() => performance.now());
+  const [baseline, setBaseline] = useState({
+    runId,
+    active,
+    total,
+    completed,
+    started: now,
+    latest: completed,
+  });
+  const reset =
+    baseline.runId !== runId ||
+    baseline.active !== active ||
+    baseline.total !== total ||
+    completed < baseline.latest;
+  if (reset) {
+    setBaseline({
+      runId,
+      active,
+      total,
+      completed,
+      started: now,
+      latest: completed,
+    });
+  } else if (baseline.latest !== completed) {
+    setBaseline({ ...baseline, latest: completed });
+  }
+  useEffect(() => {
+    // Keep the clock current outside details too, so phase entry never includes
+    // listing elapsed time. Sampling precision is one second.
+    const timer = window.setInterval(() => setNow(performance.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsed = (now - baseline.started) / 1000;
+  const observed = completed - baseline.completed;
+  if (reset || !active || total <= completed || observed < 2 || elapsed < 2) {
+    return null;
+  }
+  // Recompute throughput even without completions: waits/retries/stalls increase
+  // the estimate instead of counting down toward a misleading finish time.
+  return Math.ceil(((total - completed) * elapsed) / observed);
+}
+
 export function useRefreshLogVisibility(
   runId: string | null,
   running: boolean,

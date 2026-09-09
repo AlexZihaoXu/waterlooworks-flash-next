@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "terms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "term": {
+            "type": "string"
+          },
+          "mention": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string",
+            "enum": ["required", "preferred", "mentioned", "negated"]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": ["term", "mention", "field", "context", "evidence"]
+      }
+    }
+  },
+  "required": ["terms"]
+}

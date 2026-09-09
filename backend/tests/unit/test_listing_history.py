@@ -60,7 +60,7 @@ def test_v1_migration_preserves_real_run_metadata(tmp_path: Path) -> None:
     assert {
         "revision_id",
         "content_hash",
-        "listing_json",
+        "payload_id",
         "run_id",
         "observed_at",
         "is_baseline",

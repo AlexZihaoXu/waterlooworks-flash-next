@@ -4,6 +4,7 @@ import codecs
 import math
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from email.message import Message
 from enum import StrEnum
 from http.client import HTTPException
@@ -203,6 +204,7 @@ class ListingSource:
     finished_at: float
     first_duration: float | None
     used: bool = False
+    received_at: datetime | None = None
 
     @classmethod
     def capture(cls, page: Page, response: Response) -> "ListingSource":
@@ -255,6 +257,11 @@ class ListingSource:
                 if duration >= 0
                 else float("-inf"),
                 duration / 1000 if duration >= 0 else None,
+                received_at=datetime.fromtimestamp(
+                    (timing["startTime"] + duration) / 1000, UTC
+                )
+                if duration >= 0
+                else None,
             )
         except Exception:
             raise ListingFetchError(
@@ -306,6 +313,7 @@ class ListingSource:
                     raise http_failure(response.status)
                 declared_charset = response.headers.get_content_charset()
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
+                received_at = datetime.now(UTC)
             if len(raw) > MAX_RESPONSE_BYTES:
                 raise ListingFetchError(
                     "Listing response exceeded the size limit.", FailureCategory.SIZE
@@ -317,6 +325,7 @@ class ListingSource:
                 raise ListingFetchError(
                     "Listing pagination response did not match request."
                 )
+            self.received_at = received_at
             return payload, time.monotonic() - started
         except HTTPError as error:
             status = error.code
@@ -382,6 +391,7 @@ class ListingCollection:
     records_received: int = 0
     duplicates: int = 0
     complete: bool = False
+    received_at: dict[str, datetime] = field(default_factory=dict)
 
     def run(self) -> None:
         log = stage_logger("listings")
@@ -428,6 +438,8 @@ class ListingCollection:
                         posting_id = row.posting_id()
                         if posting_id not in self.postings:
                             self.postings[posting_id] = row
+                            if self.source.received_at is not None:
+                                self.received_at[posting_id] = self.source.received_at
                             fresh += 1
                     self.records_received += len(payload.data)
                     self.duplicates += len(payload.data) - fresh

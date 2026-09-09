@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from waterlooworks_flash_next.database import (
     _SCHEMA,
+    SCHEMA_VERSION,
     DatabaseError,
     _migrate_history,
     open_database,
@@ -53,7 +54,7 @@ def test_v2_migration_keeps_real_run_and_creates_empty_detail_tables(
     run_id = start_collection_run(connection)
     connection.close()
     connection = open_database(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert connection.execute("SELECT id FROM collection_runs").fetchone()[0] == run_id
     for table in (
         "posting_details",
@@ -66,7 +67,7 @@ def test_v2_migration_keeps_real_run_and_creates_empty_detail_tables(
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     connection.close()
     connection = open_database(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     connection.close()
 
 

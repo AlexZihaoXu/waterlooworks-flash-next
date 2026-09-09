@@ -8,6 +8,8 @@ import {
 import { Checkbox, ScrollShadow, Typography } from '@heroui/react';
 import {
   OPTION_ROW_HEIGHT,
+  categorySelection,
+  toggleCategory,
   visibleRows,
   type OptionRow,
 } from '../lib/optionGroups';
@@ -17,34 +19,45 @@ import {
 const Option = memo(function Option({
   row,
   selected,
+  indeterminate,
   width,
+  flag,
   setDraft,
 }: {
   row: OptionRow;
   selected: boolean;
+  indeterminate: boolean;
   width: number;
+  flag?: string;
   setDraft: Dispatch<SetStateAction<string[]>>;
 }) {
-  if (row.kind === 'heading')
-    return (
-      <div className="picker-letter">
-        <Typography type="h6" role="heading" aria-level={3}>
-          {row.label} ({row.count})
-        </Typography>
-      </div>
-    );
+  const heading = row.kind === 'heading';
+  const label = heading
+    ? `${row.label} (${row.count}) · Select all${row.matches ? ' matches' : ''}`
+    : row.value;
   return (
-    <div className="picker-option" title={row.value}>
+    <div
+      className="picker-option"
+      title={label}
+      style={{ paddingLeft: 12 + row.depth * 16 }}
+    >
       <Checkbox
         variant="secondary"
         isSelected={selected}
-        aria-label={row.value}
+        isIndeterminate={indeterminate}
+        aria-label={
+          heading
+            ? `Select all${row.matches ? ' matches' : ''} in ${row.group} (${row.count} options)`
+            : row.value
+        }
         aria-description={`Group ${row.group}`}
         onChange={(checked) =>
           setDraft((previous) =>
-            checked
-              ? [...new Set([...previous, row.value])]
-              : previous.filter((value) => value !== row.value),
+            row.kind === 'heading'
+              ? toggleCategory(previous, row.values)
+              : checked
+                ? [...new Set([...previous, row.value])]
+                : previous.filter((value) => value !== row.value),
           )
         }
       >
@@ -52,11 +65,18 @@ const Option = memo(function Option({
           <Checkbox.Control>
             <Checkbox.Indicator />
           </Checkbox.Control>
+          {flag && (
+            <img className="country-flag" src={flag} alt="" width={16} />
+          )}
           <span
             className="picker-option-label"
-            style={{ maxWidth: width ? Math.max(0, width - 64) : undefined }}
+            style={{
+              maxWidth: width
+                ? Math.max(0, width - 64 - row.depth * 16 - (flag ? 24 : 0))
+                : undefined,
+            }}
           >
-            {row.value}
+            {label}
           </span>
         </Checkbox.Content>
       </Checkbox>
@@ -67,11 +87,13 @@ const Option = memo(function Option({
 export const FilterOptionList = memo(function FilterOptionList({
   rows,
   label,
+  flags,
   draft,
   setDraft,
 }: {
   rows: readonly OptionRow[];
   label: string;
+  flags?: ReadonlyMap<string, string>;
   draft: readonly string[];
   setDraft: Dispatch<SetStateAction<string[]>>;
 }) {
@@ -132,8 +154,17 @@ export const FilterOptionList = memo(function FilterOptionList({
             <Option
               key={row.key}
               row={row}
-              selected={row.kind === 'option' && draft.includes(row.value)}
+              selected={
+                row.kind === 'heading'
+                  ? categorySelection(row.values, draft).selected
+                  : draft.includes(row.value)
+              }
+              indeterminate={
+                row.kind === 'heading' &&
+                categorySelection(row.values, draft).indeterminate
+              }
               width={width}
+              flag={row.kind === 'heading' ? undefined : flags?.get(row.value)}
               setDraft={setDraft}
             />
           ))}

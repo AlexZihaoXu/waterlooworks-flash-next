@@ -7,7 +7,7 @@ import textwrap
 from waterlooworks_flash_next.refresh import RefreshService
 
 
-def test_browser_closes_after_capture_before_direct_collection() -> None:
+def test_browser_closes_after_listing_collection_and_real_bootstrap() -> None:
     tree = ast.parse(textwrap.dedent(inspect.getsource(RefreshService._run)))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
     capture = next(
@@ -31,7 +31,7 @@ def test_browser_closes_after_capture_before_direct_collection() -> None:
         and node.func.value.id == "collection"
         and node.func.attr == "run"
     )
-    assert capture < close < collect
+    assert capture < collect < close
     assert any(
         isinstance(node, ast.Assign)
         and any(
@@ -40,6 +40,6 @@ def test_browser_closes_after_capture_before_direct_collection() -> None:
         )
         and isinstance(node.value, ast.Constant)
         and node.value.value is None
-        and close < node.lineno < collect
+        and close < node.lineno
         for node in ast.walk(tree)
     )

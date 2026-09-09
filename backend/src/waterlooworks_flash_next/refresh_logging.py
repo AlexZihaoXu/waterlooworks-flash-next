@@ -40,6 +40,7 @@ FORMATS = frozenset(
         "Page 1 captured | responses=%d | after-click responses=%d.",
         "Password entry complete; returning control to the caller.",
         "Private persistent profile; browser cache and service workers enabled.",
+        "Private refresh context; service workers blocked for interception.",
         "Retrying the same page after %.0fs from failure completion.",
         "Starting stage %d/%d: %s",
         "Starting stage 1/%d: %s",
@@ -120,6 +121,14 @@ def safe_message(record: logging.LogRecord) -> str:
         return prefix + "Unreviewed log content withheld."
     if message.startswith("Detected verification code:"):
         return prefix + "Duo approval required; use the code in the browser."
+    if not record.args and re.fullmatch(
+        r"Detail capture blocked: resource=(image|font|stylesheet|media|texttrack|"
+        r"script|document|xhr|fetch|other|unknown); method=(get|post|other|unknown); "
+        r"phase=(idle|active|completed); disposition=(discarded|fatal); "
+        r"count=(0|[1-9][0-9]{0,4}|100000)\.",
+        message,
+    ):
+        return prefix + message
     if message not in FORMATS:
         return prefix + "Unreviewed log content withheld."
     if not isinstance(record.args, tuple):

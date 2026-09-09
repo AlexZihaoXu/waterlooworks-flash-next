@@ -12,7 +12,12 @@ describe('browse URL', () => {
       query: 'a&b',
       page: 3,
       sort: 'newest',
-      filters: { organization: ['a', 'b'], location: ['c'], country: ['d'] },
+      filters: {
+        organization: ['a', 'b'],
+        location: ['c'],
+        country: ['d'],
+        targeted_disciplines: [],
+      },
     });
   });
   it('rejects invalid pages/sorts and removes empty or repeated selections', () => {

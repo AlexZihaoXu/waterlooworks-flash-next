@@ -4,6 +4,12 @@ import { App } from '../../src/app/App';
 
 // Pure disconnected/empty presentation states, not fabricated posting/API fixtures.
 describe('App', () => {
+  it('uses danger status for the disconnected backend notice', () => {
+    render(<App state={{ status: 'disconnected' }} />);
+    expect(
+      screen.getByText('Backend not connected').closest('.alert'),
+    ).toHaveClass('alert--danger');
+  });
   it('separates filters from the posting results with semantic headings', () => {
     render(<App state={{ status: 'disconnected' }} />);
     expect(
@@ -27,9 +33,15 @@ describe('App', () => {
       screen.getByRole('button', { name: 'Refresh postings' }),
     );
     expect(
-      screen.getByRole('searchbox', { name: 'Search titles' }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('Search titles')).not.toBeInTheDocument();
+      screen.getByRole('searchbox', {
+        name: 'Search titles, companies, locations, and posting IDs',
+      }),
+    ).toHaveAttribute('placeholder', 'Search title, company, location, or ID…');
+    expect(
+      screen.queryByText(
+        'Search titles, companies, locations, and posting IDs',
+      ),
+    ).not.toBeInTheDocument();
   });
   it('keeps the inactive refresh action neutral', () => {
     render(<App state={{ status: 'disconnected' }} />);
@@ -47,7 +59,11 @@ describe('App', () => {
   });
   it('orders the filter card fields beneath its heading, clear action, and divider', () => {
     render(<App state={{ status: 'disconnected' }} />);
-    const card = within(screen.getByRole('complementary', { name: 'Filters' }));
+    const card = within(
+      screen
+        .getByRole('heading', { name: 'Filters' })
+        .closest('[data-slot="card"]') as HTMLElement,
+    );
     expect(card.getByRole('heading', { name: 'Filters' })).toBeInTheDocument();
     expect(card.getByRole('separator')).toBeInTheDocument();
     expect(card.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
@@ -55,6 +71,7 @@ describe('App', () => {
       'Organization filter',
       'Country filter',
       'City filter',
+      'Targeted disciplines filter',
     ]) {
       const button = card.getByRole('button', { name });
       expect(button).toHaveClass('button--tertiary');
@@ -69,6 +86,7 @@ describe('App', () => {
       'Organization filter',
       'Country filter',
       'City filter',
+      'Targeted disciplines filter',
     ]);
   });
   it('shows an honest disconnected workspace without starting collection', () => {
@@ -81,13 +99,20 @@ describe('App', () => {
       screen.getByRole('button', { name: 'Refresh postings' }),
     ).toBeDisabled();
     expect(
-      screen.getByRole('searchbox', { name: 'Search titles' }),
+      screen.getByRole('searchbox', {
+        name: 'Search titles, companies, locations, and posting IDs',
+      }),
     ).toBeDisabled();
     expect(screen.getByText('No posting data loaded')).toBeInTheDocument();
     expect(
       screen.getByRole('navigation', { name: 'Posting pages' }),
     ).toBeInTheDocument();
-    for (const label of ['Organization', 'Country', 'City']) {
+    for (const label of [
+      'Organization',
+      'Country',
+      'City',
+      'Targeted disciplines',
+    ]) {
       expect(
         within(
           screen.getByRole('complementary', { name: 'Filters' }),
@@ -104,6 +129,7 @@ describe('App', () => {
           postings: [],
           manual_refresh_available: false,
           details_available: false,
+          compensation_sort_available: true,
         }}
       />,
     );
@@ -121,7 +147,9 @@ describe('App', () => {
       'Most applications',
     );
     expect(screen.queryByText('Backend not connected')).not.toBeInTheDocument();
-    const search = screen.getByRole('searchbox', { name: 'Search titles' });
+    const search = screen.getByRole('searchbox', {
+      name: 'Search titles, companies, locations, and posting IDs',
+    });
     expect(search).toBeEnabled();
     fireEvent.change(search, { target: { value: 'search' } });
     expect(await screen.findByText('No matching postings')).toBeInTheDocument();
@@ -130,7 +158,7 @@ describe('App', () => {
     );
     expect(search).toHaveValue('');
     expect(
-      screen.getByText('Country data is not verified yet.'),
+      screen.getByText('No current country predictions yet.'),
     ).toBeInTheDocument();
   });
 
@@ -176,7 +204,7 @@ describe('App', () => {
     expect(localStorage.getItem('heroui-theme')).toBe('system');
   });
 
-  it('mirrors the card header, identity, divider and three detail rows while loading', () => {
+  it('mirrors the card header, identity, divider and five detail rows while loading', () => {
     const { container } = render(<App state={{ status: 'loading' }} />);
     const cards = container.querySelectorAll('[data-posting-skeleton]');
     expect(cards).toHaveLength(18);
@@ -188,8 +216,8 @@ describe('App', () => {
       expect(card.querySelector('[role="separator"]')).not.toBeNull();
       expect(
         card.querySelectorAll('.posting-details .posting-field'),
-      ).toHaveLength(3);
-      expect(card.querySelectorAll('.posting-field')).toHaveLength(5);
+      ).toHaveLength(5);
+      expect(card.querySelectorAll('.posting-field')).toHaveLength(7);
     }
   });
   it('does not misreport loading or errors as an empty database', () => {

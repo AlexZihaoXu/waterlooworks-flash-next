@@ -2,10 +2,58 @@
   "openapi": "3.1.0",
   "info": {
     "title": "WaterlooWorks Flash Next local API",
-    "description": "Loopback-only listings API. Manual, single-flight refresh with a 300-second post-run cooldown. No individual detail collection. Never expose this service publicly.",
+    "description": "Loopback-only listings API. Manual, single-flight refresh with a 300-second post-run cooldown and sequential detail content after the full listing save. Never expose this service publicly.",
     "version": "0.1.0"
   },
   "paths": {
+    "/api/exchange-rates": {
+      "get": {
+        "summary": "Get Exchange Rates",
+        "operationId": "getExchangeRates",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExchangeRateResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "summary": "Health",
@@ -138,6 +186,338 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/postings/{posting_id}": {
+      "get": {
+        "summary": "Posting Detail",
+        "description": "Read the stored snapshot only; never fetch content or expose attempts.",
+        "operationId": "getPosting",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetailResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/postings/{posting_id}/analysis": {
+      "get": {
+        "summary": "Posting Analysis",
+        "operationId": "getPostingAnalysis",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingAnalysisResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/postings/{posting_id}/history": {
+      "get": {
+        "summary": "Posting History",
+        "operationId": "getPostingHistory",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingHistoryResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/postings/{posting_id}/comparisons": {
+      "get": {
+        "summary": "Posting Comparisons",
+        "operationId": "getPostingComparisons",
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingComparisonResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/keyword-index": {
+      "get": {
+        "summary": "Keyword Index",
+        "operationId": "getKeywordIndex",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeywordIndexResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Saved keyword index unchanged"
           }
         }
       }
@@ -352,6 +732,753 @@
   },
   "components": {
     "schemas": {
+      "AnalysisEvidence": {
+        "properties": {
+          "source_kind": {
+            "type": "string",
+            "enum": ["listing", "content"],
+            "title": "Source Kind"
+          },
+          "source_field": {
+            "type": "string",
+            "title": "Source Field"
+          },
+          "source_present": {
+            "type": "boolean",
+            "title": "Source Present"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Hash"
+          },
+          "source_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_kind",
+          "source_field",
+          "source_present",
+          "source_hash",
+          "source_value"
+        ],
+        "title": "AnalysisEvidence"
+      },
+      "AnalysisValue": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["recognized", "unknown", "needs_analysis"],
+            "title": "State"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unknown_values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unknown Values"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["state", "value", "evidence", "unknown_values"],
+        "title": "AnalysisValue"
+      },
+      "ApplicationLink": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "required",
+              "optional",
+              "not_required",
+              "uncertain",
+              "informational"
+            ],
+            "title": "Classification"
+          },
+          "source_field": {
+            "type": "string",
+            "title": "Source Field"
+          },
+          "evidence_text": {
+            "type": "string",
+            "title": "Evidence Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["url", "classification", "source_field", "evidence_text"],
+        "title": "ApplicationLink"
+      },
+      "ComparablePosting": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization"
+          },
+          "shared_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Shared Skills"
+          },
+          "shared_levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Shared Levels"
+          },
+          "shared_work_term": {
+            "type": "boolean",
+            "title": "Shared Work Term"
+          },
+          "why_eligible": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Why Eligible"
+          },
+          "application_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Count"
+          },
+          "openings": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openings"
+          },
+          "salary": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonRate"
+            },
+            "type": "array",
+            "title": "Salary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "title",
+          "organization",
+          "shared_skills",
+          "shared_levels",
+          "shared_work_term",
+          "why_eligible",
+          "application_count",
+          "openings",
+          "salary"
+        ],
+        "title": "ComparablePosting"
+      },
+      "ComparisonRate": {
+        "properties": {
+          "hours_per_week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hours Per Week"
+          },
+          "bound_type": {
+            "type": "string",
+            "enum": ["fixed", "range", "minimum", "maximum"],
+            "title": "Bound Type"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "minimum_inclusive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Inclusive"
+          },
+          "maximum_inclusive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum Inclusive"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "period": {
+            "type": "string",
+            "enum": ["hour", "day", "week", "month", "year"],
+            "title": "Period"
+          },
+          "eligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eligibility"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "hours_per_week",
+          "bound_type",
+          "minimum",
+          "maximum",
+          "minimum_inclusive",
+          "maximum_inclusive",
+          "currency",
+          "period",
+          "eligibility"
+        ],
+        "title": "ComparisonRate"
+      },
+      "CompensationRate": {
+        "properties": {
+          "bound_type": {
+            "type": "string",
+            "enum": ["fixed", "range", "minimum", "maximum"],
+            "title": "Bound Type"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "minimum_inclusive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Inclusive"
+          },
+          "maximum_inclusive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum Inclusive"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["hour", "day", "week", "month", "year"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "hours_per_week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hours Per Week"
+          },
+          "payout_frequency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["weekly", "biweekly", "semi-monthly", "monthly"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payout Frequency"
+          },
+          "eligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eligibility"
+          },
+          "source_field": {
+            "type": "string",
+            "title": "Source Field"
+          },
+          "evidence_text": {
+            "type": "string",
+            "title": "Evidence Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bound_type",
+          "minimum",
+          "maximum",
+          "minimum_inclusive",
+          "maximum_inclusive",
+          "currency",
+          "period",
+          "hours_per_week",
+          "payout_frequency",
+          "eligibility",
+          "source_field",
+          "evidence_text"
+        ],
+        "title": "CompensationRate"
+      },
+      "CompensationSort": {
+        "properties": {
+          "needs_review": {
+            "type": "boolean",
+            "title": "Needs Review",
+            "default": false
+          },
+          "source_rates": {
+            "items": {
+              "$ref": "#/components/schemas/CompensationRate"
+            },
+            "type": "array",
+            "title": "Source Rates"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["hour", "day", "week", "month", "year"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "average": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated",
+            "default": false
+          },
+          "assumed_hours": {
+            "type": "boolean",
+            "title": "Assumed Hours",
+            "default": false
+          },
+          "annualized": {
+            "type": "boolean",
+            "title": "Annualized",
+            "default": false
+          },
+          "hours_per_week": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hours Per Week"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "needs_review",
+          "source_rates",
+          "currency",
+          "period",
+          "minimum",
+          "maximum",
+          "average",
+          "estimated",
+          "assumed_hours",
+          "annualized",
+          "hours_per_week"
+        ],
+        "title": "CompensationSort"
+      },
+      "CountryEvidence": {
+        "properties": {
+          "source_kind": {
+            "type": "string",
+            "enum": ["listing", "content"],
+            "title": "Source Kind"
+          },
+          "source_field": {
+            "type": "string",
+            "title": "Source Field"
+          },
+          "start": {
+            "type": "integer",
+            "title": "Start"
+          },
+          "end": {
+            "type": "integer",
+            "title": "End"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "Location context, not proof of the prediction."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["source_kind", "source_field", "start", "end", "text"],
+        "title": "CountryEvidence"
+      },
+      "CountryInference": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_requested",
+              "pending",
+              "accepted",
+              "unknown",
+              "failed",
+              "stale"
+            ],
+            "title": "State",
+            "default": "not_requested"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code"
+          },
+          "country_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Name"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "provenance": {
+            "type": "string",
+            "const": "model_inference",
+            "title": "Provenance",
+            "default": "model_inference"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "origin_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Run Id"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Version"
+          },
+          "configuration_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Hash"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/CountryEvidence"
+            },
+            "type": "array",
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "country_code",
+          "country_name",
+          "confidence",
+          "provenance",
+          "reason",
+          "run_id",
+          "origin_run_id",
+          "model_id",
+          "prompt_version",
+          "configuration_hash",
+          "evidence"
+        ],
+        "title": "CountryInference"
+      },
       "ErrorResponse": {
         "properties": {
           "detail": {
@@ -363,6 +1490,106 @@
         "type": "object",
         "required": ["detail"],
         "title": "ErrorResponse"
+      },
+      "ExchangeRateResponse": {
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "cad_per_unit": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Cad Per Unit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["as_of", "cad_per_unit"],
+        "title": "ExchangeRateResponse"
+      },
+      "ExtractedKeyword": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "source_field": {
+            "type": "string",
+            "title": "Source Field"
+          },
+          "evidence_text": {
+            "type": "string",
+            "title": "Evidence Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["name", "source_field", "evidence_text"],
+        "title": "ExtractedKeyword"
+      },
+      "ExtractionStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "partial",
+              "empty",
+              "rejected",
+              "failed",
+              "stale",
+              "pending",
+              "not_requested"
+            ],
+            "title": "State",
+            "default": "not_requested"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "configuration_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Hash"
+          },
+          "accepted_slices": {
+            "type": "integer",
+            "title": "Accepted Slices",
+            "default": 0
+          },
+          "total_slices": {
+            "type": "integer",
+            "title": "Total Slices",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "run_id",
+          "configuration_hash",
+          "accepted_slices",
+          "total_slices"
+        ],
+        "title": "ExtractionStatus"
       },
       "HealthResponse": {
         "properties": {
@@ -382,7 +1609,126 @@
         "required": ["status", "schema_version"],
         "title": "HealthResponse"
       },
+      "JobDetailResponse": {
+        "properties": {
+          "country_inference": {
+            "$ref": "#/components/schemas/CountryInference"
+          },
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "listing": {
+            "$ref": "#/components/schemas/StoredListing"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoredPostingContent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Observed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "country_inference",
+          "posting_id",
+          "listing",
+          "content",
+          "content_observed_at"
+        ],
+        "title": "JobDetailResponse"
+      },
       "JsonValue": {},
+      "KeywordIndexPosting": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keywords"
+          },
+          "partial": {
+            "type": "boolean",
+            "title": "Partial"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "content_hash",
+          "fields",
+          "keywords",
+          "partial"
+        ],
+        "title": "KeywordIndexPosting"
+      },
+      "KeywordIndexResponse": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "total_postings": {
+            "type": "integer",
+            "title": "Total Postings"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/KeywordIndexPosting"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["revision", "run_id", "total_postings", "entries"],
+        "title": "KeywordIndexResponse"
+      },
       "ListingRevision": {
         "properties": {
           "revision_id": {
@@ -421,6 +1767,458 @@
         ],
         "title": "ListingRevision"
       },
+      "PostingAnalysisResponse": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["available", "unavailable"],
+            "title": "Status"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["no_current_projection", "stale_projection"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "projection_created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Created At"
+          },
+          "producer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer"
+          },
+          "model_status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "quality_review",
+              "rejected",
+              "not_requested"
+            ],
+            "title": "Model Status"
+          },
+          "model_producer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Producer"
+          },
+          "model_error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Error Category"
+          },
+          "salary_extraction": {
+            "$ref": "#/components/schemas/ExtractionStatus"
+          },
+          "keyword_extraction": {
+            "$ref": "#/components/schemas/ExtractionStatus"
+          },
+          "keywords": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractedKeyword"
+            },
+            "type": "array",
+            "title": "Keywords"
+          },
+          "compensation_needs_review": {
+            "type": "boolean",
+            "title": "Compensation Needs Review",
+            "default": false
+          },
+          "arrangement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "city": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "province": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "country": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "levels_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["recognized", "unknown", "needs_analysis"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Levels State"
+          },
+          "work_term": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["recognized", "unknown", "needs_analysis"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills State"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillAnalysis"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "compensation_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["recognized", "unknown", "needs_analysis"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compensation State"
+          },
+          "compensation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compensation Reason"
+          },
+          "compensation": {
+            "items": {
+              "$ref": "#/components/schemas/CompensationRate"
+            },
+            "type": "array",
+            "title": "Compensation"
+          },
+          "application_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["recognized", "unknown", "needs_analysis"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application State"
+          },
+          "external_application_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Application Required"
+          },
+          "application_route": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["waterlooworks_and_employer", "employer", "unknown"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Route"
+          },
+          "employer_links": {
+            "items": {
+              "$ref": "#/components/schemas/ApplicationLink"
+            },
+            "type": "array",
+            "title": "Employer Links"
+          },
+          "waterlooworks_url": {
+            "type": "string",
+            "title": "Waterlooworks Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "status",
+          "unavailable_reason",
+          "projection_created_at",
+          "producer",
+          "model_status",
+          "model_producer",
+          "model_error_category",
+          "salary_extraction",
+          "keyword_extraction",
+          "keywords",
+          "compensation_needs_review",
+          "arrangement",
+          "city",
+          "province",
+          "country",
+          "levels",
+          "levels_state",
+          "work_term",
+          "duration",
+          "skills_state",
+          "skills",
+          "compensation_state",
+          "compensation_reason",
+          "compensation",
+          "application_state",
+          "external_application_required",
+          "application_route",
+          "employer_links",
+          "waterlooworks_url"
+        ],
+        "title": "PostingAnalysisResponse"
+      },
+      "PostingComparisonResponse": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "cohort_description": {
+            "type": "string",
+            "title": "Cohort Description"
+          },
+          "cohort_count": {
+            "type": "integer",
+            "title": "Cohort Count"
+          },
+          "eligible_count": {
+            "type": "integer",
+            "title": "Eligible Count"
+          },
+          "salary_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Currency"
+          },
+          "salary_period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Period"
+          },
+          "comparisons": {
+            "items": {
+              "$ref": "#/components/schemas/ComparablePosting"
+            },
+            "type": "array",
+            "title": "Comparisons"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "cohort_description",
+          "cohort_count",
+          "eligible_count",
+          "salary_currency",
+          "salary_period",
+          "comparisons"
+        ],
+        "title": "PostingComparisonResponse"
+      },
+      "PostingHistoryResponse": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/PostingObservation"
+            },
+            "type": "array",
+            "title": "Observations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["posting_id", "observations"],
+        "title": "PostingHistoryResponse"
+      },
+      "PostingObservation": {
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "title": "Observed At"
+          },
+          "timestamp_provenance": {
+            "type": "string",
+            "enum": [
+              "response_received",
+              "persistence_fallback",
+              "legacy_persistence",
+              "legacy_baseline"
+            ],
+            "title": "Timestamp Provenance"
+          },
+          "application_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Count"
+          },
+          "application_count_raw": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "openings": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openings"
+          },
+          "openings_raw": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "observed_at",
+          "timestamp_provenance",
+          "application_count",
+          "application_count_raw",
+          "openings",
+          "openings_raw",
+          "deadline",
+          "content_hash"
+        ],
+        "title": "PostingObservation"
+      },
       "PostingResponse": {
         "properties": {
           "posting_id": {
@@ -449,10 +2247,42 @@
             ],
             "title": "Location"
           },
+          "work_arrangement": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["Remote", "Hybrid", "In-person"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Arrangement"
+          },
           "country": {
             "type": "null",
             "title": "Country",
             "description": "Unverified; never inferred from city."
+          },
+          "country_inference": {
+            "$ref": "#/components/schemas/CountryInference"
+          },
+          "targeted_disciplines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Targeted Disciplines"
+          },
+          "compensation_sort": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompensationSort"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "listing_revisions": {
             "items": {
@@ -470,7 +2300,11 @@
           "first_seen_at",
           "last_seen_at",
           "location",
+          "work_arrangement",
           "country",
+          "country_inference",
+          "targeted_disciplines",
+          "compensation_sort",
           "listing_revisions"
         ],
         "title": "PostingResponse"
@@ -524,7 +2358,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "RefreshRequest",
-        "description": "An explicit empty JSON object starts one guarded listings-only refresh."
+        "description": "An explicit empty object starts one guarded listing-then-content refresh."
       },
       "RefreshSnapshot": {
         "properties": {
@@ -592,6 +2426,100 @@
             "title": "Retry After",
             "default": 0
           },
+          "details_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Details Completed",
+            "default": 0
+          },
+          "details_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Details Total",
+            "default": 0
+          },
+          "detail_requests": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Detail Requests",
+            "default": 0
+          },
+          "detail_retries": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Detail Retries",
+            "default": 0
+          },
+          "detail_bursts": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Detail Bursts",
+            "default": 0
+          },
+          "detail_wait_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Detail Wait Seconds",
+            "default": 0
+          },
+          "detail_limited": {
+            "type": "boolean",
+            "title": "Detail Limited",
+            "default": false
+          },
+          "analysis_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Job Id"
+          },
+          "analysis_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Total",
+            "default": 0
+          },
+          "analysis_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Completed",
+            "default": 0
+          },
+          "analysis_accepted": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Accepted",
+            "default": 0
+          },
+          "analysis_rejected": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Rejected",
+            "default": 0
+          },
+          "analysis_failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Failed",
+            "default": 0
+          },
+          "analysis_skipped": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Skipped",
+            "default": 0
+          },
+          "analysis_cache_hits": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Analysis Cache Hits",
+            "default": 0
+          },
           "eta_seconds": {
             "anyOf": [
               {
@@ -626,10 +2554,50 @@
           "unique_postings",
           "duplicates",
           "retry_after",
+          "details_completed",
+          "details_total",
+          "detail_requests",
+          "detail_retries",
+          "detail_bursts",
+          "detail_wait_seconds",
+          "detail_limited",
+          "analysis_job_id",
+          "analysis_total",
+          "analysis_completed",
+          "analysis_accepted",
+          "analysis_rejected",
+          "analysis_failed",
+          "analysis_skipped",
+          "analysis_cache_hits",
           "eta_seconds",
           "logs"
         ],
         "title": "RefreshSnapshot"
+      },
+      "SkillAnalysis": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "requirement": {
+            "type": "string",
+            "enum": ["required", "preferred", "unspecified"],
+            "title": "Requirement"
+          },
+          "source_field": {
+            "type": "string",
+            "title": "Source Field"
+          },
+          "evidence_text": {
+            "type": "string",
+            "title": "Evidence Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["name", "requirement", "source_field", "evidence_text"],
+        "title": "SkillAnalysis"
       },
       "StoredListing": {
         "properties": {
@@ -685,6 +2653,32 @@
         "title": "StoredListing",
         "description": "Allowlisted listing snapshot; unknown field types remain JSON values.\n\nUse model_dump_json(exclude_unset=True) to preserve missing versus null fields.\nNo raw action, apply control, cookie, or request fields are accepted."
       },
+      "StoredPostingContent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "title": "Id"
+          },
+          "coverage": {
+            "type": "string",
+            "const": "content_only",
+            "title": "Coverage",
+            "default": "content_only"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "fields"],
+        "title": "StoredPostingContent"
+      },
       "WorkspaceResponse": {
         "properties": {
           "status": {
@@ -709,6 +2703,11 @@
             "const": false,
             "title": "Details Available",
             "default": false
+          },
+          "compensation_sort_available": {
+            "type": "boolean",
+            "title": "Compensation Sort Available",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -717,7 +2716,8 @@
           "status",
           "postings",
           "manual_refresh_available",
-          "details_available"
+          "details_available",
+          "compensation_sort_available"
         ],
         "title": "WorkspaceResponse"
       }

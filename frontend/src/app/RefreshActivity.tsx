@@ -10,9 +10,11 @@ import {
 import { LuTerminal } from 'react-icons/lu';
 import { RefreshLogEntry } from './RefreshLogEntry';
 import { RefreshPanel } from './RefreshPanel';
-import type { RefreshSnapshot } from '../lib/workspace';
+import { refreshProgress } from '../lib/refreshProgress';
+import { displayNumber, type RefreshSnapshot } from '../lib/workspace';
 import { useLogFollow } from '../lib/useLogFollow';
 import {
+  useDetailEta,
   useRefreshEta,
   useRefreshLogVisibility,
 } from '../lib/useRefreshPresentation';
@@ -127,6 +129,13 @@ export function RefreshActivity({
     refresh?.eta_seconds ?? null,
     refresh?.pages_completed ?? 0,
   );
+  const detailEta = useDetailEta(
+    runId,
+    running,
+    refresh?.stage ?? '',
+    refresh?.details_completed ?? 0,
+    refresh?.details_total ?? 0,
+  );
   const visible = useRefreshLogVisibility(runId, running);
   const entries = useMemo(
     () =>
@@ -143,23 +152,39 @@ export function RefreshActivity({
     [refresh?.logs, runId],
   );
   if (!refresh) return null;
+  const progress = refreshProgress(
+    refresh.stage,
+    [refresh.pages_completed, refresh.total_pages],
+    [refresh.details_completed, refresh.details_total],
+    [refresh.analysis_completed ?? 0, refresh.analysis_total ?? 0],
+  );
+  const { detailsPhase } = progress;
+  const analysisPhase =
+    refresh.stage === 'analysis' || refresh.stage === 'normalizing';
+  const displayedEta = analysisPhase ? null : detailsPhase ? detailEta : eta;
+  const etaLabel =
+    detailsPhase && detailEta === null
+      ? refresh.details_total > 0 &&
+        refresh.details_completed >= refresh.details_total
+        ? 'Details complete'
+        : 'Estimating ETA…'
+      : displayedEta === null
+        ? 'ETA unavailable'
+        : displayedEta === 0
+          ? 'Updating ETA…'
+          : `ETA ~${Math.floor(displayedEta / 60)}m ${displayedEta % 60}s`;
   return (
     <>
       <RefreshPanel visible={running}>
         <div className="stack-small">
           <ProgressBar
-            aria-label="Listing refresh progress"
-            value={refresh.pages_completed}
-            maxValue={refresh.total_pages ?? 1}
-            isIndeterminate={!refresh.total_pages}
+            aria-label={progress.label}
+            value={progress.value}
+            maxValue={progress.maxValue}
+            isIndeterminate={progress.isIndeterminate}
           >
             <Label>
-              {refresh.stage.replaceAll('_', ' ')} ·{' '}
-              {eta === null
-                ? 'ETA unavailable'
-                : eta === 0
-                  ? 'Updating ETA…'
-                  : `ETA ~${Math.floor(eta / 60)}m ${eta % 60}s`}
+              {progress.stageLabel} · {etaLabel}
             </Label>
             <ProgressBar.Output />
             <ProgressBar.Track>
@@ -167,9 +192,36 @@ export function RefreshActivity({
             </ProgressBar.Track>
           </ProgressBar>
           <Typography type="body-sm" color="muted" role="status">
-            {refresh.pages_completed} / {refresh.total_pages ?? 'unknown'} pages
-            · {refresh.unique_postings} postings · {refresh.records_received}{' '}
-            records · {refresh.duplicates} duplicates
+            {analysisPhase ? (
+              <>
+                {displayNumber(refresh.analysis_completed ?? 0)} /{' '}
+                {displayNumber(refresh.analysis_total ?? 0)} processed ·{' '}
+                {displayNumber(refresh.analysis_accepted ?? 0)} accepted ·{' '}
+                {displayNumber(refresh.analysis_rejected ?? 0)} rejected ·{' '}
+                {displayNumber(refresh.analysis_failed ?? 0)} failed ·{' '}
+                {displayNumber(refresh.analysis_skipped ?? 0)} skipped ·{' '}
+                {displayNumber(refresh.analysis_cache_hits ?? 0)} cache hits
+              </>
+            ) : detailsPhase ? (
+              <>
+                {displayNumber(refresh.details_completed)} /{' '}
+                {displayNumber(refresh.details_total)} detail contents ·{' '}
+                {displayNumber(refresh.detail_requests)} requests ·{' '}
+                {displayNumber(refresh.detail_retries)} retries ·{' '}
+                {displayNumber(refresh.detail_bursts)} bursts
+                {refresh.detail_wait_seconds > 0 &&
+                  ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
+                {refresh.detail_limited && ' · Server verification cap'}
+              </>
+            ) : (
+              <>
+                {displayNumber(refresh.pages_completed)} /{' '}
+                {displayNumber(refresh.total_pages ?? 'unknown')} pages ·{' '}
+                {displayNumber(refresh.unique_postings)} postings ·{' '}
+                {displayNumber(refresh.records_received)} records ·{' '}
+                {displayNumber(refresh.duplicates)} duplicates
+              </>
+            )}
           </Typography>
         </div>
       </RefreshPanel>

@@ -1,10 +1,54 @@
 @import 'tailwindcss';
 @import '@heroui/styles';
 
-/* Native layout plus the explicitly approved pagination panel below.
+/* Native layout plus the explicitly approved pagination panel and SVG chart below.
    HeroUI components use documented props unchanged. */
+/* Owner-approved exception: salary text only; no HeroUI internals targeted. */
+.salary-value {
+  font-weight: 400;
+  font-style: normal;
+  text-decoration: none;
+}
+.salary-green {
+  color: light-dark(#146c43, #75dfa1);
+}
+.salary-blue {
+  color: light-dark(#175cd3, #8ab4ff);
+}
+.salary-gold {
+  color: light-dark(#8a5700, #ffd166);
+}
+.salary-purple {
+  color: light-dark(#7839b0, #d6a3ff);
+  font-weight: 700;
+}
+.salary-red,
+.salary-top {
+  color: light-dark(#c41e1e, #ff5252);
+  font-weight: 700;
+  font-style: italic;
+}
+.salary-top {
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
 body {
   margin: 0;
+  background-image: url('/paper-grain.svg');
+  background-size: 256px 256px;
+}
+.application-trend {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: inherit;
+  font-size: 10px;
+}
+.application-trend circle:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
 }
 .workspace {
   --workspace-gap: 1rem;
@@ -73,12 +117,20 @@ body {
   grid-area: search;
 }
 .filter-sidebar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   grid-area: filters;
-  padding: 0.25rem 0.375rem 0.75rem;
-  align-self: start;
+  align-self: stretch;
   max-height: 100%;
-  overflow: auto;
+  min-height: 0;
   min-width: 0;
+}
+.sidebar-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  padding: 0.25rem 0.375rem 0.75rem;
 }
 .posting-results {
   grid-area: results;
@@ -231,6 +283,30 @@ body {
   min-width: 0;
   max-width: 100%;
 }
+.location-with-arrangement {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.location-field {
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.location-field > svg,
+.location-field > img {
+  flex-shrink: 0;
+}
+.country-flag {
+  width: 1rem;
+  height: auto;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
 .posting-identity {
   display: flex;
   flex-wrap: wrap;
@@ -320,8 +396,219 @@ body {
   .workspace {
     --workspace-gap: 0.75rem;
     padding: 0.75rem;
+    overflow-y: auto;
   }
   .browser-layout {
     gap: 0.75rem;
+    flex-shrink: 0;
+    min-height: 64rem;
+  }
+}
+
+/* Native wrappers coordinate the stored-detail transition; no component overrides. */
+.detail-layer {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  pointer-events: none;
+  z-index: 2;
+}
+.job-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  gap: 1rem;
+  pointer-events: auto;
+}
+.detail-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 0.5rem;
+}
+.detail-breadcrumb-current {
+  max-width: calc(100vw - 10rem);
+  overflow-wrap: anywhere;
+}
+.detail-title {
+  flex: 1 1 16rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.detail-scroll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  isolation: isolate;
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0.25rem 0.375rem 1rem;
+  overflow-wrap: anywhere;
+}
+.detail-state {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+}
+.detail-scroll > .stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+.posting-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  min-width: 0;
+}
+.posting-facts,
+.posting-description,
+.posting-similar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 1rem;
+  min-width: 0;
+}
+.posting-description {
+  grid-row: 1;
+}
+.posting-identity-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.posting-column-heading {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.25rem 0.375rem 0;
+}
+.posting-column-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.875rem;
+  padding: 0.25rem 0.375rem 1rem;
+}
+.posting-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.posting-fact-list {
+  display: grid;
+  gap: 0.875rem;
+  margin: 0;
+}
+.posting-fact-list dt,
+.posting-fact-list dd {
+  margin: 0;
+}
+.posting-fact-list dd {
+  margin-top: 0.25rem;
+}
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.posting-source-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 1rem 1.5rem;
+  margin: 0;
+}
+.posting-source-facts dd {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+}
+.posting-field-wide {
+  grid-column: 1 / -1;
+}
+@media (min-width: 64rem) {
+  .detail-scroll:has(.posting-layout) {
+    flex: 1;
+    overflow: hidden;
+    padding: 0;
+  }
+  .posting-layout {
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) minmax(0, 15rem);
+    gap: 1rem;
+  }
+  .posting-facts,
+  .posting-description,
+  .posting-similar {
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .posting-facts {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .posting-description {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .posting-similar {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+.detail-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem 2rem;
+  margin: 0;
+}
+.detail-fields {
+  display: grid;
+  gap: 1.75rem;
+  margin: 0;
+}
+.detail-value {
+  margin: 0.375rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.detail-tabs-list {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.detail-chip-list,
+.application-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  min-width: 0;
+}
+.comparison-row {
+  min-width: 0;
+  padding-block: 0.5rem;
+}
+.detail-overview dt,
+.detail-overview dd {
+  margin: 0;
+}
+.detail-overview dd {
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 56rem) {
+  .detail-layer {
+    grid-column: 1;
   }
 }

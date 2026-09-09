@@ -1,0 +1,38 @@
+"""Empty-database and primitive contracts; never seed invented postings."""
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from waterlooworks_flash_next.api import create_app
+from waterlooworks_flash_next.database import open_database
+
+
+def test_keyword_index_empty_conditional_get_is_read_only(tmp_path: Path) -> None:
+    path = tmp_path / "empty.sqlite3"
+    with TestClient(create_app(path)) as client:
+        first = client.get("/api/keyword-index")
+        assert first.status_code == 200
+        assert first.json()["entries"] == []
+        assert first.json()["run_id"] is None
+        assert first.json()["total_postings"] == 0
+        assert len(first.json()["revision"]) == 64
+        assert first.headers["cache-control"] == "private, no-cache"
+        second = client.get(
+            "/api/keyword-index", headers={"If-None-Match": first.headers["etag"]}
+        )
+        assert second.status_code == 304
+        assert second.content == b""
+        assert second.headers["etag"] == first.headers["etag"]
+    connection = open_database(path)
+    try:
+        for table in (
+            "collection_runs",
+            "source_extraction_runs",
+            "source_extractions",
+        ):
+            assert (
+                connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+            )
+    finally:
+        connection.close()

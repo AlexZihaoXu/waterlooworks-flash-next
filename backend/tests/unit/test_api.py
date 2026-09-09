@@ -6,17 +6,27 @@ import pytest
 from fastapi.testclient import TestClient
 
 from waterlooworks_flash_next.api import create_app
-from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 from waterlooworks_flash_next.refresh import RefreshConflict, claim_refresh
 
 
 def test_empty_workspace_and_sse_are_real_responses(tmp_path: Path) -> None:
     with TestClient(create_app(tmp_path / "db.sqlite3")) as client:
-        assert client.get("/api/health").json()["schema_version"] == 3
+        assert client.get("/api/health").json()["schema_version"] == SCHEMA_VERSION
         assert client.get("/doc").status_code == 200
         spec = client.get("/doc/openapi.json").json()
         assert spec["paths"]["/api/refresh"]["post"]["operationId"] == "startRefresh"
+        assert (
+            spec["paths"]["/api/postings/{posting_id}/analysis"]["get"]["operationId"]
+            == "getPostingAnalysis"
+        )
+        assert "PostingComparisonResponse" in spec["components"]["schemas"]
         assert "RefreshSnapshot" in spec["components"]["schemas"]
+        targeted = spec["components"]["schemas"]["PostingResponse"]["properties"][
+            "targeted_disciplines"
+        ]
+        assert targeted["type"] == "array"
+        assert targeted["items"]["type"] == "string"
         response = client.get("/api/workspace")
         assert response.status_code == 200
         assert response.json()["postings"] == []
@@ -27,6 +37,10 @@ def test_empty_workspace_and_sse_are_real_responses(tmp_path: Path) -> None:
         assert "event: refresh" in events.text
         assert '"status":"idle"' in events.text
         assert client.post("/api/refresh", json={}).status_code == 503
+        for suffix in ("analysis", "history", "comparisons"):
+            missing = client.get(f"/api/postings/404/{suffix}")
+            assert missing.status_code == 404
+            assert missing.headers["cache-control"] == "no-store"
 
 
 def test_cross_origin_refresh_and_form_posts_are_rejected(tmp_path: Path) -> None:

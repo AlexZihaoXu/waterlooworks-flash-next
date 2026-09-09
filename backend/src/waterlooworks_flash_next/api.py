@@ -3,31 +3,58 @@
 import asyncio
 import os
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Path as ApiPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.middleware.gzip import GZipMiddleware
 
+from waterlooworks_flash_next.analysis_read import (
+    read_analysis,
+    read_comparisons,
+    read_history,
+)
 from waterlooworks_flash_next.api_models import (
+    CountryInference,
     ErrorResponse,
+    ExchangeRateResponse,
     HealthResponse,
+    JobDetailResponse,
+    KeywordIndexResponse,
     ListingRevision,
+    PostingAnalysisResponse,
+    PostingComparisonResponse,
+    PostingHistoryResponse,
     PostingResponse,
     RefreshAccepted,
     RefreshRequest,
     RefreshSnapshot,
     WorkspaceResponse,
 )
+from waterlooworks_flash_next.compact_history import HistoryReader
+from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
+from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.country_inference import read_country_inferences
 from waterlooworks_flash_next.database import (
     SCHEMA_VERSION,
     StoredListing,
     open_database,
 )
-from waterlooworks_flash_next.refresh import RefreshConflict, RefreshService
+from waterlooworks_flash_next.exchange_rates import ExchangeRates
+from waterlooworks_flash_next.keyword_index import read_keyword_index
+from waterlooworks_flash_next.refresh import (
+    RefreshConflict,
+    RefreshService,
+    configured_detail_limit,
+)
+from waterlooworks_flash_next.snapshot_cache import SnapshotCache
+from waterlooworks_flash_next.targeted_disciplines import read_targeted_disciplines
+from waterlooworks_flash_next.work_arrangement import read_work_arrangements
 
 
 def create_app(database_path: Path | None = None) -> FastAPI:
@@ -37,20 +64,35 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     # Test-specific paths never enable authentication through environment inheritance.
     enabled = database_path is None and os.environ.get("WW_ENABLE_REFRESH") == "1"
     root = Path(os.environ.get("WW_PROJECT_ROOT", str(Path.cwd())))
-    service = RefreshService(path, root / ".credentials.json" if enabled else None)
+    detail_limit = (
+        configured_detail_limit(os.environ.get("WW_DETAIL_LIMIT"))
+        if database_path is None
+        else None
+    )
+    service = RefreshService(
+        path, root / ".credentials.json" if enabled else None, detail_limit=detail_limit
+    )
+
+    workspace_cache = SnapshotCache[bytes](path)
+    keyword_cache = SnapshotCache[tuple[bytes, str]](path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         open_database(path).close()
         service.restore()
-        yield
+        try:
+            yield
+        finally:
+            workspace_cache.close()
+            keyword_cache.close()
 
     app = FastAPI(
         title="WaterlooWorks Flash Next local API",
         version="0.1.0",
         description=(
             "Loopback-only listings API. Manual, single-flight refresh with "
-            "a 300-second post-run cooldown. No individual detail collection. "
+            "a 300-second post-run cooldown and sequential detail content "
+            "after the full listing save. "
             "Never expose this service publicly."
         ),
         responses={
@@ -63,6 +105,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+    # Starlette excludes text/event-stream so SSE remains promptly flushed.
+    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=4)
     errors: dict[int | str, dict[str, Any]] = {
         code: {"model": ErrorResponse} for code in (403, 409, 415, 422, 429, 500, 503)
     }
@@ -111,6 +155,21 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             content={"detail": "Invalid request; input diagnostics suppressed."},
         )
 
+    exchange_rates = ExchangeRates()
+
+    @app.get(
+        "/api/exchange-rates",
+        response_model=ExchangeRateResponse,
+        operation_id="getExchangeRates",
+    )
+    def get_exchange_rates() -> ExchangeRateResponse:
+        try:
+            return ExchangeRateResponse.model_validate(exchange_rates.read())
+        except Exception:
+            raise HTTPException(
+                503, "Reference exchange rates are unavailable."
+            ) from None
+
     @app.get("/api/health", response_model=HealthResponse, operation_id="getHealth")
     def health() -> HealthResponse:
         return HealthResponse(schema_version=SCHEMA_VERSION)
@@ -121,12 +180,33 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         responses=errors,
         operation_id="getWorkspace",
     )
-    def workspace(response: Response) -> WorkspaceResponse:
-        response.headers["Cache-Control"] = "no-store"
+    def workspace() -> Response:
+        try:
+            return Response(
+                workspace_cache.get(
+                    lambda: workspace_snapshot().model_dump_json().encode()
+                ),
+                media_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
+        except Exception:
+            raise HTTPException(
+                500, "Stored workspace is unavailable; diagnostics suppressed."
+            ) from None
+
+    def workspace_snapshot() -> WorkspaceResponse:
         connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
         try:
+            connection.execute(
+                "BEGIN"
+            )  # One source/projection snapshot during refresh.
+            arrangements = read_work_arrangements(connection)
+            targeted = read_targeted_disciplines(connection)
+            compensation = read_compensation_sorts(connection)
+            countries = read_country_inferences(connection)
             history: dict[str, list[ListingRevision]] = {}
+            history_reader = HistoryReader(connection)
             for row in connection.execute(
                 "SELECT * FROM posting_revisions ORDER BY revision_id DESC"
             ):
@@ -137,7 +217,11 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                         hash_version=row["hash_version"],
                         observed_at=row["observed_at"],
                         run_id=row["run_id"],
-                        snapshot=StoredListing.model_validate_json(row["listing_json"]),
+                        snapshot=StoredListing.model_validate_json(
+                            history_reader.read(
+                                row["payload_id"], row["content_hash"], "listing"
+                            )
+                        ),
                     )
                 )
             postings = []
@@ -155,6 +239,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                         if isinstance(listing.city, str)
                         else None,
                         listing_revisions=history.get(row["posting_id"], []),
+                        targeted_disciplines=targeted.get(row["posting_id"], []),
+                        work_arrangement=arrangements.get(row["posting_id"]),
+                        compensation_sort=compensation.get(row["posting_id"]),
+                        country_inference=countries.get(
+                            row["posting_id"], CountryInference()
+                        ),
                     )
                 )
             return WorkspaceResponse(
@@ -164,6 +254,156 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             raise HTTPException(
                 500, "Stored workspace is unavailable; diagnostics suppressed."
             ) from None
+        finally:
+            connection.close()
+
+    @app.get(
+        "/api/postings/{posting_id}",
+        response_model=JobDetailResponse,
+        responses={404: {"model": ErrorResponse}},
+        operation_id="getPosting",
+    )
+    def posting_detail(
+        posting_id: Annotated[str, ApiPath(pattern=r"^[0-9]+$")],
+        response: Response,
+    ) -> JobDetailResponse:
+        """Read the stored snapshot only; never fetch content or expose attempts."""
+        response.headers["Cache-Control"] = "no-store"
+        connection = None
+        try:
+            connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN")
+            countries = read_country_inferences(connection, posting_id)
+            row = connection.execute(
+                "SELECT p.listing_json, c.content_json, c.last_seen_at "
+                "FROM postings p LEFT JOIN posting_contents c "
+                "ON c.posting_id=p.posting_id WHERE p.posting_id=?",
+                (posting_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(
+                    404,
+                    "Stored posting not found.",
+                    headers={"Cache-Control": "no-store"},
+                )
+            return JobDetailResponse(
+                posting_id=posting_id,
+                listing=StoredListing.model_validate_json(row["listing_json"]),
+                content=StoredPostingContent.model_validate_json(row["content_json"])
+                if row["content_json"] is not None
+                else None,
+                content_observed_at=row["last_seen_at"],
+                country_inference=countries.get(posting_id, CountryInference()),
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                500,
+                "Stored posting is unavailable; diagnostics suppressed.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        finally:
+            if connection is not None:
+                connection.close()
+
+    AnalysisResponse = (
+        PostingAnalysisResponse | PostingHistoryResponse | PostingComparisonResponse
+    )
+
+    def read_projection_endpoint(
+        posting_id: str,
+        reader: Callable[[sqlite3.Connection, str], AnalysisResponse],
+    ) -> AnalysisResponse:
+        connection = None
+        try:
+            connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN")  # Keep source and projection reads consistent.
+            return reader(connection, posting_id)
+        except KeyError:
+            raise HTTPException(
+                404,
+                "Stored posting not found.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                500,
+                "Stored posting analysis is unavailable; diagnostics suppressed.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        finally:
+            if connection is not None:
+                connection.close()
+
+    @app.get(
+        "/api/postings/{posting_id}/analysis",
+        response_model=PostingAnalysisResponse,
+        responses={404: {"model": ErrorResponse}},
+        operation_id="getPostingAnalysis",
+    )
+    def posting_analysis(
+        posting_id: Annotated[str, ApiPath(pattern=r"^[0-9]+$")],
+        response: Response,
+    ) -> PostingAnalysisResponse:
+        response.headers["Cache-Control"] = "no-store"
+        return read_projection_endpoint(posting_id, read_analysis)  # type: ignore[return-value]
+
+    @app.get(
+        "/api/postings/{posting_id}/history",
+        response_model=PostingHistoryResponse,
+        responses={404: {"model": ErrorResponse}},
+        operation_id="getPostingHistory",
+    )
+    def posting_history(
+        posting_id: Annotated[str, ApiPath(pattern=r"^[0-9]+$")],
+        response: Response,
+    ) -> PostingHistoryResponse:
+        response.headers["Cache-Control"] = "no-store"
+        return read_projection_endpoint(posting_id, read_history)  # type: ignore[return-value]
+
+    @app.get(
+        "/api/postings/{posting_id}/comparisons",
+        response_model=PostingComparisonResponse,
+        responses={404: {"model": ErrorResponse}},
+        operation_id="getPostingComparisons",
+    )
+    def posting_comparisons(
+        posting_id: Annotated[str, ApiPath(pattern=r"^[0-9]+$")],
+        response: Response,
+    ) -> PostingComparisonResponse:
+        response.headers["Cache-Control"] = "no-store"
+        return read_projection_endpoint(posting_id, read_comparisons)  # type: ignore[return-value]
+
+    @app.get(
+        "/api/keyword-index",
+        response_model=KeywordIndexResponse,
+        responses={304: {"description": "Saved keyword index unchanged"}},
+        operation_id="getKeywordIndex",
+    )
+    def keyword_index(request: Request) -> Response:
+        try:
+            content, etag = keyword_cache.get(keyword_snapshot)
+            headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers=headers)
+            return Response(content, media_type="application/json", headers=headers)
+        except Exception:
+            raise HTTPException(
+                500, "Saved keyword index unavailable; diagnostics suppressed."
+            ) from None
+
+    def keyword_snapshot() -> tuple[bytes, str]:
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            payload, etag = read_keyword_index(connection)
+            assert payload is not None
+            return payload.model_dump_json().encode(), etag
         finally:
             connection.close()
 

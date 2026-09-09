@@ -11,6 +11,7 @@ const filterParameters = {
   organization: 'organization',
   country: 'country',
   location: 'city',
+  targeted_disciplines: 'target',
 } as const;
 
 export function readBrowseUrl(search: string): BrowseView {
@@ -37,6 +38,7 @@ export function readBrowseUrl(search: string): BrowseView {
       organization: values('organization'),
       country: values('country'),
       location: values('city'),
+      targeted_disciplines: values('target'),
     },
   };
 }

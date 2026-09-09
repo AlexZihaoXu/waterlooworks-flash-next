@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+  '/api/exchange-rates': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Exchange Rates */
+    get: operations['getExchangeRates'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/health': {
     parameters: {
       query?: never;
@@ -30,6 +47,94 @@ export interface paths {
     };
     /** Workspace */
     get: operations['getWorkspace'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/postings/{posting_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Posting Detail
+     * @description Read the stored snapshot only; never fetch content or expose attempts.
+     */
+    get: operations['getPosting'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/postings/{posting_id}/analysis': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Posting Analysis */
+    get: operations['getPostingAnalysis'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/postings/{posting_id}/history': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Posting History */
+    get: operations['getPostingHistory'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/postings/{posting_id}/comparisons': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Posting Comparisons */
+    get: operations['getPostingComparisons'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/keyword-index': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Keyword Index */
+    get: operations['getKeywordIndex'];
     put?: never;
     post?: never;
     delete?: never;
@@ -77,10 +182,285 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AnalysisEvidence */
+    AnalysisEvidence: {
+      /**
+       * Source Kind
+       * @enum {string}
+       */
+      source_kind: 'listing' | 'content';
+      /** Source Field */
+      source_field: string;
+      /** Source Present */
+      source_present: boolean;
+      /** Source Hash */
+      source_hash: string | null;
+      /** Source Value */
+      source_value: string | null;
+    };
+    /** AnalysisValue */
+    AnalysisValue: {
+      /**
+       * State
+       * @enum {string}
+       */
+      state: 'recognized' | 'unknown' | 'needs_analysis';
+      /** Value */
+      value: string | number | boolean | null;
+      evidence: components['schemas']['AnalysisEvidence'] | null;
+      /** Unknown Values */
+      unknown_values: string[];
+    };
+    /** ApplicationLink */
+    ApplicationLink: {
+      /** Url */
+      url: string;
+      /**
+       * Classification
+       * @enum {string}
+       */
+      classification:
+        | 'required'
+        | 'optional'
+        | 'not_required'
+        | 'uncertain'
+        | 'informational';
+      /** Source Field */
+      source_field: string;
+      /** Evidence Text */
+      evidence_text: string;
+    };
+    /** ComparablePosting */
+    ComparablePosting: {
+      /** Posting Id */
+      posting_id: string;
+      /** Title */
+      title: string | null;
+      /** Organization */
+      organization: string | null;
+      /** Shared Skills */
+      shared_skills: string[];
+      /** Shared Levels */
+      shared_levels: string[];
+      /** Shared Work Term */
+      shared_work_term: boolean;
+      /** Why Eligible */
+      why_eligible: string[];
+      /** Application Count */
+      application_count: number | null;
+      /** Openings */
+      openings: number | null;
+      /** Salary */
+      salary: components['schemas']['ComparisonRate'][];
+    };
+    /** ComparisonRate */
+    ComparisonRate: {
+      /** Hours Per Week */
+      hours_per_week: string | null;
+      /**
+       * Bound Type
+       * @enum {string}
+       */
+      bound_type: 'fixed' | 'range' | 'minimum' | 'maximum';
+      /** Minimum */
+      minimum: string | null;
+      /** Maximum */
+      maximum: string | null;
+      /** Minimum Inclusive */
+      minimum_inclusive: boolean | null;
+      /** Maximum Inclusive */
+      maximum_inclusive: boolean | null;
+      /** Currency */
+      currency: string;
+      /**
+       * Period
+       * @enum {string}
+       */
+      period: 'hour' | 'day' | 'week' | 'month' | 'year';
+      /** Eligibility */
+      eligibility: string | null;
+    };
+    /** CompensationRate */
+    CompensationRate: {
+      /**
+       * Bound Type
+       * @enum {string}
+       */
+      bound_type: 'fixed' | 'range' | 'minimum' | 'maximum';
+      /** Minimum */
+      minimum: string | null;
+      /** Maximum */
+      maximum: string | null;
+      /** Minimum Inclusive */
+      minimum_inclusive: boolean | null;
+      /** Maximum Inclusive */
+      maximum_inclusive: boolean | null;
+      /** Currency */
+      currency: string | null;
+      /** Period */
+      period: ('hour' | 'day' | 'week' | 'month' | 'year') | null;
+      /** Hours Per Week */
+      hours_per_week: string | null;
+      /** Payout Frequency */
+      payout_frequency:
+        ('weekly' | 'biweekly' | 'semi-monthly' | 'monthly') | null;
+      /** Eligibility */
+      eligibility: string | null;
+      /** Source Field */
+      source_field: string;
+      /** Evidence Text */
+      evidence_text: string;
+    };
+    /** CompensationSort */
+    CompensationSort: {
+      /**
+       * Needs Review
+       * @default false
+       */
+      needs_review: boolean;
+      /** Source Rates */
+      source_rates: components['schemas']['CompensationRate'][];
+      /** Currency */
+      currency: string | null;
+      /** Period */
+      period: ('hour' | 'day' | 'week' | 'month' | 'year') | null;
+      /** Minimum */
+      minimum: string | null;
+      /** Maximum */
+      maximum: string | null;
+      /** Average */
+      average: string | null;
+      /**
+       * Estimated
+       * @default false
+       */
+      estimated: boolean;
+      /**
+       * Assumed Hours
+       * @default false
+       */
+      assumed_hours: boolean;
+      /**
+       * Annualized
+       * @default false
+       */
+      annualized: boolean;
+      /** Hours Per Week */
+      hours_per_week: string[];
+    };
+    /** CountryEvidence */
+    CountryEvidence: {
+      /**
+       * Source Kind
+       * @enum {string}
+       */
+      source_kind: 'listing' | 'content';
+      /** Source Field */
+      source_field: string;
+      /** Start */
+      start: number;
+      /** End */
+      end: number;
+      /**
+       * Text
+       * @description Location context, not proof of the prediction.
+       */
+      text: string;
+    };
+    /** CountryInference */
+    CountryInference: {
+      /**
+       * State
+       * @default not_requested
+       * @enum {string}
+       */
+      state:
+        | 'not_requested'
+        | 'pending'
+        | 'accepted'
+        | 'unknown'
+        | 'failed'
+        | 'stale';
+      /** Country Code */
+      country_code: string | null;
+      /** Country Name */
+      country_name: string | null;
+      /** Confidence */
+      confidence: number | null;
+      /**
+       * Provenance
+       * @default model_inference
+       * @constant
+       */
+      provenance: 'model_inference';
+      /** Reason */
+      reason: string | null;
+      /** Run Id */
+      run_id: string | null;
+      /** Origin Run Id */
+      origin_run_id: string | null;
+      /** Model Id */
+      model_id: string | null;
+      /** Prompt Version */
+      prompt_version: string | null;
+      /** Configuration Hash */
+      configuration_hash: string | null;
+      /** Evidence */
+      evidence: components['schemas']['CountryEvidence'][];
+    };
     /** ErrorResponse */
     ErrorResponse: {
       /** Detail */
       detail: string;
+    };
+    /** ExchangeRateResponse */
+    ExchangeRateResponse: {
+      /** As Of */
+      as_of: string;
+      /** Cad Per Unit */
+      cad_per_unit: {
+        [key: string]: string;
+      };
+    };
+    /** ExtractedKeyword */
+    ExtractedKeyword: {
+      /** Name */
+      name: string;
+      /** Source Field */
+      source_field: string;
+      /** Evidence Text */
+      evidence_text: string;
+    };
+    /** ExtractionStatus */
+    ExtractionStatus: {
+      /**
+       * State
+       * @default not_requested
+       * @enum {string}
+       */
+      state:
+        | 'accepted'
+        | 'partial'
+        | 'empty'
+        | 'rejected'
+        | 'failed'
+        | 'stale'
+        | 'pending'
+        | 'not_requested';
+      /** Run Id */
+      run_id: string | null;
+      /** Configuration Hash */
+      configuration_hash: string | null;
+      /**
+       * Accepted Slices
+       * @default 0
+       */
+      accepted_slices: number;
+      /**
+       * Total Slices
+       * @default 0
+       */
+      total_slices: number;
     };
     /** HealthResponse */
     HealthResponse: {
@@ -93,7 +473,41 @@ export interface components {
       /** Schema Version */
       schema_version: number;
     };
+    /** JobDetailResponse */
+    JobDetailResponse: {
+      country_inference: components['schemas']['CountryInference'];
+      /** Posting Id */
+      posting_id: string;
+      listing: components['schemas']['StoredListing'];
+      content: components['schemas']['StoredPostingContent'] | null;
+      /** Content Observed At */
+      content_observed_at: string | null;
+    };
     JsonValue: unknown;
+    /** KeywordIndexPosting */
+    KeywordIndexPosting: {
+      /** Posting Id */
+      posting_id: string;
+      /** Content Hash */
+      content_hash: string;
+      /** Fields */
+      fields: string[];
+      /** Keywords */
+      keywords: string[];
+      /** Partial */
+      partial: boolean;
+    };
+    /** KeywordIndexResponse */
+    KeywordIndexResponse: {
+      /** Revision */
+      revision: string;
+      /** Run Id */
+      run_id: string | null;
+      /** Total Postings */
+      total_postings: number;
+      /** Entries */
+      entries: components['schemas']['KeywordIndexPosting'][];
+    };
     /** ListingRevision */
     ListingRevision: {
       /** Revision Id */
@@ -108,6 +522,119 @@ export interface components {
       run_id: string;
       snapshot: components['schemas']['StoredListing'];
     };
+    /** PostingAnalysisResponse */
+    PostingAnalysisResponse: {
+      /** Posting Id */
+      posting_id: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'available' | 'unavailable';
+      /** Unavailable Reason */
+      unavailable_reason: ('no_current_projection' | 'stale_projection') | null;
+      /** Projection Created At */
+      projection_created_at: string | null;
+      /** Producer */
+      producer: string | null;
+      /**
+       * Model Status
+       * @enum {string}
+       */
+      model_status:
+        'available' | 'quality_review' | 'rejected' | 'not_requested';
+      /** Model Producer */
+      model_producer: string | null;
+      /** Model Error Category */
+      model_error_category: string | null;
+      salary_extraction: components['schemas']['ExtractionStatus'];
+      keyword_extraction: components['schemas']['ExtractionStatus'];
+      /** Keywords */
+      keywords: components['schemas']['ExtractedKeyword'][];
+      /**
+       * Compensation Needs Review
+       * @default false
+       */
+      compensation_needs_review: boolean;
+      arrangement: components['schemas']['AnalysisValue'] | null;
+      city: components['schemas']['AnalysisValue'] | null;
+      province: components['schemas']['AnalysisValue'] | null;
+      country: components['schemas']['AnalysisValue'] | null;
+      /** Levels */
+      levels: string[];
+      /** Levels State */
+      levels_state: ('recognized' | 'unknown' | 'needs_analysis') | null;
+      work_term: components['schemas']['AnalysisValue'] | null;
+      duration: components['schemas']['AnalysisValue'] | null;
+      /** Skills State */
+      skills_state: ('recognized' | 'unknown' | 'needs_analysis') | null;
+      /** Skills */
+      skills: components['schemas']['SkillAnalysis'][];
+      /** Compensation State */
+      compensation_state: ('recognized' | 'unknown' | 'needs_analysis') | null;
+      /** Compensation Reason */
+      compensation_reason: string | null;
+      /** Compensation */
+      compensation: components['schemas']['CompensationRate'][];
+      /** Application State */
+      application_state: ('recognized' | 'unknown' | 'needs_analysis') | null;
+      /** External Application Required */
+      external_application_required: boolean | null;
+      /** Application Route */
+      application_route:
+        ('waterlooworks_and_employer' | 'employer' | 'unknown') | null;
+      /** Employer Links */
+      employer_links: components['schemas']['ApplicationLink'][];
+      /** Waterlooworks Url */
+      waterlooworks_url: string;
+    };
+    /** PostingComparisonResponse */
+    PostingComparisonResponse: {
+      /** Posting Id */
+      posting_id: string;
+      /** Cohort Description */
+      cohort_description: string;
+      /** Cohort Count */
+      cohort_count: number;
+      /** Eligible Count */
+      eligible_count: number;
+      /** Salary Currency */
+      salary_currency: string | null;
+      /** Salary Period */
+      salary_period: string | null;
+      /** Comparisons */
+      comparisons: components['schemas']['ComparablePosting'][];
+    };
+    /** PostingHistoryResponse */
+    PostingHistoryResponse: {
+      /** Posting Id */
+      posting_id: string;
+      /** Observations */
+      observations: components['schemas']['PostingObservation'][];
+    };
+    /** PostingObservation */
+    PostingObservation: {
+      /** Observed At */
+      observed_at: string;
+      /**
+       * Timestamp Provenance
+       * @enum {string}
+       */
+      timestamp_provenance:
+        | 'response_received'
+        | 'persistence_fallback'
+        | 'legacy_persistence'
+        | 'legacy_baseline';
+      /** Application Count */
+      application_count: number | null;
+      application_count_raw: components['schemas']['JsonValue'];
+      /** Openings */
+      openings: number | null;
+      openings_raw: components['schemas']['JsonValue'];
+      deadline: components['schemas']['JsonValue'];
+      /** Content Hash */
+      content_hash: string;
+    };
     /** PostingResponse */
     PostingResponse: {
       /** Posting Id */
@@ -119,11 +646,17 @@ export interface components {
       last_seen_at: string;
       /** Location */
       location: string | null;
+      /** Work Arrangement */
+      work_arrangement: ('Remote' | 'Hybrid' | 'In-person') | null;
       /**
        * Country
        * @description Unverified; never inferred from city.
        */
       country: null;
+      country_inference: components['schemas']['CountryInference'];
+      /** Targeted Disciplines */
+      targeted_disciplines: string[];
+      compensation_sort: components['schemas']['CompensationSort'] | null;
       /** Listing Revisions */
       listing_revisions: components['schemas']['ListingRevision'][];
     };
@@ -157,7 +690,7 @@ export interface components {
     };
     /**
      * RefreshRequest
-     * @description An explicit empty JSON object starts one guarded listings-only refresh.
+     * @description An explicit empty object starts one guarded listing-then-content refresh.
      */
     RefreshRequest: Record<string, never>;
     /** RefreshSnapshot */
@@ -203,6 +736,78 @@ export interface components {
        */
       retry_after: number;
       /**
+       * Details Completed
+       * @default 0
+       */
+      details_completed: number;
+      /**
+       * Details Total
+       * @default 0
+       */
+      details_total: number;
+      /**
+       * Detail Requests
+       * @default 0
+       */
+      detail_requests: number;
+      /**
+       * Detail Retries
+       * @default 0
+       */
+      detail_retries: number;
+      /**
+       * Detail Bursts
+       * @default 0
+       */
+      detail_bursts: number;
+      /**
+       * Detail Wait Seconds
+       * @default 0
+       */
+      detail_wait_seconds: number;
+      /**
+       * Detail Limited
+       * @default false
+       */
+      detail_limited: boolean;
+      /** Analysis Job Id */
+      analysis_job_id: string | null;
+      /**
+       * Analysis Total
+       * @default 0
+       */
+      analysis_total: number;
+      /**
+       * Analysis Completed
+       * @default 0
+       */
+      analysis_completed: number;
+      /**
+       * Analysis Accepted
+       * @default 0
+       */
+      analysis_accepted: number;
+      /**
+       * Analysis Rejected
+       * @default 0
+       */
+      analysis_rejected: number;
+      /**
+       * Analysis Failed
+       * @default 0
+       */
+      analysis_failed: number;
+      /**
+       * Analysis Skipped
+       * @default 0
+       */
+      analysis_skipped: number;
+      /**
+       * Analysis Cache Hits
+       * @default 0
+       */
+      analysis_cache_hits: number;
+      /**
        * Eta Seconds
        * @description Latest collector-emitted ETA, not a live countdown; null when unestimated.
        */
@@ -212,6 +817,20 @@ export interface components {
        * @description Bounded to the latest 200 sanitized events.
        */
       logs: components['schemas']['RefreshLog'][];
+    };
+    /** SkillAnalysis */
+    SkillAnalysis: {
+      /** Name */
+      name: string;
+      /**
+       * Requirement
+       * @enum {string}
+       */
+      requirement: 'required' | 'preferred' | 'unspecified';
+      /** Source Field */
+      source_field: string;
+      /** Evidence Text */
+      evidence_text: string;
     };
     /**
      * StoredListing
@@ -234,6 +853,21 @@ export interface components {
       application_count?: components['schemas']['JsonValue'];
       deadline?: components['schemas']['JsonValue'];
     };
+    /** StoredPostingContent */
+    StoredPostingContent: {
+      /** Id */
+      id: string;
+      /**
+       * Coverage
+       * @default content_only
+       * @constant
+       */
+      coverage: 'content_only';
+      /** Fields */
+      fields: {
+        [key: string]: string;
+      };
+    };
     /** WorkspaceResponse */
     WorkspaceResponse: {
       /**
@@ -252,6 +886,11 @@ export interface components {
        * @constant
        */
       details_available: false;
+      /**
+       * Compensation Sort Available
+       * @default true
+       */
+      compensation_sort_available: boolean;
     };
   };
   responses: never;
@@ -262,6 +901,53 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  getExchangeRates: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ExchangeRateResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   getHealth: {
     parameters: {
       query?: never;
@@ -383,6 +1069,292 @@ export interface operations {
       };
       /** @description Service Unavailable */
       503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPosting: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['JobDetailResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPostingAnalysis: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingAnalysisResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPostingHistory: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingHistoryResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPostingComparisons: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingComparisonResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getKeywordIndex: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['KeywordIndexResponse'];
+        };
+      };
+      /** @description Saved keyword index unchanged */
+      304: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
         headers: {
           [name: string]: unknown;
         };

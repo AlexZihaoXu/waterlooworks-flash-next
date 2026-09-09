@@ -10,3 +10,13 @@ export function matchesSelection(
       ))
   );
 }
+
+// Targeted source identities are exact, unlike case-insensitive scalar filters.
+export function matchesAnySelection(
+  values: readonly string[],
+  selected: readonly string[],
+): boolean {
+  return (
+    selected.length === 0 || selected.some((value) => values.includes(value))
+  );
+}

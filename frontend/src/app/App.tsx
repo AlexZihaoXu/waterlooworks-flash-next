@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { usePayPreferences } from '../lib/usePayPreferences';
+import { compensationForSorting, presentSummary } from '../lib/hourlyPay';
+import { countryFlagUrl, inferredCountryName } from '../lib/countryInference';
+import { salaryTier } from '../lib/salaryTier';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
+  LuDollarSign,
   LuBuilding2,
   LuMapPin,
   LuHash,
@@ -15,11 +20,13 @@ import {
 } from 'react-icons/lu';
 import {
   Alert,
+  Breadcrumbs,
   Button,
   Card,
   Chip,
   Label,
   ListBox,
+  Link,
   Modal,
   Pagination,
   SearchField,
@@ -49,13 +56,24 @@ import {
 } from '../lib/workspace';
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
-import { sortLabels, sortPostings, type PostingSort } from '../lib/sorting';
+import {
+  compensationMetric,
+  sortLabels,
+  sortPostings,
+  type PostingSort,
+} from '../lib/sorting';
 import { deadlineBadge, parseDeadline } from '../lib/deadlines';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { groupedOptionRows } from '../lib/optionGroups';
 import { FilterOptionList } from './FilterOptionList';
 import { BrandMark } from './BrandMark';
 import { readBrowseUrl, writeBrowseUrl } from '../lib/browseUrl';
+
+import { jobUrl, readJobId, shouldOpenJob } from '../lib/jobDetail';
+import { useJobDetail } from '../lib/useJobDetail';
+import { useSimilarJobs } from '../lib/useSimilarJobs';
+import { useLiveReducedMotion } from '../lib/useLiveReducedMotion';
+import { JobDetailContent } from './JobDetail';
 
 const PAGE_SIZE = 18;
 const NO_POSTINGS: readonly Posting[] = [];
@@ -77,6 +95,44 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
   const { theme, setTheme } = useTheme('system');
   const [initialView] = useState(() => readBrowseUrl(window.location.search));
   const navigation = useRef(true);
+  const [jobId, setJobId] = useState(() => readJobId(window.location.search));
+  const detail = useJobDetail(
+    jobId,
+    `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
+  );
+  const similarJobs = useSimilarJobs(
+    detail,
+    `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
+  );
+  const detailOpen = jobId !== null;
+  const returnTarget = useRef<{
+    element: HTMLAnchorElement;
+    id: string;
+    scroll: number;
+    windowScroll: number;
+  } | null>(null);
+  const detailHeading = useRef<HTMLDivElement>(null);
+  const previousBrowse = useRef(JSON.stringify(initialView));
+  const navigateJob = (id: string | null) => {
+    window.history.pushState(
+      window.history.state,
+      '',
+      jobUrl(window.location.href, id),
+    );
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
+  const replaceDetailJob = (id: string) => {
+    window.history.replaceState(
+      { ...window.history.state, jobEntry: true },
+      '',
+      jobUrl(window.location.href, id),
+    );
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
+  const backToPostings = () => {
+    if (window.history.state?.jobEntry) window.history.back();
+    else navigateJob(null);
+  };
   const [query, setQuery] = useState(initialView.query);
   const appliedQuery = useDebouncedValue(query, 125);
   const [filters, setFilters] = useState<PostingFilters>(initialView.filters);
@@ -93,9 +149,13 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
   const [draft, setDraft] = useState<string[]>([]);
   const resultsScroll = useRef<HTMLDivElement>(null);
   const [sort, setSort] = useState<PostingSort>(initialView.sort);
+  const payMetric = compensationMetric(sort);
   useEffect(() => {
     const restore = () => {
       const next = readBrowseUrl(window.location.search);
+      setJobId(readJobId(window.location.search));
+      if (previousBrowse.current === JSON.stringify(next)) return;
+      previousBrowse.current = JSON.stringify(next);
       navigation.current = true;
       setQuery(next.query);
       setFilters(next.filters);
@@ -125,42 +185,144 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
     };
   }, []);
   const refreshToast = useRef<string | null>(null);
+  const needsTierFx =
+    state.status === 'ready' &&
+    state.postings.some((posting) =>
+      posting.compensation_sort?.source_rates.some(
+        (rate) => rate.currency !== null && rate.currency !== 'CAD',
+      ),
+    );
+  const { preferences, setPreferences, fx, fxStatus } =
+    usePayPreferences(needsTierFx);
   const connected = state.status === 'ready';
+  const paySortAvailable =
+    state.status === 'ready' && state.compensation_sort_available;
   const loading = state.status === 'loading';
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useLiveReducedMotion();
+  const transition = {
+    duration: reducedMotion ? 0 : 0.18,
+    ease: 'easeInOut' as const,
+  };
+  const [narrow, setNarrow] = useState(() => window.innerWidth <= 896);
+  useEffect(() => {
+    const resize = () => setNarrow(window.innerWidth <= 896);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => {
+        if (detailOpen)
+          detailHeading.current
+            ?.querySelector<HTMLElement>('[data-detail-title]')
+            ?.focus({ preventScroll: true });
+        else {
+          const saved = window.history.state?.jobBrowsePosition as unknown;
+          const position =
+            returnTarget.current ??
+            (typeof saved === 'object' &&
+            saved !== null &&
+            'id' in saved &&
+            typeof saved.id === 'string' &&
+            'scroll' in saved &&
+            typeof saved.scroll === 'number' &&
+            Number.isFinite(saved.scroll) &&
+            'windowScroll' in saved &&
+            typeof saved.windowScroll === 'number' &&
+            Number.isFinite(saved.windowScroll)
+              ? {
+                  id: saved.id,
+                  scroll: saved.scroll,
+                  windowScroll: saved.windowScroll,
+                }
+              : null);
+          if (!position) return;
+          const { scroll, windowScroll } = position;
+          const element = document.getElementById(`job-link-${position.id}`);
+          element?.focus({ preventScroll: true });
+          if (resultsScroll.current) resultsScroll.current.scrollTop = scroll;
+          window.scrollTo({ top: windowScroll, behavior: 'instant' });
+        }
+      },
+      reducedMotion ? 0 : 180,
+    );
+    return () => window.clearTimeout(timer);
+  }, [detailOpen, reducedMotion, connected]);
   const postings = state.status === 'ready' ? state.postings : NO_POSTINGS;
+  const presentations = useMemo(
+    () =>
+      new Map(
+        postings.map((posting) => [
+          posting.posting_id,
+          {
+            ...presentSummary(posting.compensation_sort, preferences, fx),
+            tier: salaryTier(
+              posting.compensation_sort?.source_rates ?? [],
+              fx,
+              posting.compensation_sort?.needs_review,
+            ),
+          },
+        ]),
+      ),
+    [postings, preferences, fx],
+  );
+  const presentedPostings = useMemo(
+    () =>
+      postings.map((posting) => ({
+        ...posting,
+        compensation_sort: compensationForSorting(
+          posting.compensation_sort,
+          preferences,
+          fx,
+        ),
+      })),
+    [postings, preferences, fx],
+  );
   const options = useMemo(
     () => ({
       location: filterOptions(postings, 'location'),
       country: filterOptions(postings, 'country'),
       organization: filterOptions(postings, 'organization'),
+      targeted_disciplines: filterOptions(postings, 'targeted_disciplines'),
     }),
+    [postings],
+  );
+  const countryFlags = useMemo(
+    () =>
+      new Map(
+        postings.flatMap((posting) => {
+          const name = inferredCountryName(posting.country_inference);
+          const url = name
+            ? countryFlagUrl(posting.country_inference.country_code)
+            : undefined;
+          return name && url ? [[name, url] as const] : [];
+        }),
+      ),
     [postings],
   );
   // Preserve URL selections even if absent from the current dataset: these
   // should yield no matches, not silently broaden a shared search.
   const activeFilters = filters;
-  const pickerOptions = useMemo(
+  const pickerRows = useMemo(
     () =>
-      (picker ? options[picker] : []).filter((value) =>
-        value
-          .toLocaleLowerCase()
-          .includes(pickerQuery.trim().toLocaleLowerCase()),
+      groupedOptionRows(
+        picker ? options[picker] : [],
+        picker ?? '',
+        pickerQuery,
       ),
     [picker, options, pickerQuery],
   );
-  const pickerRows = useMemo(
-    () => groupedOptionRows(pickerOptions),
-    [pickerOptions],
-  );
+  const pickerOptionCount = pickerRows.filter(
+    (row) => row.kind === 'option',
+  ).length;
   const filtered = useMemo(
     () =>
       sortPostings(
-        filterPostings(postings, appliedQuery, activeFilters),
+        filterPostings(presentedPostings, appliedQuery, activeFilters),
         sort,
         now,
       ),
-    [postings, appliedQuery, activeFilters, sort, now],
+    [presentedPostings, appliedQuery, activeFilters, sort, now],
   );
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages);
@@ -182,6 +344,9 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
         target,
       );
     }
+    previousBrowse.current = JSON.stringify(
+      readBrowseUrl(window.location.search),
+    );
     navigation.current = false;
   }, [connected, query, appliedQuery, filters, sort, currentPage]);
   const visible = filtered.slice(
@@ -202,6 +367,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
       ? 'No matching postings'
       : 'No stored postings';
   useEffect(() => {
+    if (readJobId(window.location.search) !== null) return;
     const node = resultsScroll.current;
     if (node?.scrollTo)
       node.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
@@ -244,12 +410,13 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                       </SearchField.Group>
                     </SearchField>
                     <Typography type="body-sm" color="muted" role="status">
-                      {pickerOptions.length} options · {draft.length} selected.
+                      {pickerOptionCount} options · {draft.length} selected.
                       Select one or more.
                     </Typography>
                     <FilterOptionList
                       key={`${picker}:${pickerQuery}`}
                       rows={pickerRows}
+                      flags={picker === 'country' ? countryFlags : undefined}
                       label={`${filterLabels[picker]} options`}
                       draft={draft}
                       setDraft={setDraft}
@@ -257,24 +424,29 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                   </div>
                 </Modal.Body>
                 <Modal.Footer>
-                  <Button variant="tertiary" onPress={() => setDraft([])}>
-                    Clear selection
-                  </Button>
-                  <Button variant="secondary" slot="close">
-                    Cancel
-                  </Button>
-                  <Button
-                    onPress={() => {
-                      setFilters((previous) => ({
-                        ...previous,
-                        [picker]: [...draft],
-                      }));
-                      setPage(1);
-                      setPickerOpen(false);
-                    }}
+                  <div
+                    className="inline-layout"
+                    style={{ justifyContent: 'flex-end', width: '100%' }}
                   >
-                    Apply filters
-                  </Button>
+                    <Button variant="tertiary" onPress={() => setDraft([])}>
+                      Clear selection
+                    </Button>
+                    <Button variant="secondary" slot="close">
+                      Cancel
+                    </Button>
+                    <Button
+                      onPress={() => {
+                        setFilters((previous) => ({
+                          ...previous,
+                          [picker]: [...draft],
+                        }));
+                        setPage(1);
+                        setPickerOpen(false);
+                      }}
+                    >
+                      Apply filters
+                    </Button>
+                  </div>
                 </Modal.Footer>
               </>
             )}
@@ -344,7 +516,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
       </header>
 
       {(state.status === 'disconnected' || state.status === 'error') && (
-        <Alert status={state.status === 'error' ? 'danger' : 'accent'}>
+        <Alert status="danger">
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Title>{notice[state.status][0]}</Alert.Title>
@@ -375,8 +547,33 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
       )}
       <RefreshActivity refresh={refresh} />
 
-      <div className="browser-layout">
-        <div className="browse-search stack">
+      <motion.div
+        className="browser-layout"
+        initial={false}
+        animate={{
+          gridTemplateColumns: narrow
+            ? 'minmax(0, 1fr)'
+            : detailOpen
+              ? '0rem minmax(0, 1fr)'
+              : '16rem minmax(0, 1fr)',
+          columnGap: detailOpen ? '0rem' : '1.5rem',
+        }}
+        transition={transition}
+      >
+        <motion.div
+          className="browse-search stack"
+          initial={false}
+          inert={detailOpen}
+          aria-hidden={detailOpen}
+          animate={{
+            opacity: detailOpen ? 0 : 1,
+            visibility: detailOpen ? 'hidden' : 'visible',
+          }}
+          transition={{
+            ...transition,
+            visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
+          }}
+        >
           <div className="postings-heading">
             <Typography type="h2">Postings</Typography>
             <Button
@@ -421,7 +618,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
             </Button>
           </div>
           <SearchField
-            aria-label="Search titles"
+            aria-label="Search titles, companies, locations, and posting IDs"
             value={query}
             onChange={(value) => {
               setQuery(value);
@@ -431,121 +628,267 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
           >
             <SearchField.Group>
               <SearchField.SearchIcon />
-              <SearchField.Input placeholder="What role are you looking for?" />
+              <SearchField.Input placeholder="Search title, company, location, or ID…" />
               <SearchField.ClearButton />
             </SearchField.Group>
           </SearchField>
-        </div>
-        <aside className="filter-sidebar" aria-label="Filters">
-          <Card>
-            <Card.Header>
-              <div className="workspace-toolbar">
-                <div className="filter-heading">
-                  <LuFilter aria-hidden="true" />
-                  <Typography type="h6" role="heading" aria-level={2}>
-                    Filters
-                  </Typography>
-                </div>
-                <Button
-                  size="sm"
-                  variant="tertiary"
-                  aria-label="Clear filters"
-                  isDisabled={
-                    !Object.values(activeFilters).some(
-                      (values) => values.length > 0,
-                    )
-                  }
-                  onPress={() => {
-                    setFilters(emptyFilters);
-                    setPage(1);
-                  }}
-                >
-                  Clear
-                </Button>
-              </div>
-            </Card.Header>
-            <Separator />
-            <Card.Content>
-              <div className="filter-grid">
-                {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
-                  <div className={`filter-slot filter-slot-${key}`} key={key}>
-                    <div className="stack-small">
-                      <Typography
-                        type={compact ? 'body-xs' : 'body-sm'}
-                        weight={activeFilters[key].length ? 'medium' : 'normal'}
-                        color={activeFilters[key].length ? 'default' : 'muted'}
-                      >
-                        {filterLabels[key]}
+        </motion.div>
+        <motion.aside
+          className="filter-sidebar"
+          initial={false}
+          aria-label="Filters"
+          inert={detailOpen}
+          aria-hidden={detailOpen}
+          animate={{
+            opacity: detailOpen ? 0 : 1,
+            x: detailOpen ? -10 : 0,
+            visibility: detailOpen ? 'hidden' : 'visible',
+            ...(narrow
+              ? {
+                  height: detailOpen ? 0 : 'auto',
+                  paddingTop: detailOpen ? 0 : 4,
+                  paddingBottom: detailOpen ? 0 : 12,
+                }
+              : {}),
+          }}
+          transition={{
+            ...transition,
+            visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
+          }}
+        >
+          <ScrollShadow
+            hideScrollBar
+            tabIndex={0}
+            aria-label="Filters and options"
+          >
+            <div className="sidebar-content">
+              <Card>
+                <Card.Header>
+                  <div className="workspace-toolbar">
+                    <div className="filter-heading">
+                      <LuFilter aria-hidden="true" />
+                      <Typography type="h6" role="heading" aria-level={2}>
+                        Filters
                       </Typography>
-                      <Button
-                        fullWidth
-                        variant={
-                          activeFilters[key].length ? 'secondary' : 'tertiary'
-                        }
-                        aria-label={`${filterLabels[key]} filter`}
-                        aria-description={
-                          activeFilters[key].length === 0
-                            ? 'All options'
-                            : `${activeFilters[key].length} selected`
-                        }
-                        aria-haspopup="dialog"
-                        isDisabled={
-                          !connected ||
-                          (options[key].length === 0 &&
-                            activeFilters[key].length === 0)
-                        }
-                        onPress={() => {
-                          setDraft([...activeFilters[key]]);
-                          setPickerQuery('');
-                          setPicker(key);
-                          setPickerOpen(true);
-                        }}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="tertiary"
+                      aria-label="Clear filters"
+                      isDisabled={
+                        !Object.values(activeFilters).some(
+                          (values) => values.length > 0,
+                        )
+                      }
+                      onPress={() => {
+                        setFilters(emptyFilters);
+                        setPage(1);
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                </Card.Header>
+                <Separator />
+                <Card.Content>
+                  <div className="filter-grid">
+                    {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
+                      <div
+                        className={`filter-slot filter-slot-${key}`}
+                        key={key}
                       >
-                        <span className="filter-trigger-content">
+                        <div className="stack-small">
                           <Typography
-                            type="body-sm"
-                            truncate
-                            color={
-                              activeFilters[key].length ? 'default' : 'muted'
-                            }
+                            type={compact ? 'body-xs' : 'body-sm'}
                             weight={
                               activeFilters[key].length ? 'medium' : 'normal'
                             }
-                          >
-                            {compact
-                              ? activeFilters[key].length === 0
-                                ? 'All'
-                                : String(activeFilters[key].length)
-                              : activeFilters[key].length === 0
-                                ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : 'organizations'}`
-                                : activeFilters[key].length === 1
-                                  ? activeFilters[key][0]
-                                  : `${activeFilters[key].length} selected`}
-                          </Typography>
-                          <LuChevronDown
-                            aria-hidden="true"
                             color={
-                              activeFilters[key].length
-                                ? 'currentColor'
-                                : 'var(--muted)'
+                              activeFilters[key].length ? 'default' : 'muted'
                             }
-                          />
-                        </span>
-                      </Button>
-                      {key === 'country' && options.country.length === 0 && (
-                        <Typography type="body-xs" color="muted">
-                          Country data is not verified yet.
-                        </Typography>
-                      )}
-                    </div>
+                          >
+                            {filterLabels[key]}
+                          </Typography>
+                          <Button
+                            fullWidth
+                            variant={
+                              activeFilters[key].length
+                                ? 'secondary'
+                                : 'tertiary'
+                            }
+                            aria-label={`${filterLabels[key]} filter`}
+                            aria-description={
+                              activeFilters[key].length === 0
+                                ? 'All options'
+                                : `${activeFilters[key].length} selected`
+                            }
+                            aria-haspopup="dialog"
+                            isDisabled={
+                              !connected ||
+                              (options[key].length === 0 &&
+                                activeFilters[key].length === 0)
+                            }
+                            onPress={() => {
+                              setDraft([...activeFilters[key]]);
+                              setPickerQuery('');
+                              setPicker(key);
+                              setPickerOpen(true);
+                            }}
+                          >
+                            <span className="filter-trigger-content">
+                              <Typography
+                                type="body-sm"
+                                truncate
+                                color={
+                                  activeFilters[key].length
+                                    ? 'default'
+                                    : 'muted'
+                                }
+                                weight={
+                                  activeFilters[key].length
+                                    ? 'medium'
+                                    : 'normal'
+                                }
+                              >
+                                {compact
+                                  ? activeFilters[key].length === 0
+                                    ? 'All'
+                                    : String(activeFilters[key].length)
+                                  : activeFilters[key].length === 0
+                                    ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : 'organizations'}`
+                                    : activeFilters[key].length === 1
+                                      ? activeFilters[key][0]
+                                      : `${activeFilters[key].length} selected`}
+                              </Typography>
+                              <LuChevronDown
+                                aria-hidden="true"
+                                color={
+                                  activeFilters[key].length
+                                    ? 'currentColor'
+                                    : 'var(--muted)'
+                                }
+                              />
+                            </span>
+                          </Button>
+                          {key === 'country' &&
+                            options.country.length === 0 && (
+                              <Typography type="body-xs" color="muted">
+                                No current country predictions yet.
+                              </Typography>
+                            )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </Card.Content>
-          </Card>
-        </aside>
-        <section
+                </Card.Content>
+              </Card>
+              <Card>
+                <Card.Header>
+                  <Card.Title>Options</Card.Title>
+                </Card.Header>
+                <Separator />
+                <Card.Content>
+                  <div className="stack">
+                    <Select
+                      fullWidth
+                      value={preferences.format}
+                      onChange={(value) => {
+                        if (value === 'hour' || value === 'month') {
+                          setPreferences({ ...preferences, format: value });
+                          setPage(1);
+                        }
+                      }}
+                    >
+                      <Label>Compensation format</Label>
+                      <Select.Trigger>
+                        <Select.Value />
+                        <Select.Indicator />
+                      </Select.Trigger>
+                      <Select.Popover>
+                        <ListBox>
+                          <ListBox.Item id="hour" textValue="Hourly">
+                            Hourly
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                          <ListBox.Item id="month" textValue="Monthly">
+                            Monthly
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                        </ListBox>
+                      </Select.Popover>
+                    </Select>
+                    <Select
+                      fullWidth
+                      value={preferences.currency}
+                      onChange={(value) => {
+                        if (
+                          value === 'original' ||
+                          value === 'CAD' ||
+                          value === 'USD'
+                        ) {
+                          setPreferences({ ...preferences, currency: value });
+                          setPage(1);
+                        }
+                      }}
+                    >
+                      <Label>Currency</Label>
+                      <Select.Trigger>
+                        <Select.Value />
+                        <Select.Indicator />
+                      </Select.Trigger>
+                      <Select.Popover>
+                        <ListBox>
+                          <ListBox.Item
+                            id="original"
+                            textValue="Original currency"
+                          >
+                            Original currency
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                          <ListBox.Item id="CAD" textValue="Approx. CAD">
+                            Approx. CAD
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                          <ListBox.Item id="USD" textValue="Approx. USD">
+                            Approx. USD
+                            <ListBox.ItemIndicator />
+                          </ListBox.Item>
+                        </ListBox>
+                      </Select.Popover>
+                    </Select>
+                    {preferences.currency !== 'original' && (
+                      <Typography type="body-xs" color="muted">
+                        {fxStatus === 'loading'
+                          ? 'Loading reference rates…'
+                          : fxStatus === 'unavailable'
+                            ? 'FX unavailable; showing original currencies.'
+                            : fx
+                              ? `Bank of Canada · ${fx.as_of} · approximate conversion`
+                              : 'Reference rates not loaded.'}
+                      </Typography>
+                    )}
+                    <Typography type="body-xs" color="muted">
+                      * Currency assumed to be CAD; retained after conversion.
+                    </Typography>
+                  </div>
+                </Card.Content>
+              </Card>
+            </div>
+          </ScrollShadow>
+        </motion.aside>
+        <motion.section
           className="posting-results stack"
+          initial={false}
+          inert={detailOpen}
+          aria-hidden={detailOpen}
+          animate={{
+            opacity: detailOpen ? 0 : 1,
+            visibility: detailOpen ? 'hidden' : 'visible',
+          }}
+          transition={{
+            ...transition,
+            visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
+          }}
           aria-label="Posting browser"
           aria-busy={loading}
         >
@@ -574,6 +917,15 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
               <Select
                 fullWidth
                 value={sort}
+                disabledKeys={
+                  paySortAvailable
+                    ? []
+                    : [
+                        'compensation-average',
+                        'compensation-minimum',
+                        'compensation-maximum',
+                      ]
+                }
                 isDisabled={!connected}
                 onChange={(value) => {
                   if (
@@ -607,6 +959,24 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
               </Select>
             </div>
           </div>
+          {connected && !paySortAvailable && (
+            <Typography type="body-xs" color="muted">
+              Compensation sorting requires the updated API. It stays disabled
+              until the server can be safely restarted.
+            </Typography>
+          )}
+          {payMetric && paySortAvailable && (
+            <Typography type="body-xs" color="muted">
+              Highest first within comparable currency / pay-period groups.
+              Average = (minimum + maximum) ÷ 2; tiers use outer bounds.
+              Weekly/monthly/yearly pay uses stated hours or 40h/week, with 52
+              weeks/year. Currency conversion follows your display setting using
+              dated FX. Unspecified currencies count as CAD for sorting and
+              colors; * marks that assumption. Missing salary sorts as zero;
+              unknown units and disputed pay remain unranked. Colors use maximum
+              CAD/hour pay.
+            </Typography>
+          )}
           <div className="results-scroll">
             <ScrollShadow
               size={24}
@@ -618,14 +988,14 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
             >
               <div className="results-scroll-content">
                 <div className="results-transition">
-                  <AnimatePresence initial={false}>
+                  <AnimatePresence initial={false} mode="sync">
                     <motion.div
                       key={loading ? 'loading' : 'loaded'}
                       className="results-layer"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      transition={{ duration: reducedMotion ? 0 : 0.18 }}
+                      transition={transition}
                     >
                       {loading ? (
                         <div
@@ -679,7 +1049,7 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                               <Separator />
                               <Card.Content>
                                 <div className="posting-details">
-                                  {[65, 55, 45].map((width) => (
+                                  {[65, 60, 55, 50, 45].map((width) => (
                                     <div className="posting-field" key={width}>
                                       <Skeleton animationType="none">
                                         <div className="skeleton-icon-space" />
@@ -734,7 +1104,64 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                                       aria-level={3}
                                       id={`posting-${posting.posting_id}`}
                                     >
-                                      {displayValue(posting.listing.title)}
+                                      <Link
+                                        id={`job-link-${posting.posting_id}`}
+                                        href={jobUrl(
+                                          window.location.href,
+                                          posting.posting_id,
+                                        )}
+                                        onClick={(event) => {
+                                          if (
+                                            !shouldOpenJob(event) ||
+                                            !(
+                                              event.currentTarget instanceof
+                                              HTMLAnchorElement
+                                            )
+                                          )
+                                            return;
+                                          event.preventDefault();
+                                          returnTarget.current = {
+                                            element: event.currentTarget,
+                                            id: posting.posting_id,
+                                            scroll:
+                                              resultsScroll.current
+                                                ?.scrollTop ?? 0,
+                                            windowScroll: window.scrollY,
+                                          };
+                                          // Store position on the listing entry too, so reload → Back
+                                          // restores without depending on an in-memory element ref.
+                                          window.history.replaceState(
+                                            {
+                                              ...window.history.state,
+                                              jobBrowsePosition: {
+                                                id: posting.posting_id,
+                                                scroll:
+                                                  returnTarget.current.scroll,
+                                                windowScroll:
+                                                  returnTarget.current
+                                                    .windowScroll,
+                                              },
+                                            },
+                                            '',
+                                          );
+                                          window.history.pushState(
+                                            {
+                                              ...window.history.state,
+                                              jobEntry: true,
+                                            },
+                                            '',
+                                            jobUrl(
+                                              window.location.href,
+                                              posting.posting_id,
+                                            ),
+                                          );
+                                          window.dispatchEvent(
+                                            new PopStateEvent('popstate'),
+                                          );
+                                        }}
+                                      >
+                                        {displayValue(posting.listing.title)}
+                                      </Link>
                                     </Typography>
                                   </div>
                                   <div className="posting-field">
@@ -792,16 +1219,64 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
                                 <Separator />
                                 <Card.Content>
                                   <div className="posting-details">
-                                    <div className="posting-field">
-                                      <LuMapPin
+                                    <div
+                                      className="posting-field"
+                                      aria-label="Compensation"
+                                    >
+                                      <LuDollarSign
                                         size={16}
                                         color="var(--muted)"
-                                        role="img"
-                                        aria-label="Location"
+                                        aria-hidden="true"
                                       />
-                                      <Typography type="body-sm" color="muted">
-                                        {displayValue(posting.location)}
+                                      <Typography
+                                        type="body-sm"
+                                        color="muted"
+                                        weight="normal"
+                                      >
+                                        <span
+                                          className={`salary-value salary-${presentations.get(posting.posting_id)?.tier ?? 'neutral'}`}
+                                        >
+                                          {presentations.get(posting.posting_id)
+                                            ?.label ?? '--/--'}
+                                        </span>
                                       </Typography>
+                                    </div>
+                                    <div className="location-with-arrangement">
+                                      <div className="location-field">
+                                        <LuMapPin
+                                          size={16}
+                                          color="var(--muted)"
+                                          role="img"
+                                          aria-label="Location"
+                                        />
+                                        {inferredCountryName(
+                                          posting.country_inference,
+                                        ) && (
+                                          <img
+                                            className="country-flag"
+                                            src={countryFlagUrl(
+                                              posting.country_inference
+                                                .country_code,
+                                            )}
+                                            alt={
+                                              posting.country_inference
+                                                .country_name ?? ''
+                                            }
+                                            width={16}
+                                          />
+                                        )}
+                                        <Typography
+                                          type="body-sm"
+                                          color="muted"
+                                        >
+                                          {displayValue(posting.location)}
+                                        </Typography>
+                                      </div>
+                                      {posting.work_arrangement && (
+                                        <Chip size="sm" variant="soft">
+                                          {posting.work_arrangement}
+                                        </Chip>
+                                      )}
                                     </div>
                                     <div className="posting-field">
                                       <LuUsers
@@ -892,8 +1367,89 @@ export function App({ state: suppliedState }: { state?: WorkspaceState }) {
               </div>
             </div>
           )}
-        </section>
-      </div>
+        </motion.section>
+        <div
+          className="detail-layer"
+          inert={!detailOpen}
+          aria-hidden={!detailOpen}
+        >
+          <AnimatePresence initial={false}>
+            {detail && (
+              <motion.section
+                key="job-detail"
+                className="job-detail"
+                aria-label="Job details"
+                initial={{ opacity: 0, y: reducedMotion ? 0 : 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={transition}
+              >
+                <div className="postings-heading detail-heading">
+                  <div
+                    ref={detailHeading}
+                    tabIndex={-1}
+                    className="detail-title"
+                  >
+                    <Breadcrumbs aria-label="Posting navigation">
+                      <Breadcrumbs.Item
+                        href={jobUrl(window.location.href, null)}
+                        onClick={(event) => {
+                          if (!shouldOpenJob(event)) return;
+                          event.preventDefault();
+                          backToPostings();
+                        }}
+                      >
+                        Postings
+                      </Breadcrumbs.Item>
+                      <Breadcrumbs.Item>
+                        <div className="detail-breadcrumb-current">
+                          <Typography
+                            type="body-sm"
+                            weight="medium"
+                            render={(props) => <h2 {...props} />}
+                            tabIndex={-1}
+                            data-detail-title
+                          >
+                            {detail.status === 'ready'
+                              ? displayValue(detail.data.listing.title)
+                              : (postings.find(
+                                  (posting) => posting.posting_id === jobId,
+                                )?.listing.title ??
+                                (jobId === 'invalid'
+                                  ? 'Invalid posting ID'
+                                  : 'Job details'))}
+                          </Typography>
+                        </div>
+                      </Breadcrumbs.Item>
+                    </Breadcrumbs>
+                  </div>
+                </div>
+                <div className="detail-scroll" key={jobId}>
+                  <AnimatePresence initial={false} mode="sync">
+                    <motion.div
+                      key={detail.status}
+                      className="detail-state"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={transition}
+                    >
+                      <JobDetailContent
+                        state={detail}
+                        preferences={preferences}
+                        fx={fx}
+                        onNavigateJob={replaceDetailJob}
+                        similarJobs={similarJobs}
+                        postings={postings}
+                      />
+                    </motion.div>
+                  </AnimatePresence>
+                </div>
+              </motion.section>
+            )}
+          </AnimatePresence>
+        </div>
+      </motion.div>
     </main>
   );
 }

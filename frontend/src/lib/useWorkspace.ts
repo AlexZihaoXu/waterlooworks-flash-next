@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { refreshAction } from './refreshAction';
+import {
+  createLatestWorkspaceRead,
+  createWorkspaceReloadPolicy,
+} from './workspaceReload';
 import type {
   RefreshSnapshot,
   WorkspaceResponse,
@@ -8,6 +12,36 @@ import type {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validCompensation(value: unknown): boolean {
+  if (value == null) return true;
+  if (
+    !record(value) ||
+    (value.currency !== null &&
+      (typeof value.currency !== 'string' || !value.currency.trim())) ||
+    (value.period !== null &&
+      !['hour', 'day', 'week', 'month', 'year'].includes(
+        String(value.period),
+      )) ||
+    !['estimated', 'assumed_hours', 'annualized'].every(
+      (key) => value[key] === undefined || typeof value[key] === 'boolean',
+    ) ||
+    (value.hours_per_week !== undefined &&
+      (!Array.isArray(value.hours_per_week) ||
+        !value.hours_per_week.every(
+          (hours) =>
+            typeof hours === 'string' &&
+            /^\d+(?:\.\d+)?$/.test(hours) &&
+            Number(hours) > 0,
+        )))
+  )
+    return false;
+  return ['minimum', 'maximum', 'average'].every(
+    (key) =>
+      value[key] === null ||
+      (typeof value[key] === 'string' && /^\d+(?:\.\d+)?$/.test(value[key])),
+  );
 }
 
 function validListing(value: unknown): boolean {
@@ -25,6 +59,8 @@ export function parseWorkspace(value: unknown): WorkspaceResponse {
     value.status !== 'ready' ||
     !Array.isArray(value.postings) ||
     typeof value.manual_refresh_available !== 'boolean' ||
+    (value.compensation_sort_available !== undefined &&
+      typeof value.compensation_sort_available !== 'boolean') ||
     value.details_available !== false ||
     !value.postings.every(
       (posting) =>
@@ -34,6 +70,12 @@ export function parseWorkspace(value: unknown): WorkspaceResponse {
         typeof posting.last_seen_at === 'string' &&
         (posting.location === null || typeof posting.location === 'string') &&
         posting.country == null &&
+        (posting.targeted_disciplines === undefined ||
+          (Array.isArray(posting.targeted_disciplines) &&
+            posting.targeted_disciplines.every(
+              (value) => typeof value === 'string',
+            ))) &&
+        validCompensation(posting.compensation_sort) &&
         validListing(posting.listing) &&
         Array.isArray(posting.listing_revisions) &&
         posting.listing_revisions.every(
@@ -50,7 +92,15 @@ export function parseWorkspace(value: unknown): WorkspaceResponse {
   ) {
     throw new Error('Invalid workspace response.');
   }
-  return value as WorkspaceResponse;
+  return {
+    ...value,
+    compensation_sort_available: value.compensation_sort_available ?? false,
+    postings: value.postings.map((posting) => ({
+      ...posting,
+      targeted_disciplines: posting.targeted_disciplines ?? [],
+      compensation_sort: posting.compensation_sort ?? null,
+    })),
+  } as WorkspaceResponse;
 }
 
 export function parseRefresh(value: unknown): RefreshSnapshot {
@@ -67,12 +117,21 @@ export function parseRefresh(value: unknown): RefreshSnapshot {
       'unique_postings',
       'duplicates',
       'retry_after',
+      'details_completed',
+      'details_total',
+      'detail_requests',
+      'detail_retries',
+      'detail_bursts',
     ].every(
       (key) =>
         typeof value[key] === 'number' &&
         Number.isInteger(value[key]) &&
         value[key] >= 0,
     ) ||
+    typeof value.detail_limited !== 'boolean' ||
+    typeof value.detail_wait_seconds !== 'number' ||
+    !Number.isFinite(value.detail_wait_seconds) ||
+    value.detail_wait_seconds < 0 ||
     (value.total_pages != null &&
       (typeof value.total_pages !== 'number' || value.total_pages < 1)) ||
     (value.eta_seconds != null &&
@@ -116,30 +175,37 @@ export function useWorkspace(enabled: boolean) {
   const [requesting, setRequesting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
-  const completedRun = useRef<string | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
     let events: EventSource | undefined;
     let active = true;
-    const loadWorkspace = async () => {
-      const value = parseWorkspace(
-        await readJson('/api/workspace', controller.signal),
+    const shouldReload = createWorkspaceReloadPolicy();
+    const latestRead = createLatestWorkspaceRead();
+    const loadWorkspace = (fail: () => void) =>
+      latestRead(
+        async () =>
+          parseWorkspace(await readJson('/api/workspace', controller.signal)),
+        (value) => {
+          if (active) setState(value);
+        },
+        () => {
+          if (active) fail();
+        },
       );
-      if (active) setState(value);
-    };
     const start = async () => {
+      if (!active) return;
       try {
         const [, latest] = await Promise.all([
-          loadWorkspace(),
+          loadWorkspace(() => {
+            throw new Error('Workspace unavailable.');
+          }),
           readJson('/api/refresh', controller.signal),
         ]);
         const snapshot = parseRefresh(latest);
         if (!active) return;
         setRefresh(snapshot);
-        completedRun.current =
-          snapshot.status === 'completed' ? (snapshot.run_id ?? null) : null;
         events = new EventSource('/api/refresh/events');
         events.onopen = () => {
           if (active) {
@@ -162,15 +228,10 @@ export function useWorkspace(enabled: boolean) {
             setRefresh(update);
             setStreamConnected(true);
             setStreamInterrupted(false);
-            if (
-              update.status === 'completed' &&
-              update.run_id &&
-              completedRun.current !== update.run_id
-            ) {
-              completedRun.current = update.run_id;
-              void loadWorkspace().catch(() => {
-                if (active) setState({ status: 'error' });
-              });
+            if (shouldReload(update.run_id, update.status, update.stage)) {
+              // Show saved listings early, then include saved detail/filter values
+              // once at termination, even when only partial details were saved.
+              void loadWorkspace(() => setState({ status: 'error' }));
             }
           } catch {
             setStreamConnected(false);
@@ -185,7 +246,8 @@ export function useWorkspace(enabled: boolean) {
         if (active) setState({ status: 'disconnected' });
       }
     };
-    void start();
+    // Skip React's immediately discarded StrictMode effect before sending HTTP.
+    void Promise.resolve().then(start);
     return () => {
       active = false;
       controller.abort();

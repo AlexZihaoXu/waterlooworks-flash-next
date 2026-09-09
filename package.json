@@ -13,7 +13,13 @@
     "format:check": "prettier --check .",
     "lint": "npm run lint --workspace frontend",
     "typecheck": "npm run typecheck --workspace frontend",
-    "test": "npm run test --workspace frontend",
+    "test": "npm run test --workspace frontend && npm run benchmark:test",
+    "benchmark": "node scripts/benchmark-optimized.mjs",
+    "benchmark:legacy": "node scripts/benchmark.mjs",
+    "benchmark:coverage": "node --experimental-strip-types scripts/benchmark-keyword-coverage.mjs",
+    "extract": "node scripts/extract.mjs",
+    "country": "node scripts/country.mjs",
+    "benchmark:test": "node --test scripts/tests/*.test.mjs",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-"""SQLite schema v3 for listings, detail snapshots, attempts, and revision history.
+"""SQLite schema v8 for source history and explicit offline analysis.
 
 No network calls, credential loading, or collection writes happen on import.
 """
@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -15,9 +15,20 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from waterlooworks_flash_next.compact_history import (
+    HistoryReader,
+    migrate_compact_history,
+    store_payload,
+)
+from waterlooworks_flash_next.content_schema import migrate_content
+from waterlooworks_flash_next.country_schema import migrate_country_inference
 from waterlooworks_flash_next.detail_schema import migrate_details
+from waterlooworks_flash_next.inference_schema import migrate_inference
+from waterlooworks_flash_next.normalized_schema import migrate_normalized_storage
+from waterlooworks_flash_next.observations import migrate_observations, utc_timestamp
+from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 10
 
 
 class DatabaseError(Exception):
@@ -203,13 +214,19 @@ def _migrate_history(connection: sqlite3.Connection) -> None:
 
 
 def save_listings(
-    connection: sqlite3.Connection, run_id: str, listings: Sequence[StoredListing]
+    connection: sqlite3.Connection,
+    run_id: str,
+    listings: Sequence[StoredListing],
+    *,
+    received_at: Mapping[str, datetime] | None = None,
 ) -> int:
     """Atomically save a batch and return its number of new revisions.
 
     Owns its transaction; rejects an existing transaction rather than committing it.
     The run must be running. Counters/finalization remain the collector caller's job.
-    Observed timestamps record persistence time. Never infer deletion from absence.
+    Revision timestamps remain persistence time. Observations use supplied page receipt
+    instants, or explicitly labeled persistence fallback for compatible callers.
+    Never infer deletion from absence.
     """
     if connection.in_transaction:
         raise DatabaseError("Posting persistence requires its own transaction.")
@@ -223,7 +240,11 @@ def save_listings(
                 raise DatabaseError(
                     "Posting persistence requires a running collection."
                 )
-            observed_at = datetime.now(UTC).isoformat()
+            observed_at = datetime.now(UTC).isoformat(timespec="microseconds")
+            if received_at is not None and set(received_at) != {x.id for x in listings}:
+                raise DatabaseError(
+                    "Receipt timestamps must cover exactly the saved postings."
+                )
             changed = 0
             seen: set[str] = set()
             for supplied in listings:
@@ -236,6 +257,22 @@ def save_listings(
                 text, digest = canonical_snapshot(
                     listing.model_dump(exclude_unset=True)
                 )
+                receipt = (
+                    utc_timestamp(received_at[listing.id])
+                    if received_at is not None
+                    else observed_at
+                )
+                replay = connection.execute(
+                    "SELECT r.content_hash,r.payload_id FROM posting_observations o "
+                    "JOIN posting_revisions r USING(revision_id) "
+                    "WHERE o.posting_id=? AND o.run_id=?",
+                    (listing.id, run_id),
+                ).fetchone()
+                if replay is not None:
+                    HistoryReader(connection).read(replay[1], replay[0], "listing")
+                    if replay[0] != digest:
+                        raise DatabaseError("Conflicting posting observation replay.")
+                    continue
                 previous = connection.execute(
                     "SELECT content_hash FROM postings WHERE posting_id = ?",
                     (listing.id,),
@@ -262,18 +299,51 @@ def save_listings(
                         run_id,
                     ),
                 )
+                latest = connection.execute(
+                    "SELECT payload_id,content_hash FROM posting_revisions "
+                    "WHERE posting_id=? ORDER BY revision_id DESC LIMIT 1",
+                    (listing.id,),
+                ).fetchone()
+                if previous is not None and (
+                    latest is None or latest[1] != previous[0]
+                ):
+                    raise DatabaseError("Current listing revision identity mismatch.")
+                if latest is not None:
+                    HistoryReader(connection).read(latest[0], latest[1], "listing")
                 # Compare with current, not history: A -> B -> A is a change.
                 if previous is None or previous[0] != digest:
+                    payload_id = store_payload(
+                        connection,
+                        "listing",
+                        text,
+                        digest,
+                        latest[0] if latest is not None else None,
+                    )
                     connection.execute(
                         """
                         INSERT INTO posting_revisions
-                            (posting_id, content_hash, listing_json,
+                            (posting_id, content_hash, payload_id,
                              run_id, observed_at)
                         VALUES (?, ?, ?, ?, ?)
                     """,
-                        (listing.id, digest, text, run_id, observed_at),
+                        (listing.id, digest, payload_id, run_id, observed_at),
                     )
                     changed += 1
+                connection.execute(
+                    "INSERT INTO posting_observations "
+                    "(posting_id,run_id,revision_id,observed_at,timestamp_provenance) "
+                    "VALUES (?,?,(SELECT max(revision_id) FROM posting_revisions "
+                    "WHERE posting_id=?),?,?)",
+                    (
+                        listing.id,
+                        run_id,
+                        listing.id,
+                        receipt,
+                        "response_received"
+                        if received_at is not None
+                        else "persistence_fallback",
+                    ),
+                )
             return changed
     except (sqlite3.Error, ValueError, TypeError):
         raise DatabaseError(
@@ -327,6 +397,34 @@ def open_database(path: Path) -> sqlite3.Connection:
             if version == 2:
                 migrate_details(connection)
                 connection.execute("PRAGMA user_version = 3")
+                version = 3
+            if version == 3:
+                migrate_content(connection)
+                connection.execute("PRAGMA user_version = 4")
+                version = 4
+            if version == 4:
+                migrate_observations(connection)
+                connection.execute("PRAGMA user_version = 5")
+                version = 5
+            if version == 5:
+                migrate_compact_history(connection)
+                connection.execute("PRAGMA user_version = 6")
+                version = 6
+            if version == 6:
+                migrate_normalized_storage(connection)
+                connection.execute("PRAGMA user_version = 7")
+                version = 7
+            if version == 7:
+                migrate_inference(connection)
+                connection.execute("PRAGMA user_version = 8")
+                version = 8
+            if version == 8:
+                migrate_source_extraction(connection)
+                connection.execute("PRAGMA user_version = 9")
+                version = 9
+            if version == 9:
+                migrate_country_inference(connection)
+                connection.execute("PRAGMA user_version = 10")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
     except Exception as error:
@@ -344,7 +442,7 @@ def start_collection_run(connection: sqlite3.Connection) -> str:
     if connection.in_transaction:
         raise DatabaseError("Run creation requires its own transaction.")
     run_id = str(uuid4())
-    started_at = datetime.now(UTC).isoformat()
+    started_at = datetime.now(UTC).isoformat(timespec="microseconds")
     try:
         with connection:
             connection.execute("BEGIN IMMEDIATE")

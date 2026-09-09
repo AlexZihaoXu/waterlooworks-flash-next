@@ -7,6 +7,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from playwright.sync_api import (
@@ -95,7 +96,14 @@ class LoginSession:
             self.playwright.stop()
 
 
-def start_login(credentials_path: Path) -> LoginSession:
+def service_worker_policy(block: bool) -> Literal["allow", "block"]:
+    """Refresh interception requires service workers blocked from context creation."""
+    return "block" if block else "allow"
+
+
+def start_login(
+    credentials_path: Path, *, block_service_workers: bool = False
+) -> LoginSession:
     """Run the verified flow and return a live browser at the password checkpoint.
 
     Call from an interactive shell. Do not display page contents or record traces.
@@ -119,13 +127,19 @@ def start_login(credentials_path: Path) -> LoginSession:
             user_data_dir=profile_path,
             headless=False,
             no_viewport=True,
+            service_workers=service_worker_policy(block_service_workers),
         )
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(30_000)
         page.set_default_navigation_timeout(60_000)
-        log.debug(
-            "Private persistent profile; browser cache and service workers enabled."
-        )
+        if block_service_workers:
+            log.debug(
+                "Private refresh context; service workers blocked for interception."
+            )
+        else:
+            log.debug(
+                "Private persistent profile; browser cache and service workers enabled."
+            )
         log.info("Completed stage 1/%d: %s", len(STEPS), current_stage)
 
         def step(name: str, action: Callable[[], object]) -> None:

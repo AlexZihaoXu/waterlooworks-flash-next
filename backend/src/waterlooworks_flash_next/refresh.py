@@ -2,7 +2,10 @@
 
 import logging
 import math
+import sqlite3
+import sys
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +15,15 @@ from waterlooworks_flash_next.database import (
     StoredListing,
     open_database,
     save_listings,
+)
+from waterlooworks_flash_next.detail_capture import (
+    capture_detail_source,
+    install_capture_guard,
+)
+from waterlooworks_flash_next.detail_fetch import (
+    DetailCollection,
+    DetailProgress,
+    DetailSource,
 )
 from waterlooworks_flash_next.duo import at_waterlooworks, submit_and_observe_duo
 from waterlooworks_flash_next.export import EXPORT_FIELDS
@@ -26,6 +38,24 @@ from waterlooworks_flash_next.refresh_logging import (
 )
 
 COOLDOWN_SECONDS = 300
+
+
+class RefreshAnalysisError(Exception):
+    """Saved collection survives an unsuccessful local analysis phase."""
+
+
+def configured_detail_limit(value: str | None) -> int | None:
+    """Server-only cap for bounded verification; never accepted from a client."""
+    if value is None:
+        return None
+    if (
+        not value.isascii()
+        or not value.isdigit()
+        or len(value) > 6
+        or not 1 <= int(value) <= 100_000
+    ):
+        raise ValueError("WW_DETAIL_LIMIT must be an integer from 1 to 100000.")
+    return int(value)
 
 
 class RefreshConflict(Exception):
@@ -52,6 +82,17 @@ def claim_refresh(path: Path) -> str:
                 "SELECT 1 FROM collection_runs WHERE status='running' LIMIT 1"
             ).fetchone():
                 raise RefreshConflict(409)
+            blocked = connection.execute(
+                "SELECT max(blocked_until) FROM collection_runs"
+            ).fetchone()[0]
+            if blocked:
+                delay = math.ceil(
+                    (
+                        datetime.fromisoformat(blocked) - datetime.now(UTC)
+                    ).total_seconds()
+                )
+                if delay > 0:
+                    raise RefreshConflict(429, delay)
             latest = connection.execute(
                 "SELECT finished_at FROM collection_runs WHERE finished_at IS NOT NULL "
                 "ORDER BY finished_at DESC LIMIT 1"
@@ -67,7 +108,7 @@ def claim_refresh(path: Path) -> str:
             run_id = str(uuid4())
             connection.execute(
                 "INSERT INTO collection_runs (id, started_at) VALUES (?, ?)",
-                (run_id, now.isoformat()),
+                (run_id, now.isoformat(timespec="microseconds")),
             )
             return run_id
     finally:
@@ -75,9 +116,16 @@ def claim_refresh(path: Path) -> str:
 
 
 class RefreshService:
-    def __init__(self, path: Path, credentials_path: Path | None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        credentials_path: Path | None,
+        *,
+        detail_limit: int | None = None,
+    ) -> None:
         self.path = path
         self.credentials_path = credentials_path
+        self.detail_limit = detail_limit
         self.lock = threading.RLock()
         self.state = RefreshSnapshot()
         self.worker: threading.Thread | None = None
@@ -91,7 +139,9 @@ class RefreshService:
         try:
             row = connection.execute(
                 "SELECT id, status, pages_completed, records_received, "
-                "unique_postings, duplicates, finished_at FROM collection_runs "
+                "unique_postings, duplicates, finished_at,details_completed,"
+                "details_total,detail_requests,detail_retries,detail_limited "
+                "FROM collection_runs "
                 "ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
             if row:
@@ -106,12 +156,31 @@ class RefreshService:
                         "records_received": row[3],
                         "unique_postings": row[4],
                         "duplicates": row[5],
+                        "details_completed": row[7],
+                        "details_total": row[8],
+                        "detail_requests": row[9],
+                        "detail_retries": row[10],
+                        "detail_bursts": row[9] // 10,
+                        "detail_limited": bool(row[11]),
                     }
                 )
                 if row[6]:
                     self.cooldown_until = datetime.fromisoformat(row[6]) + timedelta(
                         seconds=COOLDOWN_SECONDS
                     )
+            blocked = connection.execute(
+                "SELECT max(blocked_until) FROM collection_runs"
+            ).fetchone()[0]
+            if blocked:
+                until = datetime.fromisoformat(blocked)
+                self.cooldown_until = max(self.cooldown_until or until, until)
+            if (
+                row
+                and connection.execute(
+                    "SELECT 1 FROM inference_jobs WHERE job_id=?", (row[0],)
+                ).fetchone()
+            ):
+                self._analysis_progress(connection, row[0], log=False)
         finally:
             connection.close()
 
@@ -182,7 +251,7 @@ class RefreshService:
                     "duplicates=?, error_category=? WHERE id=?",
                     (
                         "completed" if success else "failed",
-                        now.isoformat(),
+                        now.isoformat(timespec="microseconds"),
                         self.state.pages_completed,
                         self.state.records_received,
                         self.state.unique_postings,
@@ -191,19 +260,195 @@ class RefreshService:
                         run_id,
                     ),
                 )
+            blocked = connection.execute(
+                "SELECT blocked_until FROM collection_runs WHERE id=?", (run_id,)
+            ).fetchone()[0]
         finally:
             connection.close()
         with self.lock:
             self.state.status = "completed" if success else "failed"
             self.state.stage = "complete" if success else "stopped"
             self.state.eta_seconds = None
+            self.state.detail_wait_seconds = 0
             self.cooldown_until = now + timedelta(seconds=COOLDOWN_SECONDS)
+            if blocked:
+                self.cooldown_until = max(
+                    self.cooldown_until, datetime.fromisoformat(blocked)
+                )
         self.emit(
-            "Listing refresh completed. No detail requests were made."
+            (
+                "Refresh completed with the server detail cap; "
+                "remaining details were not requested."
+                if self.state.detail_limited
+                else "Collection and local extraction completed."
+                if self.state.analysis_job_id is not None
+                else "Listing and detail-content refresh completed."
+            )
             if success
-            else "Refresh stopped; no automatic restart or partial listing save.",
+            else "Refresh stopped; completed checkpoints are preserved. "
+            "No automatic restart.",
             "info" if success else "error",
         )
+
+    def _analysis_progress(
+        self, connection: sqlite3.Connection, job_id: str, *, log: bool = True
+    ) -> None:
+        from waterlooworks_flash_next.inference import inference_job_status
+
+        status = inference_job_status(connection, job_id)
+        counts = status.counts
+        total = connection.execute("SELECT count(*) FROM postings").fetchone()[0]
+        missing = max(0, total - sum(counts.values()))
+        cache_hits = connection.execute(
+            "SELECT count(*) FROM inference_job_items WHERE job_id=? AND cache_hit=1",
+            (job_id,),
+        ).fetchone()[0]
+        accepted = counts.get("accepted", 0)
+        rejected = counts.get("rejected", 0)
+        failed = counts.get("failed", 0) + counts.get("interrupted", 0)
+        skipped = counts.get("not_needed", 0) + missing
+        completed = accepted + rejected + failed + skipped
+        with self.lock:
+            previous = (self.state.analysis_completed, self.state.analysis_cache_hits)
+            self.state.analysis_job_id = job_id
+            self.state.analysis_total = total
+            self.state.analysis_completed = completed
+            self.state.analysis_accepted = accepted
+            self.state.analysis_rejected = rejected
+            self.state.analysis_failed = failed
+            self.state.analysis_skipped = skipped
+            self.state.analysis_cache_hits = cache_hits
+        if log and previous != (completed, cache_hits):
+            self.emit(
+                f"Local extraction: {completed}/{total} processed; "
+                f"{accepted} accepted, {rejected} rejected, {failed} failed, "
+                f"{skipped} skipped; {cache_hits} cache hits."
+            )
+
+    def _analyze_saved_data(self, run_id: str) -> None:
+        from waterlooworks_flash_next.inference import (
+            MODEL_ID,
+            InferenceConfig,
+            create_inference_job,
+            inference_job_status,
+            run_inference_job,
+        )
+        from waterlooworks_flash_next.inference_schema import _ERROR_CATEGORIES
+        from waterlooworks_flash_next.normalized_storage import normalize_saved_postings
+
+        with self.lock:
+            self.state.stage = "normalizing"
+            self.state.eta_seconds = None
+            self.state.detail_wait_seconds = 0
+        self.emit("Collection saved. Normalizing all saved postings locally.")
+        connection = open_database(self.path)
+        try:
+            normalized = normalize_saved_postings(connection)
+            self.emit(
+                f"Normalization: {normalized.postings_seen} postings; "
+                f"{normalized.projections_created} updated, "
+                f"{normalized.projections_reused} reused."
+            )
+            ids = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT posting_id FROM posting_contents ORDER BY posting_id"
+                )
+            ]
+            total = connection.execute("SELECT count(*) FROM postings").fetchone()[0]
+            if not ids:
+                with self.lock:
+                    self.state.analysis_total = total
+                    self.state.analysis_completed = total
+                    self.state.analysis_skipped = total
+                self.emit("No saved detail content to analyze; no model request made.")
+                return
+            job_id = create_inference_job(
+                connection, ids, InferenceConfig(concurrency=4), job_id=run_id
+            )
+            with self.lock:
+                self.state.stage = "analysis"
+                self.state.analysis_total = total
+                self.state.analysis_job_id = job_id
+            self.emit(
+                f"Local extraction job {job_id}: {len(ids)} saved postings queued; "
+                f"{total - len(ids)} without saved details skipped. Model {MODEL_ID}; "
+                "at most 4 simultaneous requests; validated cache reused."
+            )
+
+            def progress() -> None:
+                self._analysis_progress(connection, job_id)
+
+            progress()
+            if inference_job_status(connection, job_id).persisted_status == "pending":
+                run_inference_job(connection, job_id, on_progress=progress)
+            progress()
+            status = inference_job_status(connection, job_id)
+            for reason, count in connection.execute(
+                "SELECT error_category,count(*) FROM inference_job_items "
+                "WHERE job_id=? AND error_category IS NOT NULL GROUP BY error_category",
+                (job_id,),
+            ):
+                if reason in _ERROR_CATEGORIES:
+                    self.emit(
+                        f"Local extraction outcome: {reason}; {count} postings.",
+                        "warning",
+                    )
+            if status.error_category in _ERROR_CATEGORIES:
+                self.emit(
+                    f"Local extraction failure category: {status.error_category}.",
+                    "error",
+                )
+            if status.persisted_status != "completed":
+                self.emit(
+                    "Local extraction did not complete. Saved collection and accepted "
+                    "checkpoints are preserved. Check LM Studio and the saved job "
+                    "status; no automatic resume.",
+                    "error",
+                )
+                raise RefreshAnalysisError("Local analysis did not complete.")
+            self.emit(
+                "Local extraction completed. Rejected or unavailable facts remain "
+                "unknown; no model reasoning or posting content was logged.",
+                "warning" if status.counts.get("rejected") else "info",
+            )
+        except RefreshAnalysisError:
+            raise
+        except Exception:
+            self.emit(
+                "Local analysis failed; saved collection is preserved. "
+                "Diagnostics suppressed.",
+                "error",
+            )
+            raise RefreshAnalysisError("Local analysis failed.") from None
+        finally:
+            connection.close()
+
+    def _detail_progress(self, progress: DetailProgress) -> None:
+        with self.lock:
+            self.state.stage = progress.stage
+            self.state.details_completed = progress.completed
+            self.state.details_total = progress.total
+            self.state.detail_requests = progress.requests
+            self.state.detail_retries = progress.retries
+            self.state.detail_bursts = progress.bursts
+            self.state.detail_wait_seconds = round(progress.wait_seconds, 3)
+            self.state.eta_seconds = (
+                None  # No borrowed listing ETA or invented throughput.
+            )
+        if progress.stage == "detail_retry":
+            self.emit(
+                f"Detail retry scheduled; waiting {progress.wait_seconds:.1f}s.",
+                "warning",
+            )
+        elif progress.stage == "detail_rest":
+            self.emit(f"Detail burst rest; waiting {progress.wait_seconds:.1f}s.")
+        else:
+            self.emit(
+                f"Detail progress: {progress.completed}/{progress.total} saved; "
+                f"{progress.requests} requests; {progress.retries} retries; "
+                f"{progress.bursts} bursts."
+            )
 
     def _run(self, run_id: str) -> None:
         session: LoginSession | None = None
@@ -217,17 +462,15 @@ class RefreshService:
             logger.addHandler(handler)
         try:
             assert self.credentials_path is not None
-            session = start_login(self.credentials_path)
+            session = start_login(self.credentials_path, block_service_workers=True)
             submit_and_observe_duo(session)
             if not at_waterlooworks(session.page):
                 raise RuntimeError("Authentication not confirmed.")
             source = open_all_jobs(session.page)
             if source is None:
                 raise RuntimeError("No fresh listing source.")
-            # The source owns copied request fields/cookies and captured page 1;
-            # direct HTTP collection must not keep the login browser alive.
-            session.close()
-            session = None
+            # Suppress browser background egress while direct listings run.
+            install_capture_guard(session.page, "")
             with self.lock:
                 self.state.stage = "listings"
                 self.state.total_pages = max(
@@ -254,12 +497,95 @@ class RefreshService:
                 listings.append(StoredListing.model_validate(payload))
             connection = open_database(self.path)
             try:
-                save_listings(connection, run_id, listings)
+                save_listings(
+                    connection, run_id, listings, received_at=collection.received_at
+                )
+                queue = (
+                    listings
+                    if self.detail_limit is None
+                    else listings[: self.detail_limit]
+                )
+                limited = len(queue) < len(listings)
+                with connection:
+                    connection.execute(
+                        "UPDATE collection_runs SET pages_completed=?,"
+                        "records_received=?,"
+                        "unique_postings=?,duplicates=?,details_total=?,"
+                        "detail_limited=? "
+                        "WHERE id=?",
+                        (
+                            collection.pages_completed,
+                            collection.records_received,
+                            len(listings),
+                            collection.duplicates,
+                            len(queue),
+                            int(limited),
+                            run_id,
+                        ),
+                    )
+                with self.lock:
+                    self.state.stage = "details"
+                    self.state.details_total = len(queue)
+                    self.state.detail_limited = limited
+                    self.state.eta_seconds = None
+                self.emit(
+                    "Full listing pass saved. "
+                    "Starting sequential detail-content collection."
+                )
+
+                def bootstrap(
+                    posting: StoredListing, request: Callable[[Callable[[], str]], str]
+                ) -> DetailSource:
+                    nonlocal session
+                    assert session is not None
+                    try:
+                        detail_source = capture_detail_source(
+                            session.page, source, posting, request, self.emit
+                        )
+                    finally:
+                        # Cleanup must not replace a fatal bootstrap status (429,
+                        # auth, etc.) needed by the durable attempt checkpoint.
+                        failing = sys.exception() is not None
+                        try:
+                            session.close()
+                        except Exception:
+                            if not failing:
+                                raise
+                            self.emit(
+                                "Browser cleanup reported a warning; "
+                                "diagnostics suppressed.",
+                                "warning",
+                            )
+                        else:
+                            session = None
+                    detail_source.confirm_capture()
+                    return detail_source
+
+                details = DetailCollection(
+                    None,
+                    connection,
+                    run_id,
+                    queue,
+                    self._detail_progress,
+                    bootstrap=bootstrap,
+                )
+                details.run()
             finally:
                 connection.close()
+            if session is not None:
+                session.close()
+                session = None
+            self._analyze_saved_data(run_id)
             success, category = True, None
+        except RefreshAnalysisError:
+            category = "internal"
         except ListingFetchError as error:
             category = error.category.value
+            self.emit(
+                f"Refresh failure category: {category}; "
+                f"HTTP {error.status if error.status is not None else 'unavailable'}.",
+                "error",
+            )
         except (Exception, SystemExit):
             # Includes the existing Duo timeout handler's SystemExit; no relogin.
             category = "internal"

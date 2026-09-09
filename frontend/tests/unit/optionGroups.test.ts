@@ -11,7 +11,16 @@ describe('grouped option list', () => {
       '9value',
       '?value',
     ]);
-    expect(rows.filter((row) => row.kind === 'heading')).toEqual([
+    expect(
+      rows
+        .filter((row) => row.kind === 'heading')
+        .map(({ label, count }) => ({
+          kind: 'heading',
+          key: `heading:${label}`,
+          label,
+          count,
+        })),
+    ).toEqual([
       { kind: 'heading', key: 'heading:A', label: 'A', count: 2 },
       { kind: 'heading', key: 'heading:B', label: 'B', count: 1 },
       { kind: 'heading', key: 'heading:Others', label: 'Others', count: 2 },

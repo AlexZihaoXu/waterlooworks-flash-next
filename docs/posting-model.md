@@ -1,6 +1,6 @@
 # Posting storage model
 
-SQLite schema **v3**, local file **`data/waterlooworks.sqlite3`**. This is a storage contract, not a claim that all job content has been extracted. The file and WAL sidecars stay private and outside Git/container images.
+SQLite schema **v6**, local file **`data/waterlooworks.sqlite3`**. This is a storage contract, not a claim that all job content has been extracted. The file and WAL sidecars stay private and outside Git/container images.
 
 ## Identity and relationships
 
@@ -22,7 +22,7 @@ erDiagram
 | -------------------------- | ----------------------------------------------------------------------------------- |
 | `collection_runs`          | Existing collection status, timestamps, listing counts, and safe failure category   |
 | `postings`                 | Stable identity, latest listing, listing hash, first/last-seen provenance           |
-| `posting_revisions`        | Existing append-only listing snapshots                                              |
+| `posting_revisions`        | Append-only listing events referencing verified compact payloads                    |
 | `posting_details`          | Latest validated detail snapshot and independent hash; absent until first success   |
 | `posting_detail_revisions` | Append-only detail snapshots, hash/schema/extractor versions, run and timestamp     |
 | `posting_fetch_attempts`   | Every explicitly started detail attempt, including unchanged successes and failures |
@@ -98,4 +98,32 @@ The caller remains responsible for network pacing, explicitly recording failures
 
 `open_database(path)` transactionally upgrades v1/v2 to v3 without inventing detail history or modifying existing listing snapshots. New detail tables start empty. Foreign keys, STRICT tables, WAL, and a five-second busy timeout are enabled. Future-version databases are rejected.
 
-Tests use generic JSON, schema introspection, real empty databases/run metadata, invalid inputs, and migration rollback checks. No posting fixtures or live authentication run in tests. Populated detail history, identity-matched success/failure cycles, and populated migration preservation have not been live-verified with real postings. Authentication → paced listings → SQLite is wired and live-verified with 1,216 listings and their initial revisions. Detail orchestration and individual posting views are explicitly deferred.
+Tests use generic JSON, schema introspection, real empty databases/run metadata, invalid inputs, and migration rollback checks. No posting fixtures or live authentication run in tests. Populated detail history, identity-matched success/failure cycles, and populated migration preservation have not been live-verified with real postings. Authentication → paced listings → SQLite is wired and live-verified with 1,216 listings and their initial revisions. Content-only orchestration is implemented; individual posting views remain deferred. Its live bounded refresh/SSE validation is a separate required gate.
+
+## v5 observations and v6 compact evidence
+
+`posting_observations` retains each newly saved posting/run membership, including unchanged listings, with immutable revision reference, ordered observation ID, timestamp and provenance. Legacy backfill represents actual revision evidence only; it never invents unchanged historical refresh membership.
+
+In v6, `posting_revisions.listing_json` and `posting_content_revisions.content_json` are deliberately removed. Each event instead has a `payload_id` FK into immutable `history_payloads`. Its insertion trigger requires non-null matching kind/hash evidence and matching current-state provenance; update/delete triggers preserve immutability. ALTER-added payload columns are SQL-nullable for transactional backfill, but null insertion is forbidden by those triggers. Revision IDs, hashes, extractor versions, run links, observation/attempt references and current full snapshots are unchanged.
+
+`history_payloads` stores `kind`, `content_hash`, optional earlier `base_id`, bounded dependency `depth`, versioned `encoding`, decompressed `raw_size`, and compressed BLOB `data`. `(kind, content_hash)` is unique: reversion **events** remain distinct while payload states deduplicate. A checkpoint is compressed canonical JSON. A reversible delta records before/after hashes and structural key additions/removals/replacements or linear text splices. Both directions validate input/output hashes. Missing versus null, Unicode, numeric types and negative zero retain their original canonical identity; no floating normalization is performed.
+
+Compressed deltas are selected only when smaller than compressed checkpoints. At most 32 deltas are reconstructed; snapshots above 1 MiB always checkpoint. Decoding rejects malformed/noncanonical JSON, excessive nesting, bad hashes/patches, invalid dependencies, truncated or trailing zlib streams, and oversized payloads (64 MiB snapshot/encoded-chain, 4 MiB patch limits). The verified reader has a 16 MiB cache budget. It performs no collection or mutation.
+
+Internal callers use `compact_history.revision_snapshot(connection, kind, revision_id)` or a shared `HistoryReader`. Workspace API history and `observation_series` still expose reconstructed listing snapshots; current-state APIs still read full latest snapshots. Metadata-only `posting_detail_revisions` and their storage module remain unchanged: the authorized backup contained zero such rows. Tests deliberately update internal schema expectations rather than preserving redundant JSON for old SQL callers.
+
+Migration from v5 is transactional, verifies every source payload before replacing its column, preserves every revision event and incoming FK, and rolls back on corruption or unknown schema dependencies. v1–v4 upgrades chain through their original migrations first. Private actual-backup-copy acceptance checks every historical listing/content reconstruction and every delta in reverse, unchanged/reversion saves, observations/current states, FK/integrity, and real in-process GET response contracts. Default tracked tests use only generic primitives and empty schema contracts. Compaction leaves reusable free/partially filled pages; physical shrinkage requires separately authorized offline `VACUUM`, never automatic migration or GET work. Production migration and live transport verification remain separate gates.
+
+## v4 content-only extension
+
+The v3 metadata tables and null-only body contract above are preserved unchanged. Markup content must not fabricate metadata or masquerade as `metadata_only`. Instead v4 adds:
+
+- `posting_contents`: current `content_only` snapshot, digit-string posting ID, reviewed plain-text `fields` map, canonical SHA-256, extractor version, first/last seen times and runs.
+- `posting_content_revisions`: independent append-only history. Unchanged observations reuse the latest revision; changes and reversions append. A trigger requires inserted revisions to match the current snapshot.
+- `posting_content_attempts`: pending/succeeded/failed/interrupted lifecycle, durable request/retry intent counters, HTTP/error category and matching revision FK. Terminal updates and deletions are forbidden by triggers.
+
+All three reference existing postings/runs. Content and successful attempt completion commit atomically with the run's completed counter. Failure finalizes only its attempt, leaving previous content intact. `collection_runs` also retains detail totals/completed/requests/retries, the verification-cap marker and server `blocked_until`. Migration is transactional and leaves v3 constraints/history intact. Metadata/content unification is not implemented.
+
+Extraction accepts observed `div > span(label) + p(value)` composition, reviewed labels, required title/organization/work-term fields, and actual descriptive content. Title and organization are checked against the requested listing. Identity is bound to the request; duplicate-title markup alone is not an independent server echo of posting ID. Unknown labels, scripts, attributes, hidden controls and active HTML are not persisted. Explicit `hidden`, `aria-hidden=true`, and supported inline display/visibility hiding suppress entire subtrees. Unsupported inline visibility expressions fail closed. External/class CSS visibility is not computed; this parser does not guarantee browser-visible text. Values remain source text, not inferred salary/location/application semantics.
+
+Offline private-cache validation covers ten real postings, success checkpoints, unchanged revision reuse, failure preservation and FK/immutability checks. No private fixture is committed. Populated v3 metadata migration has not been live-exercised; its schema objects are verified unchanged using real empty migration databases. Process-crash recovery remains manual, never automatic resume.
