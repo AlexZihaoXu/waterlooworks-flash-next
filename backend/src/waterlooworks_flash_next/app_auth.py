@@ -2,8 +2,10 @@
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -21,6 +23,7 @@ from firebase_admin import auth, credentials
 from pydantic import BaseModel, ConfigDict, Field
 
 from waterlooworks_flash_next.account_profile import AccountProfile
+from waterlooworks_flash_next.runtime_secrets import read_runtime_secret
 
 PROJECT_ID = "alex-xu-central"
 COOKIE = "ww_session"
@@ -85,7 +88,7 @@ class FirebaseVerifier:
                     raise ValueError
                 if self._app is None:
                     data = decode_service_account(
-                        os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+                        read_runtime_secret("FIREBASE_SERVICE_ACCOUNT", max_bytes=32768)
                     )
                     self._app = firebase_admin.initialize_app(
                         credentials.Certificate(data),
@@ -96,6 +99,16 @@ class FirebaseVerifier:
                 raise AuthError("Authentication configuration unavailable.") from None
 
     def verify(self, token: str) -> tuple[str, int]:
+        uid, expires, _ = self._verify_claims(token)
+        return uid, expires
+
+    def verify_reauth(self, token: str) -> tuple[str, int, int]:
+        uid, expires, auth_time = self._verify_claims(token)
+        if type(auth_time) is not int or auth_time > time.time():
+            raise AuthError("Google authentication was not accepted.")
+        return uid, expires, auth_time
+
+    def _verify_claims(self, token: str) -> tuple[str, int, Any]:
         self.ensure_ready()
         try:
             claims = auth.verify_id_token(
@@ -117,7 +130,7 @@ class FirebaseVerifier:
                 or provider.get("sign_in_provider") != "google.com"
             ):
                 raise ValueError
-            return uid, expires
+            return uid, expires, claims.get("auth_time")
         except Exception:
             raise AuthError("Google authentication was not accepted.") from None
 
@@ -294,37 +307,76 @@ class AuthTransport:
     origins: frozenset[str]
     allow_loopback_http: bool = False
 
+    trusted_proxy: str | None = None
+
     @classmethod
     def from_environment(cls) -> "AuthTransport":
-        origins = frozenset(
-            os.environ.get("WW_AUTH_ORIGINS", "https://localhost").split(",")
-        )
-        allow_http = os.environ.get("WW_AUTH_ALLOW_LOOPBACK_HTTP") == "1"
-        for origin in origins:
-            url = urlsplit(origin)
-            if (
-                not url.hostname
-                or url.username
-                or url.password
-                or url.path
-                or url.query
-                or url.fragment
-                or origin != f"{url.scheme}://{url.netloc}"
-                or (
-                    url.scheme != "https"
-                    and not (
-                        allow_http
-                        and url.scheme == "http"
-                        and url.hostname in {"localhost", "127.0.0.1"}
+        try:
+            origins = frozenset(
+                os.environ.get("WW_AUTH_ORIGINS", "https://localhost").split(",")
+            )
+            allow_http = os.environ.get("WW_AUTH_ALLOW_LOOPBACK_HTTP") == "1"
+            proxy = os.environ.get("WW_AUTH_TRUSTED_PROXY")
+            if proxy is not None:
+                address = ipaddress.ip_address(proxy)
+                proxy = str(address)
+                if allow_http or address.is_unspecified or address.is_multicast:
+                    raise ValueError
+            for origin in origins:
+                url = urlsplit(origin)
+                if (
+                    not url.hostname
+                    or not re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", url.hostname)
+                    or url.username
+                    or url.password
+                    or url.path
+                    or url.query
+                    or url.fragment
+                    or origin != f"{url.scheme}://{url.netloc}"
+                    or url.netloc != url.hostname + (f":{url.port}" if url.port else "")
+                    or (
+                        url.scheme != "https"
+                        and not (
+                            allow_http
+                            and url.scheme == "http"
+                            and url.hostname in {"localhost", "127.0.0.1"}
+                        )
                     )
-                )
-            ):
-                raise AuthError("Authentication transport configuration unavailable.")
-        return cls(origins, allow_http)
+                ):
+                    raise ValueError
+            return cls(origins, allow_http, proxy)
+        except Exception:
+            raise AuthError(
+                "Authentication transport configuration unavailable."
+            ) from None
+
+    def allowed_host(self, request: Request) -> bool:
+        hosts = {urlsplit(origin).netloc for origin in self.origins}
+        if not self.secure_cookie(request):
+            # Preserve the explicit local Vite Host rewrite, never a remote peer.
+            hosts.add(request.url.netloc)
+        # Health is a fixed credential-free liveness read, not an HTTP auth exception.
+        if (
+            request.url.path == "/api/health"
+            and request.method in {"GET", "HEAD"}
+            and request.client is not None
+            and request.client.host in {"127.0.0.1", "::1"}
+        ):
+            hosts.update({"127.0.0.1:8787", "127.0.0.1", "localhost:8787", "localhost"})
+        return request.headers.getlist("host") in [[host] for host in hosts]
+
+    def is_https(self, request: Request) -> bool:
+        # Uvicorn MUST keep --no-proxy-headers: this checks the actual socket peer.
+        return request.url.scheme == "https" or (
+            self.trusted_proxy is not None
+            and request.client is not None
+            and request.client.host == self.trusted_proxy
+            and request.headers.getlist("x-forwarded-proto") == ["https"]
+        )
 
     def secure_cookie(self, request: Request) -> bool:
-        # Forwarded headers are deliberately not a trust boundary. A loopback Vite
-        # proxy preserves Origin and changes Host; HTTP is allowed only locally.
+        # A trusted production proxy never weakens Secure cookies. The separate
+        # explicit local Vite exception requires an actual loopback socket peer.
         local_http = (
             self.allow_loopback_http
             and request.url.scheme == "http"

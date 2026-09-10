@@ -1,0 +1,64 @@
+/* Owner-approved native modal shell only; never targets HeroUI components. */
+.admin-settings-dialog {
+  box-sizing: border-box;
+  width: min(960px, 90vw);
+  height: min(760px, 80dvh);
+  max-width: calc(
+    100vw - 2rem - env(safe-area-inset-left) - env(safe-area-inset-right)
+  );
+  max-height: calc(
+    100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+  );
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 20%);
+  overflow: hidden;
+}
+
+.admin-settings-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.admin-settings-dialog::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+
+.admin-settings-dialog-header {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.admin-settings-dialog-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-settings-dialog-heading {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.admin-settings-dialog-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 1rem 1rem;
+}
+
+.admin-settings-dialog-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 1rem;
+  padding: 1rem;
+}

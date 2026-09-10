@@ -1,23 +1,25 @@
-"""Explicitly invoked, headed login rehearsal that stops before password submission.
+"""Explicit bounded login, headless by default, stopping before password submission.
 
 Never enable Playwright debug logging, tracing, or screenshots for this flow.
 """
 
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
+from dotenv import load_dotenv
 from playwright.sync_api import (
     BrowserContext,
     Page,
     Playwright,
     sync_playwright,
 )
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from waterlooworks_flash_next.credentials import CredentialStore
 from waterlooworks_flash_next.logging import stage_logger
 
 STEP_DELAY_MS = 250
@@ -44,40 +46,61 @@ class LoginFlowError(Exception):
     """A deliberately sanitized login error."""
 
 
-class Credentials(BaseModel):
-    """Secrets are excluded from repr and serialization."""
+class AuthDeadline:
+    """Fixed monotonic deadline shared by credential entry and Duo observation."""
 
-    model_config = ConfigDict(strict=True, hide_input_in_errors=True)
-    username: SecretStr = Field(repr=False, exclude=True)
-    password: SecretStr = Field(repr=False, exclude=True)
+    def __init__(
+        self, *, seconds: float = 180, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._clock = clock
+        self.expires_at = clock() + seconds
 
-    def __repr__(self) -> str:
-        return "Credentials(<redacted>)"
+    def remaining_ms(self) -> float:
+        remaining = self.expires_at - self._clock()
+        if remaining <= 0:
+            raise LoginFlowError("Authentication deadline exceeded.")
+        return remaining * 1000
+
+    def bound_page(self, page: Page) -> None:
+        remaining = self.remaining_ms()
+        page.set_default_timeout(min(30_000, remaining))
+        page.set_default_navigation_timeout(min(60_000, remaining))
 
 
-def load_credentials(path: Path) -> Credentials:
-    """Read only at authentication runtime; never surface parsing diagnostics."""
+@dataclass(frozen=True)
+class BrowserSettings:
+    headless: bool
+    profile: Path
+
+
+def browser_settings() -> BrowserSettings:
+    """Explicit private profile; headed mode is an opt-in local operator setting."""
+    mode = os.environ.get("WW_BROWSER_HEADLESS", "1")
+    profile = os.environ.get("WW_BROWSER_PROFILE")
+    if mode not in {"0", "1"} or not profile or not Path(profile).is_absolute():
+        raise LoginFlowError(
+            "Configure browser mode and an absolute private profile path."
+        )
+    return BrowserSettings(mode == "1", Path(profile))
+
+
+def exact_auth_origin(url: str, host: str) -> bool:
     try:
-        credentials = Credentials.model_validate_json(path.read_bytes())
-        if not credentials.username.get_secret_value().strip():
-            raise ValueError
-        if not credentials.password.get_secret_value():
-            raise ValueError
-        return credentials
-    except Exception:
-        raise LoginFlowError("Credentials are unavailable or invalid.") from None
+        target = urlsplit(url)
+        return (
+            target.scheme == "https"
+            and target.hostname == host
+            and target.port in (None, 443)
+            and target.username is None
+            and target.password is None
+        )
+    except ValueError:
+        return False
 
 
 def require_auth_host(url: str) -> None:
     """Fail closed before entering either secret."""
-    target = urlsplit(url)
-    if (
-        target.scheme != "https"
-        or target.hostname != "adfs.uwaterloo.ca"
-        or target.port not in (None, 443)
-        or target.username is not None
-        or target.password is not None
-    ):
+    if not exact_auth_origin(url, "adfs.uwaterloo.ca"):
         raise LoginFlowError("Unexpected authentication origin.")
 
 
@@ -88,8 +111,20 @@ class LoginSession:
     playwright: Playwright
     context: BrowserContext
     page: Page
+    deadline: AuthDeadline
+    submitted: bool = False
+    closed: bool = False
+
+    def claim_submission(self) -> None:
+        if self.submitted or self.closed:
+            raise LoginFlowError("Sign-in was already submitted or closed; no retry.")
+        self.deadline.remaining_ms()
+        self.submitted = True
 
     def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
         try:
             self.context.close()
         finally:
@@ -102,36 +137,54 @@ def service_worker_policy(block: bool) -> Literal["allow", "block"]:
 
 
 def start_login(
-    credentials_path: Path, *, block_service_workers: bool = False
+    database_path: Path,
+    *,
+    project_root: Path,
+    block_service_workers: bool = False,
+    deadline: AuthDeadline | None = None,
 ) -> LoginSession:
     """Run the verified flow and return a live browser at the password checkpoint.
 
-    Call from an interactive shell. Do not display page contents or record traces.
+    Do not display page contents or record traces.
     No sign-in submission, session export, or job retrieval is performed.
     """
     log = stage_logger("login")
+    deadline = deadline or AuthDeadline()
+    try:
+        load_dotenv(project_root / ".env", override=False)
+    except Exception:
+        raise LoginFlowError("Login configuration unavailable.") from None
     if os.environ.get("DEBUG") or os.environ.get("PWDEBUG"):
         log.error("Disable DEBUG and PWDEBUG before entering credentials.")
         raise LoginFlowError("Disable DEBUG and PWDEBUG before entering credentials.")
 
+    settings = browser_settings()
+    try:
+        credentials = CredentialStore(database_path).load_for_login()
+    except Exception:
+        raise LoginFlowError(
+            "WaterlooWorks credentials unavailable; check admin "
+            "settings and runtime key."
+        ) from None
+
     current_stage = STEPS[0]
     log.info("Starting stage 1/%d: %s", len(STEPS), current_stage)
     playwright: Playwright | None = None
+    context: BrowserContext | None = None
     try:
         playwright = sync_playwright().start()
-        profile_path = (
-            credentials_path.resolve().parent / ".experiment" / "browser-profile"
-        )
+        profile_path = settings.profile
         profile_path.mkdir(parents=True, exist_ok=True, mode=0o700)
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=profile_path,
-            headless=False,
+            headless=settings.headless,
+            chromium_sandbox=True,
+            timeout=deadline.remaining_ms(),
             no_viewport=True,
             service_workers=service_worker_policy(block_service_workers),
         )
         page = context.pages[0] if context.pages else context.new_page()
-        page.set_default_timeout(30_000)
-        page.set_default_navigation_timeout(60_000)
+        deadline.bound_page(page)
         if block_service_workers:
             log.debug(
                 "Private refresh context; service workers blocked for interception."
@@ -147,9 +200,12 @@ def start_login(
             current_stage = name
             index = STEPS.index(name) + 1
             log.debug("Waiting %d ms before the next stage.", STEP_DELAY_MS)
-            page.wait_for_timeout(STEP_DELAY_MS)
+            deadline.bound_page(page)
+            page.wait_for_timeout(min(STEP_DELAY_MS, deadline.remaining_ms()))
+            deadline.bound_page(page)
             log.info("Starting stage %d/%d: %s", index, len(STEPS), name)
             action()
+            deadline.remaining_ms()
             log.info("Completed stage %d/%d: %s", index, len(STEPS), name)
 
         step(STEPS[1], lambda: page.set_viewport_size({"width": 1024, "height": 768}))
@@ -160,27 +216,34 @@ def start_login(
             ),
         )
         step(STEPS[3], lambda: page.wait_for_load_state("load"))
-        step(
-            STEPS[4],
-            lambda: page.get_by_role(
-                "link", name="Students/Alumni/Staff", exact=True
-            ).click(no_wait_after=True),
-        )
+
+        def student_login() -> None:
+            if not exact_auth_origin(page.url, "waterlooworks.uwaterloo.ca"):
+                raise LoginFlowError("Unexpected WaterlooWorks origin.")
+            page.get_by_role("link", name="Students/Alumni/Staff", exact=True).click(
+                no_wait_after=True
+            )
+
+        step(STEPS[4], student_login)
 
         def wait_for_authentication() -> None:
             page.wait_for_url("https://adfs.uwaterloo.ca/**", wait_until="load")
             require_auth_host(page.url)
+            deadline.bound_page(page)
             page.locator(USERNAME_SELECTOR).wait_for(state="visible")
 
         step(STEPS[5], wait_for_authentication)
 
         def enter_secret(key: str, selector: str) -> None:
             require_auth_host(page.url)
+            deadline.bound_page(page)
             field = page.locator(selector)
             field.wait_for(state="visible")
-            credentials = load_credentials(credentials_path)
+            deadline.bound_page(page)
             secret = credentials.username if key == "username" else credentials.password
             field.fill("")
+            deadline.bound_page(page)
+            require_auth_host(page.url)
             field.press_sequentially(secret.get_secret_value(), delay=TYPING_DELAY_MS)
 
         step(STEPS[6], lambda: enter_secret("username", USERNAME_SELECTOR))
@@ -188,6 +251,7 @@ def start_login(
         def next_step() -> None:
             require_auth_host(page.url)
             page.get_by_role("button", name="Next", exact=True).click()
+            deadline.bound_page(page)
             page.locator("input[type=password]:visible").wait_for(state="visible")
 
         step(STEPS[7], next_step)
@@ -197,13 +261,17 @@ def start_login(
         )
         step(STEPS[9], lambda: None)
         log.info("Password entry complete; returning control to the caller.")
-        return LoginSession(playwright, context, page)
+        return LoginSession(playwright, context, page, deadline)
     except Exception:
         # Log only a fixed stage label, never exception text or page data.
         log.error("Failed stage: %s. Sensitive diagnostics suppressed.", current_stage)
         try:
-            if playwright is not None:
-                playwright.stop()
+            try:
+                if context is not None:
+                    context.close()
+            finally:
+                if playwright is not None:
+                    playwright.stop()
         except Exception:
             log.warning("Browser cleanup did not complete; diagnostics suppressed.")
         raise LoginFlowError(

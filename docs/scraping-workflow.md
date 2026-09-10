@@ -4,9 +4,11 @@
 
 Explore WaterlooWorks in an interactive uv-managed Python shell in `.experiment/test/`, following user instructions. This is the actual platform flow, not a mock or unit test. Unit tests cover credential-free logic only; live authentication requires explicit user direction.
 
-Never view the credentials file through agent tools, expose username/password, or collect login screenshots, traces, HTML dumps, or sensitive network details. The user authorized printing the Duo verification code to their private console; do not share that output or commit it.
+Never view the obsolete credentials file, backend `.env`, private database, or sensitive form values through agent tools, expose username/password, or collect login screenshots, traces, HTML dumps, or sensitive network details. Duo codes now belong only in the ephemeral current-refresh admin status panel; never log, print, persist or include them in screenshots/artifacts. Earlier private-console handling below is historical, not current authorization.
 
-## Verified findings
+## Historical headed-flow findings
+
+B2 preserves the observed DOM branches but replaces console codes/process exits with a bounded memory-only admin channel and safe exceptions. Production headless SSO has not been live-validated.
 
 - Credential entry is required again even with the saved browser profile.
 - Sign in can lead to a Duo code challenge. The code may appear after the prompt; DOM-only polling successfully detected it and logged it once.
@@ -18,7 +20,7 @@ Never view the credentials file through agent tools, expose username/password, o
 
 The challenged-login path with automatic device trust and the saved-trust path have both passed end-to-end runs. An HTTP-cache-only reset preserved device trust, while deleting the dedicated profile restored the Duo challenge. Later job-navigation branches remain placeholders.
 
-Still not live-tested: approval without the device-trust prompt, ten checks with no code, the 60-second transition timeout, and an unknown destination. These defensive branches are implemented, not claimed verified.
+Still not live-tested: approval without the device-trust prompt, ten checks with no code, the fixed180-second overall authentication timeout, and an unknown destination. These defensive branches are implemented, not claimed verified.
 
 ## Playwright flowchart
 
@@ -62,17 +64,17 @@ flowchart TD
     EXPORT -->|Yes| JSON[Atomically save allowed listing fields to ignored output directory]
     EXPORT -->|No| MEMORY[Keep results in memory only]
     L -->|No| M{Known HTTPS authentication host?}
-    M -->|No| UNKNOWN[Pause for guidance; do not assume success]
+    M -->|No| UNKNOWN[Fail safely; close browser; no retry]
     M -->|Yes| N{Duo timeout or Invalid verification code visible?}
     N -->|Yes| ERROR[Log ERROR]
-    ERROR -->|3 seconds| EXIT[Close browser; exit 1]
+    ERROR --> EXIT[Clear challenge; close browser; raise safe exception]
     N -->|No| O{Optional device trust prompt visible?}
     O -->|Yes, not already accepted| TRUST[Click Yes, this is my device once]
-    TRUST --> TRANSITION[Allow up to 60 seconds for transition]
+    TRUST --> TRANSITION[Observe within original overall deadline]
     O -->|No| P{On Duo awaiting code or approval?}
     P -->|No| TRANSITION
     P -->|Yes| Q{Unique visible three-digit code?}
-    Q -->|Yes| CODE[Log code once; wait for user approval]
+    Q -->|Yes| CODE[Publish memory-only admin code; wait for approval]
     CODE -->|500 ms, DOM only| L
     Q -->|No, code previously seen| TRANSITION
     Q -->|No, never seen| LIMIT{10 code checks exhausted?}
@@ -87,11 +89,11 @@ flowchart TD
 
 - A returning trusted-device login can pass briefly through Duo or reach WaterlooWorks before polling sees Duo. Neither case requires a visible code or another push.
 - On Duo, before a code has been seen, allow 10 unsuccessful checks at 500 ms (approximately five seconds plus DOM-query time). A code candidate must be the only visible three-digit text value while the observed verification-code prompt is visible. This conservative strategy worked live; ambiguous matches fail closed.
-- Before inspecting codes or clicking device trust on each poll, check for **Invalid verification code**, **Request timed out**, or **Push timed out**. Log a fixed ERROR reason, wait three seconds, close the browser, and exit 1. No submitted code value or raw error is logged; never retry.
-- Once the code is detected, log it once and continue DOM-only observation while the user approves it. Duo's own timeout UI determines challenge expiry. A disappearing code is not proof of success: continue observing redirects or the optional device prompt.
+- Before inspecting codes or clicking device trust on each poll, check for **Invalid verification code**, **Request timed out**, or **Push timed out**. Log a fixed ERROR reason, clear the challenge, close the browser, and raise a safe exception without killing the API. No submitted code value or raw error is logged; never retry.
+- Once detected, publish the code only to the current in-memory refresh channel and continue DOM-only observation while the user approves it. The earlier of the fixed overall deadline or Duo's observed failure ends the challenge. A disappearing code is not proof of success: continue observing redirects or the optional device prompt.
 - **Is this your device?** is optional. When both heading and **Yes, this is my device** button are visible on the verified Duo origin, click once as user-authorized, then wait for WaterlooWorks. This action can send a trust-confirmation request; it is not a poll or a new push.
-- Known-host transitions have a 60-second bound, reset while a visible code awaits approval and after accepting device trust. Timeout or exhausted code detection closes after three seconds and exits 1.
-- Unknown destinations pause for guidance. No automatic retry, reload, fetch, extra navigation, or additional Duo push is performed by polling. The page itself may perform normal background authentication requests.
+- Credential entry and known-host transitions share one fixed180-second monotonic deadline. Visible codes and device trust never reset it. Timeout or exhausted code detection clears the channel and raises a safe exception with cleanup.
+- Unknown destinations fail safely. No automatic retry, reload, fetch, extra navigation, or additional Duo push is performed by polling. The page itself may perform normal background authentication requests.
 
 ## Job-board navigation
 
@@ -139,8 +141,8 @@ Results remain only in `listing_collection.postings`. The collector raises a san
 
 Temporary launchers and execution scripts have been removed. Core modules under `backend/src/waterlooworks_flash_next/` remain:
 
-- `login.py`: `start_login(credentials_path)` creates the persistent browser and enters credentials, returning a `LoginSession` at the password checkpoint.
-- `duo.py`: `submit_and_observe_duo(session)` submits once and observes code/trust/failure branches until authenticated arrival or an unknown destination. **Calling it may trigger a Duo notification.** Its existing Duo failure handler closes the browser and exits 1; the refresh worker catches failures and finalizes the run safely.
+- `login.py`: `start_login(database_path, project_root=...)` loads one authenticated-encrypted credential pair before creating the private persistent browser and entering credentials, returning a `LoginSession` at the password checkpoint.
+- `duo.py`: `submit_and_observe_duo(session)` submits once and observes code/trust/failure branches until authenticated arrival or an unknown destination. **Calling it may trigger a Duo notification.** Its Duo failure handler raises a sanitized exception and closes the browser; the refresh worker clears the channel, finalizes the run and releases its provider lease.
 - `jobs.py`: `open_all_jobs(session.page)` confirms authentication, navigates to the board, clicks All Jobs, and returns a fresh `ListingSource` or `None`.
 - `listings.py`: construct `ListingCollection(source)` and immediately call `.run()` for paced, sequential collection. Inspect safe aggregate values such as `.pages_completed`, `.complete`, and `len(.postings)`. Catch `ListingFetchError` at the application boundary and close the session; never log raw exceptions.
 - `export.py`: `export_listings(collection, output_directory)` exports a completed collection only. Use a private ignored directory such as `.experiment/output/`.
@@ -148,7 +150,7 @@ Temporary launchers and execution scripts have been removed. Core modules under 
 - `database.py`: SQLite schema v4, transactional migration, empty run creation, the `StoredListing` model, and atomic `save_listings()` upserts with SHA-256 revision history. The explicit API refresh worker now saves completed listing passes and finalizes run counters/status.
 - `details.py`, `detail_schema.py`, `detail_storage.py`: strict detail metadata models, null-only unverified content fields, independent detail history, and explicit fetch-attempt lifecycle APIs. See [the posting model](posting-model.md).
 
-Do not auto-run these modules on import. Callers own browser cleanup through `session.close()` on completion, cancellation, or failure. Chromium uses ignored `.experiment/browser-profile/` with normal caching and service workers enabled. Cookies/storage can persist, but the site controls expiration. Do not inspect, log, commit, ship, or concurrently open the profile.
+Do not auto-run these modules on import. Callers own browser cleanup through `session.close()` on completion, cancellation, or failure. Chromium uses the explicit absolute private `WW_BROWSER_PROFILE` directory; `WW_BROWSER_HEADLESS=1` is the default, and explicit `0` permits headed local operation. Sandbox is enabled and no browser/CDP/VNC port is exposed. Normal caching and service workers are enabled outside refresh; refresh blocks service workers. Cookies/storage can persist, but the site controls expiration. Do not inspect, log, commit, ship, or concurrently open the profile.
 
 Typing is approximately **33.3 ms per character**. Credentials load only at runtime on the verified authentication origin. Keep `DEBUG` and `PWDEBUG` unset. No per-posting detail collector is implemented.
 
@@ -162,7 +164,7 @@ The writer is tested with empty data only, without mock postings or live request
 
 Format: `[HH:MM:SS] [scope/LEVEL]: message`, local time, scopes `login`, `duo`, `jobs`, `listings`, `shell`. Colors: gray DEBUG, green INFO, yellow WARN, red ERROR, cyan scope. `FORCE_COLOR=1` forces color; `NO_COLOR=1` disables it. `WW_LOG_LEVEL` supports DEBUG, INFO (default), WARN, ERROR.
 
-Authorized code message: `Detected verification code: [NNN] (waiting...)`, using the detected code once. Never log username/password, input values, page dumps, authentication URLs, or raw exceptions. Keep console output private.
+Only generic Duo approval guidance is logged. Codes are memory-only and admin-only via no-store `GET /api/admin/refresh-auth`; they never enter logs, console, SQLite, SSE or provider input. Never log username/password, input values, page dumps, authentication URLs, or raw exceptions.
 
 ## SQLite model and next steps
 

@@ -1,6 +1,6 @@
 # WaterlooWorks Flash Next
 
-WaterlooWorks Flash Next is a Google-authenticated shared WaterlooWorks listing browser with explicit manual refresh, search, filters, and SQLite history. Manual refresh collects plain-text detail content after saving the full listing pass, then normalizes saved postings and runs bounded local LLM-assisted extraction across the saved workspace. Individual posting pages read saved content, normalized analysis, history, and comparisons without fetching.
+WaterlooWorks Flash Next is a Google-authenticated shared WaterlooWorks listing browser with explicit manual refresh, search, filters, and SQLite history. Manual refresh collects plain-text detail content after saving the full listing pass, then normalizes saved postings and runs bounded OpenAI-assisted extraction across the saved workspace. Individual posting pages read saved content, normalized analysis, history, and comparisons without fetching.
 
 Any server-verified Google account may browse saved jobs. The first successful app login atomically becomes the sole admin; only admin can refresh. Keep the instance closed until the owner signs in first. The signed-out app shell remains visible without loading protected data. See [Firebase setup, schema11 migration, HTTPS and acceptance gates](docs/firebase-auth.md).
 
@@ -119,7 +119,7 @@ Nested metadata objects remain unmodeled. Detail extraction saves reviewed label
 
 ## SQLite storage model
 
-Schema v11 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
+Schema v14 uses Python's built-in `sqlite3` and Pydantic's `StoredListing` model in `backend/src/waterlooworks_flash_next/database.py`. The private local database is **`data/waterlooworks.sqlite3`**; the entire `data/` directory, including WAL files, is excluded from Git, formatting, and Docker build contexts.
 
 ```mermaid
 erDiagram
@@ -168,10 +168,10 @@ erDiagram
 - **Change detection:** `sha256-json-v1` hashes compact UTF-8 JSON with recursively sorted object keys. Object key order and formatting do not create changes; array order, field values/types, and missing versus explicit null do. Run IDs and observation timestamps are excluded; all allowlisted listing fields—including application count—are included. NaN/Infinity are rejected. This is change detection, not encryption or tamper-proof auditing.
 - **Repeat observations:** First observation creates a revision. An identical current hash updates the latest snapshot's last-seen metadata and appends a per-run observation without another revision. A changed hash appends a revision and updates the current snapshot atomically. Reverting to an earlier hash creates another revision, so history does not collapse reversions.
 - **Relationships:** First/last-seen runs and revision run references are protected by foreign keys. No deletion/inactive state is inferred from absence. Unchanged observations are not separate revisions; schema v5 retains every newly saved run-to-posting membership.
-- **SQLite settings:** Transactional upgrades through v11 (`user_version=11`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
+- **SQLite settings:** Transactional upgrades through v14 (`user_version=14`), STRICT tables, JSON checks, foreign keys, WAL mode, and a five-second busy timeout. Existing v1 snapshots become marked baseline revisions at their last-known observation; earlier changes cannot be reconstructed. Requires SQLite 3.37+ with JSON support. Newer schemas are rejected rather than downgraded.
 - **Core API:** `open_database(path)` initializes/migrates the database; the caller closes it. `start_collection_run(connection)` creates empty run metadata only. `save_listings(connection, run_id, listings)` takes validated `StoredListing` objects, saves a batch in one transaction, and returns the number of new revisions. It requires a running run, rejects duplicate IDs within a batch, and does not commit a caller's pre-existing transaction. Run counters/finalization remain the caller's responsibility.
 
-**Scope:** Listing refresh is wired through a local FastAPI API to SQLite and listing history. Sequential detail-content collection follows the completed listing save. Per-posting content checkpoints survive later failures. After successful collection, manual refresh explicitly normalizes all saved detail content and runs local model extraction with validated-cache reuse. Startup and GET requests never start analysis. Tests cover schema/migration behavior and API safety without invented postings. A single authorized live API run persisted 1,216 postings. Populated listing/content migration and revision lifecycles are verified offline on private backup copies; production migration and live refresh verification remain separate gates. No private postings or mock data are seeded. Use local disk, restrict filesystem access, and back up SQLite consistently (including WAL state); this database is not encrypted. Future Docker access requires a runtime volume, never image contents.
+**Scope:** Listing refresh is wired through a local FastAPI API to SQLite and listing history. Sequential detail-content collection follows the completed listing save. Per-posting content checkpoints survive later failures. After successful collection, manual refresh explicitly normalizes all saved detail content and runs bounded OpenAI extraction with validated-cache reuse. Startup and GET requests never start analysis. Tests cover schema/migration behavior and API safety without invented postings. A single authorized live API run persisted 1,216 postings. Populated listing/content migration and revision lifecycles are verified offline on private backup copies; production migration and live refresh verification remain separate gates. No private postings or mock data are seeded. Use local disk, restrict filesystem access, and back up SQLite consistently (including WAL state); this database is not encrypted. Future Docker access requires a runtime volume, never image contents.
 
 ### Per-refresh observations (v5)
 
@@ -199,17 +199,17 @@ Fixed fields are queryable columns with separate arrangement and geographic valu
 
 Raw field values and instruction text are not copied into analysis JSON. Evidence rows retain source kind/field/hash and bounded spans against immutable compact revision history; `normalized_storage.restore_field_evidence` and `restore_source_span` reconstruct exact evidence. `normalize_saved_posting` commits one posting atomically and idempotently. `normalize_saved_postings` and `python -m waterlooworks_flash_next.normalized_storage <database>` are deliberate offline entry points for already saved rows; they perform no collection, authentication, network request, model generation, startup hook, GET analysis, API change, or UI change.
 
-### Explicit local inference (v8)
+### Explicit inference (v8 storage; schema14 OpenAI provider)
 
-`python -m waterlooworks_flash_next.inference <database> start --posting-id <id>` explicitly runs a job of selected saved postings (up to 10,000). Use `start --all` instead of `--posting-id` to select the whole saved workspace after explicit normalization. The CLI prints the job ID before inference so another terminal can inspect or stop it. `status`, `stop`, and `resume` are explicit commands. Manual Refresh creates an extraction job after collection and normalization; its job ID equals the refresh run ID for durable status/recovery. Startup and GET requests never create or resume jobs. Work is checkpointed per posting with at most four loopback LM Studio calls and bounded retries. An expired running lease is reported interrupted and requires `resume`; stop prevents new requests without claiming cancellation of an in-flight completion.
+`python -m waterlooworks_flash_next.inference <database> start --posting-id <id>` explicitly runs a job of selected saved postings (up to 10,000). Use `start --all` instead of `--posting-id` to select the whole saved workspace after explicit normalization. The CLI prints the job ID before inference so another terminal can inspect or stop it. `status`, `stop`, and `resume` are explicit commands. Manual Refresh creates an extraction job after collection and normalization; its job ID equals the refresh run ID for durable status/recovery. Startup and GET requests never create or resume jobs. Work is checkpointed per posting with at most four OpenAI Responses calls and no automatic paid retry. An expired running lease is reported interrupted and requires `resume`; stop prevents new requests without claiming cancellation of an in-flight completion.
 
-The provider and raw template are fixed to the owner-selected loaded `qwen3.8-27b@q4_k_m` at `http://127.0.0.1:1234`, thinking on, official explicit low-effort sentence, 4,096 maximum completion tokens, no redirects and no environment proxy. Prompts include all saved content fields but no listing observations. Reserved role delimiters are escaped. Cache identity includes exact content/input hashes and model/template/input/validator settings, so listing-only count changes do not call the model again.
+The production provider is fixed to `https://api.openai.com/v1/responses`, `gpt-5.6-luna`, reasoning `low`, default service tier, strict structured output and `store=false`. Source-grounding validators and trusted current caches remain authoritative. Default limits are20 actual attempts and a $1 known-cost stop threshold per run—not a guaranteed cap; outstanding requests may add charges. Unknown usage or exhausted limits can leave analysis incomplete. See [provider lifecycle, accounting, compatibility and remaining live gates](docs/openai-provider.md).
 
-Only source-grounded validated pay rates and new skill mentions become immutable model-provenance children. Complex pay supports fixed/range/open bounds and exact eligibility tiers; explicit currency/period/hours/payout evidence is required, while unknown currency/period remains valid. Benefits, stipends, equivalents, unsupported guesses, negated skills and ungrounded requirements are rejected atomically. Raw prompts, responses and reasoning are never stored. A content-hash view hides stale model pointers after descriptive source changes. Read-only posting APIs/UI display accepted current-version model pay and skills separately from deterministic facts; stale content or obsolete validation versions are not used. Manual Refresh is the explicit provider-running UI action; the local CLI/functions remain available. Refresh covers every saved posting with detail content, skips postings without saved details and parser-complete work, and reuses validated caches. Progress reports processed/accepted/rejected/failed/skipped/cache-hit counts without private source text or reasoning. A missing local model fails the analysis phase without losing collected data; no automatic resume occurs. The refresh single-flight lock remains held through analysis. To stop local extraction, use `python -m waterlooworks_flash_next.inference <database> stop <refresh-run-id>`; in-flight calls finish before it stops.
+Only source-grounded validated pay rates and new skill mentions become immutable model-provenance children. Complex pay supports fixed/range/open bounds and exact eligibility tiers; explicit currency/period/hours/payout evidence is required, while unknown currency/period remains valid. Benefits, stipends, equivalents, unsupported guesses, negated skills and ungrounded requirements are rejected atomically. Raw prompts, responses and reasoning are never stored. A content-hash view hides stale model pointers after descriptive source changes. Read-only posting APIs/UI display accepted current-version model pay and skills separately from deterministic facts; stale content or obsolete validation versions are not used. Manual Refresh is the explicit provider-running UI action; the local CLI/functions remain available. Refresh covers every saved posting with detail content, skips postings without saved details and parser-complete work, and reuses validated caches. Progress reports processed/accepted/rejected/failed/skipped/cache-hit counts without private source text or reasoning. A missing/unusable OpenAI key fails refresh admission before collection; later provider failures preserve saved checkpoints without automatic resume. The refresh single-flight lock remains held through analysis. To stop extraction, use `python -m waterlooworks_flash_next.inference <database> stop <refresh-run-id>`; in-flight calls finish before it stops.
 
 ### Source-grounded index checkpoints (v9)
 
-`npm run extract -- start --all --concurrency 4` is the explicit saved-data-only overnight path, optimized for the tested loaded Gemma model. It does not refresh, load models, or resume automatically. Additive `source_extraction_*` tables retain run ownership, per-slice checkpoints, source-current immutable technical names and exact-decimal pay candidates. Evidence uses Unicode-code-point spans into existing source revisions, not copied descriptions or model reasoning. Existing normalized pay/skills projections remain unchanged in storage. The read-side integration now deliberately uses selected source-current accepted pay for detail, listing and Similar jobs compensation, and exposes broader terms as keywords rather than applicant requirements. See [saved enrichment authority](docs/local-api.md#saved-enrichment-authority) for precedence, freshness checks and limitations. See [benchmark methodology, results, stop/resume commands and storage caveats](benchmarks/README.md). Back up consistently before upgrading; older running APIs must be restarted to recognize schema 9.
+`npm run extract -- start --all --concurrency 4` is the explicit saved-data-only overnight path, using the shared bounded Python OpenAI provider (Gemma is now an explicit local benchmark only). It does not refresh, load models, or resume automatically. Additive `source_extraction_*` tables retain run ownership, per-slice checkpoints, source-current immutable technical names and exact-decimal pay candidates. Evidence uses Unicode-code-point spans into existing source revisions, not copied descriptions or model reasoning. Existing normalized pay/skills projections remain unchanged in storage. The read-side integration now deliberately uses selected source-current accepted pay for detail, listing and Similar jobs compensation, and exposes broader terms as keywords rather than applicant requirements. See [saved enrichment authority](docs/local-api.md#saved-enrichment-authority) for precedence, freshness checks and limitations. See [benchmark methodology, results, stop/resume commands and storage caveats](benchmarks/README.md). Back up consistently before upgrading; older running APIs must be restarted to recognize schema 9.
 
 An experimental `--shared-job-prefix` extraction profile places complete canonical job details before task-specific alias maps and runs each posting's slices sequentially. It is opt-in: default v7 requests/scheduling and standalone country scanning are unchanged. Source/configuration cache checks and exact evidence validation remain mandatory. See [shared-prefix usage, compatibility and pending live acceptance](docs/inference-prefix-caching.md); matching prefixes do not guarantee provider KV retention.
 
@@ -253,7 +253,7 @@ See **[the complete posting model](docs/posting-model.md)** for v3 metadata and 
 - **Brand mark:** the user-requested original SVG in `frontend/public/brand.svg` uses two concentric circular rings, each split into three blue arcs, with the inner ring rotated 60 degrees so their gaps alternate, inspired by the supplied WaterlooWorks favicon rather than the university crest. It appears to the left of the title; it is not an official WaterlooWorks logo. The user-requested custom `frontend/src/app/BrandMark.tsx` animation reuses that SVG geometry: during login/refresh the outer ring turns clockwise every 4.8 seconds while the inner turns counterclockwise every 3.2 seconds. It settles back to the original mark when work ends and stays static with reduced motion. Only the custom brand asset is animated; HeroUI controls remain unmodified.
 - **API docs:** Swagger UI at `/doc`; machine OpenAPI at `/doc/openapi.json`. Generated frontend types and CI drift checks keep the contract synchronized.
 
-See [local API setup and safeguards](docs/local-api.md) and complete [Firebase configuration](docs/firebase-auth.md) first. HTTP development requires the explicit loopback-only auth exception. Start the API on loopback port 8787, then `npm run dev -- --host 127.0.0.1` for the frontend on port 5173 (or use `npm run dev --workspace frontend -- --host 127.0.0.1`). Vite proxies `/api` and `/doc`; no cross-origin browser credentials are needed. **Containers have not been started; backend container integration remains pending.**
+See [local API setup and safeguards](docs/local-api.md) and complete [Firebase configuration](docs/firebase-auth.md) first. HTTP development requires the explicit loopback-only auth exception. Start the API on loopback port 8787, then `npm run dev -- --host 127.0.0.1` for the frontend on port 5173 (or use `npm run dev --workspace frontend -- --host 127.0.0.1`). Vite proxies `/api` and `/doc`; no cross-origin browser credentials are needed. **Production containers have been built and deployed on Linux ARM64; saved-data preservation, sandboxed Chromium, HTTPS/session guards and a bounded OpenAI pilot passed.** Real end-to-end refresh quality and Google/Duo acceptance remain separate checks. See [production boundaries and parent gates](docs/deployment.md).
 
 ## Proposed project structure
 
@@ -270,13 +270,13 @@ waterlooworks-flash-next/
 ├── .dockerignore             # Exclude experiments, secrets, and local data
 ├── .prettierignore
 ├── .prettierrc.json          # Shared Prettier configuration
-├── compose.yaml             # dev/prod profiles
+├── compose.yaml             # frontend dev / production SPA + private API
 ├── docs/
 │   └── scraping-workflow.md # Verified Playwright navigation flowchart
 ├── backend/
 │   ├── pyproject.toml       # Python dependencies, Ruff, and tool settings
 │   ├── uv.lock
-│   ├── Dockerfile          # Placeholder until backend entry point is defined
+│   ├── Dockerfile          # Locked nonroot Python/Node/Playwright runtime
 │   ├── src/
 │   │   └── waterlooworks_flash_next/
 │   │       ├── __init__.py
@@ -325,7 +325,7 @@ waterlooworks-flash-next/
 - Keep scraping, analysis, and UI concerns separate. Promote verified experimental work into the backend rather than depending on `.experiment/` at runtime.
 - Tooling: npm workspaces with a root `package-lock.json`, pytest for Python, Vitest and Testing Library for React, mypy for Python type checks, and GitHub Actions for CI. Explicit local browser verification uses Playwright; no live platform access runs in CI.
 - Backend API: FastAPI + Uvicorn, with OpenAPI-generated frontend types. Listings and detail content are wired to SQLite v6; automated scheduling remains disabled.
-- Private database files live under ignored `data/`; browser state remains under ignored `.experiment/`. Docker runtime volume configuration: **Placeholder — to be defined.**
+- Private database files live under ignored `data/`; browser state must use an explicit private `WW_BROWSER_PROFILE` path. Production Compose provides separate private database and fresh browser-profile volumes; see [provisioning and recovery](docs/deployment.md).
 - Test directories do not imply mock datasets or fixtures; follow the placeholder policy below.
 
 ## Deployment model
@@ -337,17 +337,14 @@ The deployment goal is to start the service with a single Docker Compose command
 - **`dev`:** Local development.
 - **`prod`:** Normal self-hosted use.
 
-The initial Compose configuration builds **only the frontend**, without a backend service. Local API integration is tested outside Docker; container API/proxy wiring remains pending:
+Production Compose now builds the SPA/API proxy and a single nonroot backend with private persistent DB/profile volumes and read-only runtime file secrets. Only the frontend is published, on loopback8080 behind an operator-provided TLS proxy/Tailscale Serve. No GPU or automatic collection/inference is needed for browsing.
 
 ```sh
-# Development: http://localhost:5173
-docker compose --profile dev up --build
-
-# Production: http://localhost:8080
-docker compose --profile prod up -d --build
+# Credential-free artifact validation only; does not start containers.
+docker compose --env-file deployment/production.env.example --profile prod config --quiet
 ```
 
-Both profiles bind to localhost. Development mounts frontend source for hot reload; rebuild after dependency or configuration changes. Containerized backend services, private storage mounts, and automated scheduling remain placeholders; authenticated exploration currently runs locally. Container execution requires a running Docker daemon.
+See [production artifacts, secret provisioning, exact TLS boundary, migration and parent gates](docs/deployment.md) before any build/start or data transfer. New installations must choose their hostname/TLS exposure and explicitly authorize private-data provisioning. The `dev` profile remains frontend-only with loopback5173/source hot reload and a separately operated local API; supply the non-secret example explicitly for Compose interpolation. Linux x86_64 and ARM64 image builds and confined sandbox checks passed. These checks do not guarantee every live SSO flow or extraction result.
 
 ## Backend core
 
@@ -407,11 +404,33 @@ Start Pi **from the repository root**, trust the project when prompted, and rest
 
 The HeroUI server configuration remains project-scoped; no global MCP settings are needed or changed. Local Pi packages, caches, traces, and session artifacts are ignored. Other MCP clients may read `.mcp.json`, but their startup and trust behavior is client-specific; `.pi/mcp.json` applies only to Pi.
 
+## Headless refresh and admin status
+
+Set `WW_BROWSER_PROFILE` to an absolute private writable profile directory outside tracked/build content (the ignored `.experiment/browser-profile` is suitable for local operation). `WW_BROWSER_HEADLESS=1` is the default; only explicit `0` selects optional headed local operation. Chromium sandbox is enabled; no browser/CDP/VNC port is exposed. Keep DEBUG/PWDEBUG unset and never capture login traces/screenshots.
+
+Authentication has one fixed180-second overall deadline, including credential entry and Duo; observing a code or trusting the device never extends it. Submission is once only. Unknown origins/flows and timeouts raise sanitized exceptions and close the browser; the API remains alive, checkpoints finalize and the provider OS lease is released. No extra MFA pushes or bypass are introduced.
+
+If approval is required, the admin opens **Admin settings** from the account button. The current code exists only in memory and the admin-only no-store status GET, never SQLite, console, logs, SSE or provider input. The panel polls only while open/visible, with bounded requests; code clears on terminal/expiry, close, logout, account change and tab hiding. Members do not fetch code or usage. The same modal shows recent OpenAI usage/limits, known versus unknown costs, and included token subsets without double-counting. Existing Google step-up remains mandatory for key reveal; the WaterlooWorks password is never revealable.
+
+**B2/B3 implementation checks are not deployment acceptance.** Docker/Compose/nginx, runtime secret-file loading and exact forwarded-origin trust are implemented; [B3 production gates](docs/deployment.md) remain for actual image/sandbox/TLS/secret transfer, headless SSO/Duo/Google step-up and bounded paid-provider acceptance. No live/private/remote operations were run for these stages.
+
+## Admin settings and current refresh scope
+
+Admin settings separates Credentials, Usage and Refresh. The owner-approved custom native `AdminSettingsDialog.tsx` shell and its CSS provide stable compact bounds—up to 960 × 760 px, constrained by the viewport—with internal scrolling and native dialog focus behavior. HeroUI's documented modal size props could not provide that bounded fixed-size combination. Only the shell is custom; HeroUI controls retain their documented appearance. Credential cleanup, fresh Google verification for key reveal, and admin-only authority remain unchanged. Posting details no longer include a standalone Keywords and skills card; stored evidence and Similar jobs matching remain intact.
+
+Current manual Refresh saves listings and details, normalizes saved content, then runs Python pay/skill inference. Broader source-keyword/salary extraction and country inference remain separate explicit CLI stages; a unified all-stage coordinator is planned, not implemented. Production artifact defaults remain 12 detail pages, 20 paid attempts and a $1 known-cost stop per run. Limits can stop extraction well below $1, and existing error categories may report that stop as configuration/internal failure. This is not a guaranteed spending cap or a promise of full-workspace completion. No new installation starts collection automatically.
+
 ## Local credentials
 
-Put your WaterlooWorks credentials in the root `.credentials.json`, using the `username` and `password` keys. Manage its values yourself; agents do not inspect or overwrite it. It is ignored by Git and Prettier and excluded from Docker build contexts.
+The root `.credentials.json` is obsolete and is never read or migrated. Its Git, Docker and formatting exclusions remain protective. The owner can delete the legacy file unread after review; never expose its contents.
 
-Agents must not view or inspect this file. Authentication code loads it dynamically only when needed, without printing credentials or including them in logs, errors, or artifacts. Never commit the file or bake it into an image; future container access requires an explicit runtime secret or read-only mount. This is plaintext storage, so restrict local filesystem access; Git ignore rules are not encryption.
+The admin clicks the profile/account button to open **Admin settings** directly, enters both WaterlooWorks fields, and selects **Save**. Members keep only their Sign out menu. The saved username/email is visible only to the admin. The password is never read back or revealable; its fixed placeholder is not input. Enter both fields to replace the pair; both drafts clear on save success, close, sign-out and account changes. Saving replaces one shared pair without testing login or collecting jobs. Only explicit manual Refresh uses it.
+
+Schema12 adds one authenticated-encrypted Fernet pair without changing source history or app users/sessions. Additive schema13 adds encrypted OpenAI configuration and bounded one-use reveal challenges. The separate backend `WW_CREDENTIALS_KEY` is kept in ignored `.env` or a runtime secret, never SQLite or browser storage. Missing, invalid, lost or mismatched keys fail closed; there is no plaintext fallback or automatic rotation. Restrict local file access: other database content is not encrypted, and possession of both the key and database defeats at-rest separation. Do not enable body logging, tracing or screenshots around sensitive settings/login flows.
+
+Admin settings also saves/replaces an OpenAI API key without invoking OpenAI. All actual Python and normal Node extraction paths now use OpenAI; local benchmarks remain explicit and never a fallback. The fixed configuration is `gpt-5.6-luna`, reasoning `low`; the dated Standard estimate (2026-09-09) is USD per million tokens: input0.20, cached read0.02, cache write0.25, output1.20—not an invoice. The model/pricing sources are linked in the step-up documentation below. **Reveal → Verify with Google** requires another verified Google OAuth login for the same admin and current session, even after reload. The key is transiently visible for30seconds and clears on Hide/close/logout/account change/tab hiding. The WaterlooWorks password remains permanently unrevealable. See [step-up safeguards and live acceptance](docs/local-api.md#openai-admin-controls-schema13).
+
+See [offline migration/key initialization and deployment steps](docs/local-api.md#waterlooworks-admin-credentials-schema12). Provision the key explicitly only after reviewed migration and while the backend is stopped; agents must never inspect secrets or private data.
 
 ## Agent workspace
 
@@ -442,7 +461,7 @@ Use placeholders for anything not yet provided, verified, or implemented. Do not
 
 ## Status
 
-HeroUI posting browser plus a local listings API and SQLite history. A single live API E2E verified fresh authentication, **25 pages / 1,216 unique postings**, persisted revisions, SSE progress, duplicate-refresh rejection (409), and cooldown rejection (429). The dedicated browser profile stays private under `.experiment/browser-profile/`.
+HeroUI posting browser plus a local listings API and SQLite history. A single live API E2E verified fresh authentication, **25 pages / 1,216 unique postings**, persisted revisions, SSE progress, duplicate-refresh rejection (409), and cooldown rejection (429). The dedicated browser profile is now explicitly configured with `WW_BROWSER_PROFILE`; keep it private and ignored. Headless/Duo production validation has not been performed.
 
 Read-only browser checks against the current 1,218 stored listings verified the stacked card fields, deadline parsing, all six sorts, debounced title search, city/organization grouped multi-select checkbox lists, disabled unknown country, persistent pagination, inner scrolling, mobile overflow containment, theme persistence, and console scroll pause/resume. Deadline checks also ran with the browser timezone set to Asia/Tokyo. Individual posting views now read stored content; their read-only browser acceptance is pending. Browser checks made zero refresh POSTs and zero WaterlooWorks requests, with no page errors.
 

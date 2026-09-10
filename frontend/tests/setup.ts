@@ -11,6 +11,23 @@ Object.defineProperty(Element.prototype, 'getAnimations', {
   value: () => [],
 });
 
+// Missing native dialog methods only: no top-layer, inertness, focus trap or
+// scrolling simulation. Those browser behaviors require separate acceptance.
+Object.defineProperties(HTMLDialogElement.prototype, {
+  showModal: {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.setAttribute('open', '');
+    },
+  },
+  close: {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.removeAttribute('open');
+    },
+  },
+});
+
 // JSDOM has no OS theme. Real-browser checks cover native color-scheme matching.
 Object.defineProperty(window, 'matchMedia', {
   configurable: true,

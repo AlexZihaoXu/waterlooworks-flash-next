@@ -10,9 +10,7 @@ from pydantic import ValidationError
 from waterlooworks_flash_next import inference as inference_module
 from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 from waterlooworks_flash_next.inference import (
-    ENDPOINT,
     MAX_TOKENS,
-    MODEL_ID,
     InferenceConfig,
     InferenceError,
     _checkpoint_accept,
@@ -26,6 +24,8 @@ from waterlooworks_flash_next.inference import (
     resume_inference_job,
 )
 from waterlooworks_flash_next.model_validation import ValidatedExtraction
+from waterlooworks_flash_next.openai_provider import ENDPOINT
+from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
 
 
 def test_v8_migration_creates_empty_durable_queue_without_starting_work(
@@ -45,10 +45,10 @@ def test_v8_migration_creates_empty_durable_queue_without_starting_work(
     connection.close()
 
 
-def test_configuration_is_exact_loopback_low_effort_and_bounded() -> None:
+def test_configuration_is_exact_openai_low_effort_and_bounded() -> None:
     config = InferenceConfig()
-    assert ENDPOINT == "http://127.0.0.1:1234"
-    assert MODEL_ID == "qwen3.8-27b@q4_k_m"
+    assert ENDPOINT == "https://api.openai.com/v1/responses"
+    assert MODEL_ID == "gpt-5.6-luna"
     assert MAX_TOKENS == 4096
     assert config.concurrency <= 4
     for invalid in [{"concurrency": 5}, {"max_attempts": 4}]:

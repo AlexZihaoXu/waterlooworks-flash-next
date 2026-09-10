@@ -23,13 +23,15 @@ from waterlooworks_flash_next.compact_history import (
 )
 from waterlooworks_flash_next.content_schema import migrate_content
 from waterlooworks_flash_next.country_schema import migrate_country_inference
+from waterlooworks_flash_next.credentials import migrate_credentials
 from waterlooworks_flash_next.detail_schema import migrate_details
 from waterlooworks_flash_next.inference_schema import migrate_inference
 from waterlooworks_flash_next.normalized_schema import migrate_normalized_storage
 from waterlooworks_flash_next.observations import migrate_observations, utc_timestamp
+from waterlooworks_flash_next.openai_settings import migrate_openai_settings
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 14
 
 
 class DatabaseError(Exception):
@@ -430,6 +432,31 @@ def open_database(path: Path) -> sqlite3.Connection:
             if version == 10:
                 migrate_app_auth(connection)
                 connection.execute("PRAGMA user_version = 11")
+                version = 11
+            if version == 11:
+                migrate_credentials(connection)
+                connection.execute("PRAGMA user_version = 12")
+                version = 12
+            if version == 12:
+                migrate_openai_settings(connection)
+                connection.execute("PRAGMA user_version = 13")
+        # SQLite's documented parent-table rebuild requires FK enforcement off
+        # outside the transaction. Earlier migrations retain their original guards.
+        if (
+            SCHEMA_VERSION >= 14
+            and connection.execute("PRAGMA user_version").fetchone()[0] == 13
+        ):
+            from waterlooworks_flash_next.openai_schema import migrate_openai_provider
+
+            connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    if connection.execute("PRAGMA user_version").fetchone()[0] == 13:
+                        migrate_openai_provider(connection)
+                        connection.execute("PRAGMA user_version = 14")
+            finally:
+                connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
     except Exception as error:

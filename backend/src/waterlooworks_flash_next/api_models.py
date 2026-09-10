@@ -161,6 +161,8 @@ class ExtractionStatus(Contract):
     state: ExtractionState = "not_requested"
     run_id: str | None = None
     configuration_hash: str | None = None
+    origin_run_ids: list[str] = Field(default_factory=list)
+    reused_slices: int = 0
     accepted_slices: int = 0
     total_slices: int = 0
 

@@ -11,6 +11,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from waterlooworks_flash_next.api_models import RefreshLog, RefreshSnapshot
+from waterlooworks_flash_next.auth_challenge import AuthChallenge, AuthChallengeStatus
+from waterlooworks_flash_next.credentials import CredentialStore
 from waterlooworks_flash_next.database import (
     StoredListing,
     open_database,
@@ -30,7 +32,8 @@ from waterlooworks_flash_next.export import EXPORT_FIELDS
 from waterlooworks_flash_next.jobs import open_all_jobs
 from waterlooworks_flash_next.listings import ListingCollection, ListingFetchError
 from waterlooworks_flash_next.logging import stage_logger
-from waterlooworks_flash_next.login import LoginSession, start_login
+from waterlooworks_flash_next.login import AuthDeadline, LoginSession, start_login
+from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
 from waterlooworks_flash_next.refresh_logging import (
     PAGE_FORMAT,
     safe_eta_seconds,
@@ -41,7 +44,7 @@ COOLDOWN_SECONDS = 300
 
 
 class RefreshAnalysisError(Exception):
-    """Saved collection survives an unsuccessful local analysis phase."""
+    """Saved collection survives an unsuccessful OpenAI analysis phase."""
 
 
 def configured_detail_limit(value: str | None) -> int | None:
@@ -119,17 +122,19 @@ class RefreshService:
     def __init__(
         self,
         path: Path,
-        credentials_path: Path | None,
+        project_root: Path | None,
         *,
         detail_limit: int | None = None,
     ) -> None:
         self.path = path
-        self.credentials_path = credentials_path
+        self.project_root = project_root
         self.detail_limit = detail_limit
         self.lock = threading.RLock()
         self.state = RefreshSnapshot()
         self.worker: threading.Thread | None = None
         self.cooldown_until: datetime | None = None
+        self.provider_lease: ProviderLease | None = None
+        self.auth_challenge = AuthChallenge()
 
     def restore(self) -> None:
         """Restore cooldown/unfinished state without automatically restarting."""
@@ -196,6 +201,12 @@ class RefreshService:
                 )
             return snapshot
 
+    def challenge_status(self) -> AuthChallengeStatus:
+        with self.lock:
+            return self.auth_challenge.snapshot(
+                self.state.run_id if self.state.status == "running" else None
+            )
+
     def emit(self, message: str, level: str = "info") -> None:
         with self.lock:
             sequence = self.state.logs[-1].sequence + 1 if self.state.logs else 1
@@ -219,14 +230,31 @@ class RefreshService:
 
     def start(self) -> str:
         with self.lock:
-            if self.credentials_path is None:
+            if self.project_root is None:
                 raise RuntimeError("Manual refresh is disabled.")
-            run_id = claim_refresh(self.path)
+            CredentialStore(self.path).require_ready()
+            from waterlooworks_flash_next.openai_ledger import BudgetLimits
+            from waterlooworks_flash_next.openai_provider import ResponsesProvider
+
+            ResponsesProvider(self.path).require_ready()
+            BudgetLimits.from_environment()
+            lease = ProviderLease(self.path)
+            try:
+                lease.acquire()
+            except ProviderBusy:
+                raise RefreshConflict(409) from None
+            try:
+                run_id = claim_refresh(self.path)
+            except Exception:
+                lease.close()
+                raise
+            self.provider_lease = lease
             self.state = RefreshSnapshot(
                 run_id=run_id, status="running", stage="authentication"
             )
             self.emit(
-                "Fresh authentication starting. Approve Duo in the browser if needed."
+                "Fresh authentication starting. If approval is required, "
+                "the admin can open Admin settings from the account button."
             )
             self.worker = threading.Thread(
                 target=self._run, args=(run_id,), name="listing-refresh", daemon=False
@@ -234,7 +262,11 @@ class RefreshService:
             try:
                 self.worker.start()
             except Exception:
-                self._finish(run_id, False, "internal")
+                try:
+                    self._finish(run_id, False, "internal")
+                finally:
+                    lease.close()
+                    self.provider_lease = None
                 raise RuntimeError("Could not start refresh worker.") from None
             return run_id
 
@@ -280,7 +312,7 @@ class RefreshService:
                 "Refresh completed with the server detail cap; "
                 "remaining details were not requested."
                 if self.state.detail_limited
-                else "Collection and local extraction completed."
+                else "Collection and OpenAI extraction completed."
                 if self.state.analysis_job_id is not None
                 else "Listing and detail-content refresh completed."
             )
@@ -320,14 +352,13 @@ class RefreshService:
             self.state.analysis_cache_hits = cache_hits
         if log and previous != (completed, cache_hits):
             self.emit(
-                f"Local extraction: {completed}/{total} processed; "
+                f"OpenAI extraction: {completed}/{total} processed; "
                 f"{accepted} accepted, {rejected} rejected, {failed} failed, "
                 f"{skipped} skipped; {cache_hits} cache hits."
             )
 
     def _analyze_saved_data(self, run_id: str) -> None:
         from waterlooworks_flash_next.inference import (
-            MODEL_ID,
             InferenceConfig,
             create_inference_job,
             inference_job_status,
@@ -335,6 +366,7 @@ class RefreshService:
         )
         from waterlooworks_flash_next.inference_schema import _ERROR_CATEGORIES
         from waterlooworks_flash_next.normalized_storage import normalize_saved_postings
+        from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
 
         with self.lock:
             self.state.stage = "normalizing"
@@ -371,7 +403,7 @@ class RefreshService:
                 self.state.analysis_total = total
                 self.state.analysis_job_id = job_id
             self.emit(
-                f"Local extraction job {job_id}: {len(ids)} saved postings queued; "
+                f"OpenAI extraction job {job_id}: {len(ids)} saved postings queued; "
                 f"{total - len(ids)} without saved details skipped. Model {MODEL_ID}; "
                 "at most 4 simultaneous requests; validated cache reused."
             )
@@ -381,7 +413,12 @@ class RefreshService:
 
             progress()
             if inference_job_status(connection, job_id).persisted_status == "pending":
-                run_inference_job(connection, job_id, on_progress=progress)
+                run_inference_job(
+                    connection,
+                    job_id,
+                    on_progress=progress,
+                    provider_lease=self.provider_lease,
+                )
             progress()
             status = inference_job_status(connection, job_id)
             for reason, count in connection.execute(
@@ -391,24 +428,25 @@ class RefreshService:
             ):
                 if reason in _ERROR_CATEGORIES:
                     self.emit(
-                        f"Local extraction outcome: {reason}; {count} postings.",
+                        f"OpenAI extraction outcome: {reason}; {count} postings.",
                         "warning",
                     )
             if status.error_category in _ERROR_CATEGORIES:
                 self.emit(
-                    f"Local extraction failure category: {status.error_category}.",
+                    f"OpenAI extraction failure category: {status.error_category}.",
                     "error",
                 )
             if status.persisted_status != "completed":
                 self.emit(
-                    "Local extraction did not complete. Saved collection and accepted "
-                    "checkpoints are preserved. Check LM Studio and the saved job "
+                    "OpenAI extraction did not complete. Saved collection and accepted "
+                    "checkpoints are preserved. Check OpenAI usage, budget "
+                    "and the saved job "
                     "status; no automatic resume.",
                     "error",
                 )
-                raise RefreshAnalysisError("Local analysis did not complete.")
+                raise RefreshAnalysisError("OpenAI analysis did not complete.")
             self.emit(
-                "Local extraction completed. Rejected or unavailable facts remain "
+                "OpenAI extraction completed. Rejected or unavailable facts remain "
                 "unknown; no model reasoning or posting content was logged.",
                 "warning" if status.counts.get("rejected") else "info",
             )
@@ -416,11 +454,11 @@ class RefreshService:
             raise
         except Exception:
             self.emit(
-                "Local analysis failed; saved collection is preserved. "
+                "OpenAI analysis failed; saved collection is preserved. "
                 "Diagnostics suppressed.",
                 "error",
             )
-            raise RefreshAnalysisError("Local analysis failed.") from None
+            raise RefreshAnalysisError("OpenAI analysis failed.") from None
         finally:
             connection.close()
 
@@ -456,14 +494,23 @@ class RefreshService:
         category: str | None = "internal"
         handler = SafeRefreshHandler(self)
         scopes = [stage_logger(scope) for scope in ("login", "duo", "jobs", "listings")]
-        scrubber = DuoScrubber()
-        scopes[1].addFilter(scrubber)
         for logger in scopes:
             logger.addHandler(handler)
         try:
-            assert self.credentials_path is not None
-            session = start_login(self.credentials_path, block_service_workers=True)
-            submit_and_observe_duo(session)
+            assert self.project_root is not None
+            deadline = AuthDeadline()
+            self.auth_challenge.begin(run_id, deadline)
+            session = start_login(
+                self.path,
+                project_root=self.project_root,
+                block_service_workers=True,
+                deadline=deadline,
+            )
+            submit_and_observe_duo(
+                session,
+                lambda code: self.auth_challenge.publish(run_id, code),
+                lambda: self.auth_challenge.clear(run_id),
+            )
             if not at_waterlooworks(session.page):
                 raise RuntimeError("Authentication not confirmed.")
             source = open_all_jobs(session.page)
@@ -587,9 +634,10 @@ class RefreshService:
                 "error",
             )
         except (Exception, SystemExit):
-            # Includes the existing Duo timeout handler's SystemExit; no relogin.
+            # Safe terminal failure; never relogin or repeat an MFA push.
             category = "internal"
         finally:
+            self.auth_challenge.clear(run_id)
             if session:
                 try:
                     session.close()
@@ -600,7 +648,6 @@ class RefreshService:
                     )
             for logger in scopes:
                 logger.removeHandler(handler)
-            scopes[1].removeFilter(scrubber)
             try:
                 self._finish(run_id, success, category)
             except Exception:
@@ -611,14 +658,10 @@ class RefreshService:
                     "Run finalization failed; manual recovery is required.",
                     "error",
                 )
-
-
-class DuoScrubber(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        if str(record.msg).startswith("Detected verification code:"):
-            record.msg = "Duo approval required; use the code in the browser."
-            record.args = ()
-        return True
+            finally:
+                if self.provider_lease is not None:
+                    self.provider_lease.close()
+                    self.provider_lease = None
 
 
 class SafeRefreshHandler(logging.Handler):

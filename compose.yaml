@@ -20,6 +20,92 @@ services:
       target: prod
     ports:
       - '127.0.0.1:8080:8080'
+    environment:
+      WW_PUBLIC_HOST: ${WW_PUBLIC_HOST:?Set the exact public TLS host}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      app:
+        ipv4_address: 172.30.87.2
+    user: '101:101'
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,uid=101,gid=101,mode=0700
+    cap_drop: [ALL]
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+
+  backend:
+    profiles: [prod]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: prod
+    environment:
+      FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase_service_account
+      WW_CREDENTIALS_KEY_FILE: /run/secrets/ww_credentials_key
+      WW_AUTH_ORIGINS: https://${WW_PUBLIC_HOST:?Set the exact public TLS host}
+      WW_AUTH_TRUSTED_PROXY: 172.30.87.2
+      WW_AUTH_ALLOW_LOOPBACK_HTTP: '0'
+      WW_DATABASE: /app/data/waterlooworks.sqlite3
+      WW_BROWSER_PROFILE: /app/browser-profile
+      WW_BROWSER_HEADLESS: '1'
+      WW_ENABLE_REFRESH: ${WW_ENABLE_REFRESH:-0}
+      WW_DETAIL_LIMIT: ${WW_DETAIL_LIMIT:-12}
+      WW_OPENAI_REQUEST_LIMIT: ${WW_OPENAI_REQUEST_LIMIT:-20}
+      WW_OPENAI_KNOWN_COST_STOP_USD: ${WW_OPENAI_KNOWN_COST_STOP_USD:-1}
+    secrets:
+      - firebase_service_account
+      - ww_credentials_key
+    volumes:
+      - database:/app/data
+      - browser-profile:/app/browser-profile
+    networks:
+      app:
+        ipv4_address: 172.30.87.3
+    user: '10001:10001'
+    init: true
+    read_only: true
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=512m,uid=10001,gid=10001,mode=0700
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deployment/chromium-seccomp.json
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    stop_grace_period: 190s
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/opt/venv/bin/python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=3).close()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  database:
+  browser-profile:
+
+networks:
+  app:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.87.0/29
+
+secrets:
+  firebase_service_account:
+    file: ${WW_FIREBASE_SECRET_PATH:?Set the absolute private runtime file path}
+  ww_credentials_key:
+    file: ${WW_KEY_SECRET_PATH:?Set the absolute private runtime file path}

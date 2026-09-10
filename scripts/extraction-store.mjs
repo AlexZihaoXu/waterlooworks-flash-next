@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { extractionParts } from './extraction-engine.mjs';
 import { normalizeTerm } from './extraction-lib.mjs';
+import { compatibleOrigin } from './inference-reuse.mjs';
 
 const now = () => new Date().toISOString();
 export function transaction(db, fn) {
@@ -54,6 +55,18 @@ export function createRun(db, engine, ids, limit) {
     db.prepare(
       "UPDATE source_extraction_runs SET status='stopped',owner=NULL WHERE status='running' AND lease_until_ms<?",
     ).run(Date.now());
+    // Snapshot latest intent BEFORE inserting the replacement run. Carry every
+    // compatible current item, even outside a bounded selection, atomically.
+    const priorRuns = Object.fromEntries(
+      ['salary', 'keywords'].map((mode) => [
+        mode,
+        db
+          .prepare(
+            'SELECT r.* FROM source_extraction_runs r WHERE EXISTS (SELECT 1 FROM source_extraction_items i WHERE i.run_id=r.run_id AND i.mode=?) ORDER BY created_at DESC,run_id DESC LIMIT 1',
+          )
+          .get(mode),
+      ]),
+    );
     const runId = randomUUID(),
       owner = randomUUID();
     db.prepare(
@@ -67,11 +80,12 @@ export function createRun(db, engine, ids, limit) {
       now(),
       now(),
     );
-    const sources = db
+    const allSources = db
       .prepare(
         'SELECT c.posting_id,c.content_hash,c.content_json,(SELECT max(r.revision_id) FROM posting_content_revisions r WHERE r.posting_id=c.posting_id AND r.content_hash=c.content_hash) revision_id FROM posting_contents c ORDER BY CAST(c.posting_id AS INTEGER)',
       )
-      .all()
+      .all();
+    const sources = allSources
       .filter((r) => !ids.length || ids.includes(r.posting_id))
       .slice(0, limit);
     if (ids.some((id) => !sources.some((s) => s.posting_id === id)))
@@ -79,21 +93,75 @@ export function createRun(db, engine, ids, limit) {
     const insert = db.prepare(
       'INSERT INTO source_extraction_items(run_id,posting_id,content_revision_id,content_hash,mode,part,status,extraction_id,rejected_count) VALUES(?,?,?,?,?,?,?,?,?)',
     );
-    for (const source of sources)
+    const selectedIds = new Set(sources.map((source) => source.posting_id));
+    for (const source of allSources)
       for (const task of extractionParts(
         JSON.parse(source.content_json).fields,
       )) {
-        const cached = db
-          .prepare(
-            'SELECT extraction_id,rejected_count FROM source_extractions WHERE configuration_hash=? AND posting_id=? AND content_hash=? AND mode=? AND part=?',
-          )
-          .get(
-            engine.configurationHash,
-            source.posting_id,
-            source.content_hash,
-            task.mode,
-            task.part,
-          );
+        const prior = priorRuns[task.mode];
+        const selected = selectedIds.has(source.posting_id);
+        if (
+          !selected &&
+          prior &&
+          db
+            .prepare(
+              "SELECT 1 FROM source_extraction_items WHERE run_id=? AND posting_id=? AND mode=? AND status IN ('pending','running') LIMIT 1",
+            )
+            .get(prior.run_id, source.posting_id, task.mode)
+        )
+          continue;
+        let cached =
+          prior &&
+          db
+            .prepare(
+              `SELECT e.extraction_id,e.rejected_count,
+          origin.configuration_json,origin.configuration_hash
+          FROM source_extraction_items i JOIN source_extractions e USING(extraction_id)
+          JOIN source_extraction_runs origin ON origin.run_id=e.run_id
+          WHERE i.run_id=? AND i.posting_id=? AND i.content_hash=? AND i.content_revision_id=?
+          AND i.mode=? AND i.part=? AND i.status IN ('accepted','partial')
+          AND e.posting_id=i.posting_id AND e.content_hash=i.content_hash
+          AND e.content_revision_id=i.content_revision_id AND e.mode=i.mode AND e.part=i.part
+          AND e.configuration_hash=origin.configuration_hash AND e.rejected_count=i.rejected_count`,
+            )
+            .get(
+              prior.run_id,
+              source.posting_id,
+              source.content_hash,
+              source.revision_id,
+              task.mode,
+              task.part,
+            );
+        if (
+          cached &&
+          (!compatibleOrigin(cached, engine, 'extraction') ||
+            !compatibleOrigin(
+              cached,
+              {
+                configuration: JSON.parse(prior.configuration_json),
+                configurationHash: prior.configuration_hash,
+              },
+              'extraction',
+            ))
+        )
+          cached = null;
+        const priorFailure =
+          !selected &&
+          prior &&
+          compatibleOrigin(prior, engine, 'extraction') &&
+          db
+            .prepare(
+              "SELECT status,rejected_count FROM source_extraction_items WHERE run_id=? AND posting_id=? AND content_hash=? AND content_revision_id=? AND mode=? AND part=? AND status IN ('failed','rejected','stale')",
+            )
+            .get(
+              prior.run_id,
+              source.posting_id,
+              source.content_hash,
+              source.revision_id,
+              task.mode,
+              task.part,
+            );
+        if (!selected && !cached && !priorFailure) continue;
         insert.run(
           runId,
           source.posting_id,
@@ -101,9 +169,13 @@ export function createRun(db, engine, ids, limit) {
           source.content_hash,
           task.mode,
           task.part,
-          cached ? (cached.rejected_count ? 'partial' : 'accepted') : 'pending',
+          cached
+            ? cached.rejected_count
+              ? 'partial'
+              : 'accepted'
+            : (priorFailure?.status ?? 'pending'),
           cached?.extraction_id ?? null,
-          cached?.rejected_count ?? 0,
+          cached?.rejected_count ?? priorFailure?.rejected_count ?? 0,
         );
       }
     return { runId, owner, postings: sources.length };
@@ -134,7 +206,9 @@ export function resumeRun(db, engine, runId) {
       "UPDATE source_extraction_runs SET status='running',owner=?,lease_until_ms=?,stop_requested=0,updated_at=? WHERE run_id=?",
     ).run(owner, Date.now() + 120000, now(), runId);
     db.prepare(
-      "UPDATE source_extraction_items SET status=CASE WHEN attempts<2 THEN 'pending' ELSE 'failed' END WHERE run_id=? AND status IN ('running','failed')",
+      engine.configuration.provider === 'openai-responses'
+        ? "UPDATE source_extraction_items SET status=CASE WHEN attempts=0 THEN 'pending' ELSE 'failed' END WHERE run_id=? AND status IN ('running','failed')"
+        : "UPDATE source_extraction_items SET status=CASE WHEN attempts<2 THEN 'pending' ELSE 'failed' END WHERE run_id=? AND status IN ('running','failed')",
     ).run(runId);
     return { runId, owner };
   });

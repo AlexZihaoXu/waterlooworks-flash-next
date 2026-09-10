@@ -227,7 +227,7 @@ class ListingSource:
             )
             if payload.page != 1 or len(payload.data) > page_size:
                 raise ValueError
-            # Read cookies dynamically, never from the credentials file.
+            # Read cookies dynamically from the authenticated browser context.
             headers = {
                 key: value
                 for key, value in response.request.headers.items()

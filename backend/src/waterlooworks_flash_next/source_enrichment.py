@@ -17,6 +17,7 @@ from waterlooworks_flash_next.api_models import (
 )
 from waterlooworks_flash_next.compensation_parser import PayAmount
 from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.inference_reuse import compatible_origin
 
 
 @dataclass
@@ -82,23 +83,28 @@ def read_source_enrichment(
         )
         rows = connection.execute(
             "SELECT i.*,c.content_hash current_hash,c.content_json,"
-            "e.extraction_id verified_id,ir.revision_id verified_revision "
+            "e.extraction_id verified_id,ir.revision_id verified_revision, "
+            "origin.run_id origin_run_id, e.content_revision_id origin_revision_id, "
+            "origin.configuration_json origin_configuration_json, "
+            "origin.configuration_hash origin_configuration_hash "
             "FROM source_extraction_items i "
             "LEFT JOIN posting_contents c ON c.posting_id=i.posting_id "
             "LEFT JOIN source_extractions_current e ON e.extraction_id=i.extraction_id "
             "AND e.posting_id=i.posting_id AND e.content_hash=i.content_hash "
-            "AND e.mode=i.mode AND e.part=i.part AND e.configuration_hash=? "
+            "AND e.mode=i.mode AND e.part=i.part "
             "AND e.rejected_count=i.rejected_count "
             "AND EXISTS (SELECT 1 FROM posting_content_revisions er "
             "WHERE er.revision_id=e.content_revision_id AND er.posting_id=e.posting_id "
             "AND er.content_hash=e.content_hash) "
+            "LEFT JOIN source_extraction_runs origin ON origin.run_id=e.run_id "
+            "AND origin.configuration_hash=e.configuration_hash "
             "LEFT JOIN posting_content_revisions ir "
             "ON ir.revision_id=i.content_revision_id "
             "AND ir.posting_id=i.posting_id AND ir.content_hash=i.content_hash "
             "WHERE i.run_id=? AND i.mode=?"
             + restriction
             + " ORDER BY i.posting_id,i.part",
-            (run["configuration_hash"], *parameters),
+            parameters,
         ).fetchall()
         grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
         for row in rows:
@@ -121,7 +127,23 @@ def read_source_enrichment(
                 if not config_valid
                 or i["content_hash"] != i["current_hash"]
                 or i["verified_revision"] is None
-                or (i["status"] in ("accepted", "partial") and i["verified_id"] is None)
+                or (
+                    i["status"] in ("accepted", "partial")
+                    and (
+                        i["verified_id"] is None
+                        or (
+                            i["origin_configuration_hash"] != run["configuration_hash"]
+                            and i["origin_revision_id"] != i["content_revision_id"]
+                        )
+                        or not compatible_origin(
+                            i["origin_configuration_json"],
+                            i["origin_configuration_hash"],
+                            run["configuration_json"],
+                            run["configuration_hash"],
+                            "extraction",
+                        )
+                    )
+                )
                 else "partial"
                 if i["status"] == "accepted" and i["rejected_count"]
                 else i["status"]
@@ -225,6 +247,19 @@ def read_source_enrichment(
                 state=state,
                 run_id=run["run_id"],
                 configuration_hash=run["configuration_hash"],
+                origin_run_ids=sorted(
+                    {
+                        item["origin_run_id"]
+                        for item, item_state in zip(items, statuses, strict=True)
+                        if item_state in ("accepted", "partial")
+                        and item["origin_run_id"] is not None
+                    }
+                ),
+                reused_slices=sum(
+                    item_state in ("accepted", "partial")
+                    and item["origin_run_id"] != run["run_id"]
+                    for item, item_state in zip(items, statuses, strict=True)
+                ),
                 accepted_slices=sum(s in ("accepted", "partial") for s in statuses),
                 total_slices=len(items),
             )

@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { OpenAIBridge } from './openai-bridge.mjs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { safeDatasetPath } from './benchmark-lib.mjs';
@@ -25,7 +27,7 @@ Options: --database PATH (default data/waterlooworks.sqlite3), --hours 10.
 Opt-in: --shared-job-prefix uses v8-shared-job-prefix and sequential slices per posting.
 Omit it for the validated v7 prompt/scheduling. Resume must repeat the original flag and bounds.
 Shared prefix is experimental: no guaranteed provider slot affinity or KV retention.
-Requires schema9/10/11, tested loaded Gemma Q2_K_XL at context65536/four slots.
+Requires schema9/10/11/12/13/14, schema14 for OpenAI gpt-5.6-luna/low; <=4 paid requests at once.
 No refresh, model loading, source updates or replacement of existing projections.
 Checkpointed source index/pay candidates are separate from authoritative UI analyses.`);
     return;
@@ -87,7 +89,9 @@ Checkpointed source index/pay candidates are separate from authoritative UI anal
   const db = new DatabaseSync(dbPath, { readOnly: action === 'status' });
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
   if (
-    ![9, 10, 11].includes(db.prepare('PRAGMA user_version').get().user_version)
+    ![9, 10, 11, 12, 13, 14].includes(
+      db.prepare('PRAGMA user_version').get().user_version,
+    )
   ) {
     db.close();
     throw new Error(
@@ -132,14 +136,25 @@ Checkpointed source index/pay candidates are separate from authoritative UI anal
     return;
   }
   let heartbeat;
+  let bridge;
+  let activeOwner;
   try {
-    const engine = await loadEngine({ concurrency, sharedJobPrefix });
+    if (db.prepare('PRAGMA user_version').get().user_version !== 14)
+      throw new Error('Schema14 is required for paid extraction');
+    bridge = new OpenAIBridge();
+    await bridge.initialize(dbPath);
+    const engine = await loadEngine({ concurrency, sharedJobPrefix, bridge });
     const ownership =
       action === 'start'
         ? createRun(db, engine, ids, limit)
         : resumeRun(db, engine, runId);
     runId = ownership.runId;
     const owner = ownership.owner;
+    activeOwner = owner;
+    await bridge.bind(runId, owner, 'extraction');
+    console.log(
+      'Paid OpenAI run: persisted request limit and known-cost stop threshold apply, not a hard monetary cap. Review admin usage before any new run after unknown usage.',
+    );
     console.log(
       `Run ${runId}; model ${engine.configuration.model.id}; concurrency ${concurrency}; deadline ${hours}h`,
     );
@@ -188,6 +203,17 @@ Checkpointed source index/pay candidates are separate from authoritative UI anal
             item.fields,
             item.mode,
             item.part,
+            createHash('sha256')
+              .update(
+                JSON.stringify([
+                  item.posting_id,
+                  item.content_hash,
+                  item.mode,
+                  item.part,
+                  engine.configurationHash,
+                ]),
+              )
+              .digest('hex'),
           );
           persistItem(db, engine, runId, owner, item, result);
           finished++;
@@ -222,20 +248,36 @@ Checkpointed source index/pay candidates are separate from authoritative UI anal
         "SELECT count(*) n FROM source_extraction_items WHERE run_id=? AND status IN ('pending','running')",
       )
       .get(runId).n;
-    const status = fatal ? 'failed' : pending ? 'stopped' : 'completed';
+    const failures = db
+      .prepare(
+        "SELECT count(*) n FROM source_extraction_items WHERE run_id=? AND status='failed'",
+      )
+      .get(runId).n;
+    const status =
+      fatal || failures ? 'failed' : pending ? 'stopped' : 'completed';
     db.prepare(
       'UPDATE source_extraction_runs SET status=?,owner=NULL,lease_until_ms=0,updated_at=? WHERE run_id=? AND owner=?',
     ).run(status, new Date().toISOString(), runId, owner);
     console.log(`Run ${runId}: ${status}`);
     console.table(counts(db, runId));
-    if (fatal) process.exitCode = 1;
+    if (fatal || failures) process.exitCode = 1;
     else if (pending) process.exitCode = 2;
   } finally {
     clearInterval(heartbeat);
+    if (bridge) await bridge.close();
+    if (activeOwner) {
+      db.prepare(
+        "UPDATE source_extraction_runs SET status='stopped',owner=NULL,lease_until_ms=0 WHERE run_id=? AND owner=? AND status='running'",
+      ).run(runId, activeOwner);
+    }
     db.close();
   }
 }
 main().catch((error) => {
-  console.error(`Extraction did not proceed: ${error.message}`);
+  console.error(
+    error?.message === 'Invalid work bounds'
+      ? 'Invalid work bounds'
+      : 'Extraction did not proceed; check schema, bounds, provider ownership and OpenAI settings/usage. Diagnostics suppressed.',
+  );
   process.exitCode = 1;
 });

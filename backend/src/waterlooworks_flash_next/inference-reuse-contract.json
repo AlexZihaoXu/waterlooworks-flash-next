@@ -1,0 +1,20 @@
+{
+  "policy": "compatible-origin-v1",
+  "legacyModel": "unsloth/gemma-4-26b-a4b-it",
+  "openaiModel": "gpt-5.6-luna",
+  "openaiProfile": "openai-responses-low-strict-v1",
+  "extraction": {
+    "version": "source-spans-v7",
+    "validatorFile": "extraction-lib.mjs",
+    "validatorHash": "8fc82174cd22fbc59557e4d74297ccedfcb26a9613d1c5078b458bc37693bf1d",
+    "salaryPromptHash": "bd8f309307572f1f445ad826596adf79c4a9143be0120b4e1f11c22de81de08e",
+    "keywordsPromptHash": "d05d08935b3d26711710a7d6b505b9367a42ad5a106aa298f916489af0bdbe09"
+  },
+  "country": {
+    "version": "job-country-v1",
+    "validatorFile": "country-lib.mjs",
+    "validatorHash": "ca3ac6fd0616c76d6a4bab5e2d233b0cb7e0eee309dd397ceb7d66ca81806940",
+    "promptHash": "5ef1f1682d2b9475b9be38cc18175c24fcd20e7ae0d86928eab04e3ebce8d550",
+    "countriesHash": "b789a5c708c369969447d1cdcbe35e1c4c0394176f64bbac00a6edf44f7d6d17"
+  }
+}

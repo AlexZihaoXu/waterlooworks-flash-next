@@ -46,10 +46,18 @@ from waterlooworks_flash_next.app_auth import (
     require_session,
 )
 from waterlooworks_flash_next.auth_api import install_auth
+from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
 from waterlooworks_flash_next.compact_history import HistoryReader
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.country_inference import read_country_inferences
+from waterlooworks_flash_next.credentials import (
+    AdminCredentialStatus,
+    CredentialError,
+    CredentialReplacement,
+    CredentialStatus,
+    CredentialStore,
+)
 from waterlooworks_flash_next.database import (
     SCHEMA_VERSION,
     StoredListing,
@@ -57,6 +65,8 @@ from waterlooworks_flash_next.database import (
 )
 from waterlooworks_flash_next.exchange_rates import ExchangeRates
 from waterlooworks_flash_next.keyword_index import read_keyword_index
+from waterlooworks_flash_next.openai_settings_api import install_openai_settings
+from waterlooworks_flash_next.openai_usage_api import install_openai_usage
 from waterlooworks_flash_next.refresh import (
     RefreshConflict,
     RefreshService,
@@ -80,9 +90,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if database_path is None
         else None
     )
-    service = RefreshService(
-        path, root / ".credentials.json" if enabled else None, detail_limit=detail_limit
-    )
+    service = RefreshService(path, root if enabled else None, detail_limit=detail_limit)
 
     verifier = FirebaseVerifier(root if database_path is None else path.parent)
     sessions = SessionStore(path)
@@ -130,6 +138,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     }
 
     install_auth(app, verifier, sessions)
+    install_openai_settings(app, path, verifier)
+    install_openai_usage(app, path)
     protected = APIRouter(dependencies=[Depends(require_session)])
 
     @app.exception_handler(RequestValidationError)
@@ -140,6 +150,54 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             status_code=422,
             content={"detail": "Invalid request; input diagnostics suppressed."},
         )
+
+    @app.get(
+        "/api/admin/refresh-auth",
+        dependencies=[Depends(require_admin)],
+        response_model=AuthChallengeStatus,
+        operation_id="getRefreshAuth",
+    )
+    def refresh_auth(request: Request, response: Response) -> AuthChallengeStatus:
+        response.headers["Cache-Control"] = "no-store"
+        # Recheck the actual current cookie/admin after dependency admission.
+        identity = sessions.lookup(request.cookies.get(COOKIE))
+        if identity is None:
+            raise HTTPException(401, "Sign in to continue.")
+        if identity.role != "admin" or identity.uid != request.state.identity.uid:
+            raise HTTPException(403, "Administrator access required.")
+        return service.challenge_status()
+
+    credential_store = CredentialStore(path)
+
+    @app.get(
+        "/api/admin/waterlooworks-credentials",
+        dependencies=[Depends(require_admin)],
+        response_model=AdminCredentialStatus,
+        operation_id="getWaterlooWorksCredentialsStatus",
+    )
+    def credentials_status() -> AdminCredentialStatus:
+        try:
+            return credential_store.admin_status()
+        except CredentialError:
+            raise HTTPException(
+                503,
+                "WaterlooWorks credential settings unavailable; check the backend key.",
+            ) from None
+
+    @app.post(
+        "/api/admin/waterlooworks-credentials",
+        dependencies=[Depends(require_admin)],
+        response_model=CredentialStatus,
+        operation_id="saveWaterlooWorksCredentials",
+    )
+    def save_credentials(body: CredentialReplacement) -> CredentialStatus:
+        try:
+            return credential_store.save(body)
+        except CredentialError:
+            raise HTTPException(
+                503,
+                "WaterlooWorks credential settings unavailable; check the backend key.",
+            ) from None
 
     exchange_rates = ExchangeRates()
 
@@ -422,6 +480,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             run_id = service.start()
             response.headers["Cache-Control"] = "no-store"
             return RefreshAccepted(run_id=run_id)
+        except CredentialError:
+            raise HTTPException(
+                503,
+                "WaterlooWorks credentials unavailable; configure admin settings "
+                "and the backend key before refreshing.",
+            ) from None
         except RefreshConflict as error:
             raise HTTPException(
                 error.status_code,

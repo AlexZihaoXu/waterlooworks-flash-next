@@ -1,12 +1,31 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { FcGoogle } from 'react-icons/fc';
 import { LuUserRound } from 'react-icons/lu';
-import { Alert, Avatar, Button, Card, Dropdown, Label } from '@heroui/react';
+import {
+  Accordion,
+  Alert,
+  Avatar,
+  Button,
+  Card,
+  Chip,
+  Description,
+  Dropdown,
+  Form,
+  Input,
+  Label,
+  Tabs,
+  TextField,
+} from '@heroui/react';
+import { useAdminCredentials } from '../lib/useAdminCredentials';
+import { useOpenAISettings } from '../lib/useOpenAISettings';
+import { useAdminRefreshStatus } from '../lib/useAdminRefreshStatus';
+import { SECRET_MASK } from '../lib/openaiRevealState';
 import { googlePhotoUrl, type AccountProfile } from '../lib/accountProfile';
 import { useAccountProfile } from '../lib/useAccountProfile';
 import type { AuthState } from '../lib/authLifecycle';
 import { useAppAuth } from '../lib/useAppAuth';
 import { App } from './App';
+import { AdminSettingsDialog } from './AdminSettingsDialog';
 
 // Documented HeroUI Card/Button/Alert composition; no custom visual widget.
 export function AuthGate({
@@ -70,30 +89,48 @@ export function AuthGate({
 export function AccountMenu({
   profile,
   signOut,
+  role = 'member',
+  uid = '',
 }: {
   profile: AccountProfile | null;
   signOut: () => void;
+  role?: 'admin' | 'member';
+  uid?: string;
 }) {
   const photo = googlePhotoUrl(profile?.photo_url);
+  const content = (
+    <>
+      <Avatar size="sm">
+        {photo && (
+          <Avatar.Image src={photo} alt="" referrerPolicy="no-referrer" />
+        )}
+        <Avatar.Fallback>
+          <LuUserRound aria-hidden="true" />
+        </Avatar.Fallback>
+      </Avatar>
+      <span className="account-text">
+        <span className="account-name">
+          {profile?.display_name || 'Account'}
+        </span>
+        {profile?.email && (
+          <span className="account-email">{profile.email}</span>
+        )}
+      </span>
+    </>
+  );
+  if (role === 'admin')
+    return (
+      <AdminAccountMenu
+        key={uid}
+        uid={uid}
+        content={content}
+        signOut={signOut}
+      />
+    );
   return (
     <Dropdown>
       <Button aria-label="Account menu" variant="ghost" size="lg">
-        <Avatar size="sm">
-          {photo && (
-            <Avatar.Image src={photo} alt="" referrerPolicy="no-referrer" />
-          )}
-          <Avatar.Fallback>
-            <LuUserRound aria-hidden="true" />
-          </Avatar.Fallback>
-        </Avatar>
-        <span className="account-text">
-          <span className="account-name">
-            {profile?.display_name || 'Account'}
-          </span>
-          {profile?.email && (
-            <span className="account-email">{profile.email}</span>
-          )}
-        </span>
+        {content}
       </Button>
       <Dropdown.Popover placement="bottom end">
         <Dropdown.Menu
@@ -111,6 +148,447 @@ export function AccountMenu({
   );
 }
 
+// Official v3 content in the owner-approved bounded native dialog shell.
+function AdminAccountMenu({
+  uid,
+  content,
+  signOut,
+}: {
+  uid: string;
+  content: ReactNode;
+  signOut: () => void;
+}) {
+  const [selectedTab, setSelectedTab] = useState('credentials');
+  const settings = useAdminCredentials(uid);
+  const openai = useOpenAISettings(
+    settings.isOpen && selectedTab === 'credentials',
+    uid,
+  );
+  const refresh = useAdminRefreshStatus(settings.isOpen, uid);
+  const closeSettings = (open: boolean) => {
+    refresh.clear();
+    openai.hide();
+    openai.setDraft('');
+    settings.setOpen(open);
+    if (open) setSelectedTab('credentials');
+  };
+  const selectTab = (key: string) => {
+    if (selectedTab === 'credentials' && key !== 'credentials') {
+      // Both Tabs and the Duo shortcut must synchronously invalidate reveal.
+      // Cancelling a save is not rollback; entry rereads current metadata.
+      openai.hide();
+      openai.setDraft('');
+    }
+    setSelectedTab(key);
+  };
+  return (
+    <>
+      <Button
+        aria-label="Account menu"
+        variant="ghost"
+        size="lg"
+        onPress={() => {
+          setSelectedTab('credentials');
+          settings.setOpen(true);
+        }}
+      >
+        {content}
+      </Button>
+      {settings.isOpen && (
+        <AdminSettingsDialog
+          onDismiss={() => closeSettings(false)}
+          notification={
+            refresh.challenge?.approval_required && (
+              <div className="flex flex-wrap items-center gap-4">
+                <span role="status">
+                  <Chip color="warning" size="sm">
+                    Duo approval required
+                  </Chip>
+                </span>
+                {selectedTab === 'refresh' ? (
+                  <Description>
+                    Approve only a refresh you requested.
+                  </Description>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onPress={() => selectTab('refresh')}
+                  >
+                    Go to Refresh
+                  </Button>
+                )}
+              </div>
+            )
+          }
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                onPress={() => {
+                  closeSettings(false);
+                  signOut();
+                }}
+              >
+                Sign out
+              </Button>
+              <Button variant="secondary" onPress={() => closeSettings(false)}>
+                Done
+              </Button>
+            </>
+          }
+        >
+          <Tabs
+            selectedKey={selectedTab}
+            onSelectionChange={(key) => selectTab(String(key))}
+          >
+            <Tabs.ListContainer>
+              <Tabs.List aria-label="Admin settings sections">
+                <Tabs.Tab id="credentials">
+                  Credentials
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="usage">
+                  Usage
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="refresh">
+                  Refresh
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+              </Tabs.List>
+            </Tabs.ListContainer>
+            <Tabs.Panel id="credentials">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Card variant="secondary">
+                  <Card.Header>
+                    <Card.Title>WaterlooWorks</Card.Title>
+                    <Card.Description>
+                      Enter both fields to replace the shared login. Saving does
+                      not sign in or collect jobs.
+                    </Card.Description>
+                  </Card.Header>
+                  <Card.Content>
+                    <div className="grid gap-4">
+                      {settings.savedUsername !== null && (
+                        <p className="break-all">
+                          Saved username/email: {settings.savedUsername}
+                        </p>
+                      )}
+                      <Form
+                        aria-label="WaterlooWorks credentials"
+                        autoComplete="off"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void settings.save();
+                        }}
+                      >
+                        <div className="grid gap-4">
+                          <TextField
+                            isRequired
+                            fullWidth
+                            value={settings.username}
+                            onChange={settings.setUsername}
+                            isDisabled={settings.pending}
+                          >
+                            <Label>WaterlooWorks username</Label>
+                            <Input
+                              autoComplete="off"
+                              maxLength={256}
+                              spellCheck={false}
+                              autoCapitalize="none"
+                            />
+                          </TextField>
+                          <TextField
+                            isRequired
+                            fullWidth
+                            value={settings.password}
+                            onChange={settings.setPassword}
+                            isDisabled={settings.pending}
+                          >
+                            <Label>WaterlooWorks password</Label>
+                            <Input
+                              type="password"
+                              placeholder={
+                                settings.configured ? SECRET_MASK : undefined
+                              }
+                              autoComplete="new-password"
+                              maxLength={1024}
+                              spellCheck={false}
+                            />
+                            <Description>
+                              The saved password cannot be revealed.
+                            </Description>
+                          </TextField>
+                          <p role="status">{settings.message}</p>
+                          <div>
+                            <Button
+                              type="submit"
+                              isPending={settings.pending}
+                              isDisabled={
+                                settings.pending ||
+                                !settings.username.trim() ||
+                                !settings.password ||
+                                settings.password === SECRET_MASK
+                              }
+                            >
+                              Save credentials
+                            </Button>
+                          </div>
+                        </div>
+                      </Form>
+                    </div>
+                  </Card.Content>
+                </Card>
+                <Card variant="secondary">
+                  <Card.Header>
+                    <Card.Title>OpenAI</Card.Title>
+                    <Card.Description>
+                      Used by automatic extraction after Refresh. Saving never
+                      invokes OpenAI.
+                    </Card.Description>
+                  </Card.Header>
+                  <Card.Content>
+                    <div className="grid gap-4">
+                      <Form
+                        aria-label="OpenAI key"
+                        autoComplete="off"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void openai.save();
+                        }}
+                      >
+                        <div className="grid gap-4">
+                          <TextField
+                            fullWidth
+                            isRequired
+                            value={openai.draft}
+                            onChange={openai.setDraft}
+                            isDisabled={openai.pending}
+                          >
+                            <Label>Replacement OpenAI API key</Label>
+                            <Input
+                              type="password"
+                              placeholder={
+                                openai.configured ? SECRET_MASK : undefined
+                              }
+                              maxLength={512}
+                              autoComplete="new-password"
+                              spellCheck={false}
+                              autoCapitalize="none"
+                            />
+                          </TextField>
+                          <div>
+                            <Button
+                              type="submit"
+                              isPending={openai.pending}
+                              isDisabled={
+                                openai.pending ||
+                                !openai.draft.trim() ||
+                                openai.draft === SECRET_MASK
+                              }
+                            >
+                              Save OpenAI key
+                            </Button>
+                          </div>
+                        </div>
+                      </Form>
+                      <p role="status">{openai.message}</p>
+                      <div className="grid justify-items-start gap-4">
+                        {openai.revealed ? (
+                          <>
+                            <TextField
+                              fullWidth
+                              isReadOnly
+                              value={openai.revealed}
+                            >
+                              <Label>Revealed OpenAI API key</Label>
+                              <Input autoComplete="off" spellCheck={false} />
+                            </TextField>
+                            <Button variant="secondary" onPress={openai.hide}>
+                              Hide
+                            </Button>
+                          </>
+                        ) : openai.readyToVerify ? (
+                          <Button
+                            variant="secondary"
+                            onPress={openai.verify}
+                            isDisabled={openai.pending}
+                          >
+                            Verify with Google
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="secondary"
+                            onPress={() => {
+                              void openai.prepareReveal();
+                            }}
+                            isDisabled={!openai.configured || openai.pending}
+                          >
+                            Reveal
+                          </Button>
+                        )}
+                      </div>
+                      <Description>
+                        Reveal requires another Google verification with this
+                        same admin account. The key clears after 30 seconds,
+                        Hide, leaving Credentials, closing settings, sign-out,
+                        account change, or hiding this browser tab.
+                      </Description>
+                    </div>
+                  </Card.Content>
+                </Card>
+              </div>
+            </Tabs.Panel>
+            <Tabs.Panel id="usage">
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <h3>OpenAI usage and limits</h3>
+                  <p>
+                    The known-cost stop threshold is not a guaranteed cap.
+                    In-flight calls may add charges.
+                  </p>
+                  <Description>
+                    Partial or failed runs and unknown usage can leave analysis
+                    incomplete. Usage is not proof of completed analysis.
+                  </Description>
+                </div>
+                {refresh.usage ? (
+                  <div className="grid gap-2">
+                    <h4>Current operator limits</h4>
+                    <p>
+                      {refresh.usage.default_request_limit} attempts per run · $
+                      {refresh.usage.default_known_cost_stop_usd} USD known-cost
+                      stop
+                    </p>
+                    <Description>
+                      Most recent 20 runs; older records and saved checkpoints
+                      remain. No automatic resume.
+                    </Description>
+                    {refresh.usage.runs.length === 0 && (
+                      <p>No recorded OpenAI runs.</p>
+                    )}
+                    <Accordion>
+                      {refresh.usage.runs.map((run) => (
+                        <Accordion.Item key={run.run_id} id={run.run_id}>
+                          <Accordion.Heading>
+                            <Accordion.Trigger>
+                              <span className="grid gap-1">
+                                <span>Run {run.run_id.slice(0, 8)}</span>
+                                <span className="break-all">
+                                  {run.attempts}/{run.request_limit} attempts ·
+                                  ${run.known_usd} USD known
+                                </span>
+                              </span>
+                              <Chip
+                                color={
+                                  run.total_usd === null ? 'warning' : 'default'
+                                }
+                                size="sm"
+                              >
+                                {run.total_usd === null
+                                  ? 'Cost incomplete'
+                                  : 'Known estimate'}
+                              </Chip>
+                              <Accordion.Indicator />
+                            </Accordion.Trigger>
+                          </Accordion.Heading>
+                          <Accordion.Panel>
+                            <Accordion.Body>
+                              <p className="break-all">Run ID: {run.run_id}</p>
+                              <p className="break-all">
+                                Total USD:{' '}
+                                {run.total_usd === null
+                                  ? 'unknown'
+                                  : `$${run.total_usd}`}
+                                ; known-cost stop: ${run.known_cost_stop_usd};
+                                unpriced attempts: {run.unpriced_attempts}.
+                              </p>
+                              <Description>
+                                Input: {run.input_tokens ?? 'unknown'} (includes
+                                cached read: {run.cached_tokens ?? 'unknown'},
+                                cache write:{' '}
+                                {run.cache_write_tokens ?? 'unknown'}). Output:{' '}
+                                {run.output_tokens ?? 'unknown'} (includes
+                                reasoning: {run.reasoning_tokens ?? 'unknown'}).
+                              </Description>
+                              <Description>
+                                Cached and reasoning subsets are already
+                                included, not extra tokens. Costs are estimates,
+                                not invoices.
+                              </Description>
+                            </Accordion.Body>
+                          </Accordion.Panel>
+                        </Accordion.Item>
+                      ))}
+                    </Accordion>
+                  </div>
+                ) : (
+                  <p role="status">
+                    Usage unavailable or loading. Unknown is not zero.
+                  </p>
+                )}
+                <Accordion>
+                  <Accordion.Item>
+                    <Accordion.Heading>
+                      <Accordion.Trigger>
+                        Model and pricing details
+                        <Accordion.Indicator />
+                      </Accordion.Trigger>
+                    </Accordion.Heading>
+                    <Accordion.Panel>
+                      <Accordion.Body>
+                        <p>Model: gpt-5.6-luna · Reasoning: low.</p>
+                        <Description>
+                          Standard pricing estimate as of 2026-09-09, USD per
+                          million tokens: input $0.20; cached read $0.02; cache
+                          write $0.25; output $1.20. Estimate only, not an
+                          invoice.
+                        </Description>
+                      </Accordion.Body>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                </Accordion>
+              </div>
+            </Tabs.Panel>
+            <Tabs.Panel id="refresh">
+              <Card variant="secondary">
+                <Card.Header>
+                  <Card.Title>Current Duo approval</Card.Title>
+                  <Card.Description>
+                    {refresh.challenge?.approval_required
+                      ? 'Approve only the refresh you requested, in Duo Mobile. No additional push will be sent.'
+                      : 'No current approval code. Start an explicit Refresh from the workspace when ready; status reads never sign in.'}
+                  </Card.Description>
+                </Card.Header>
+                <Card.Content>
+                  <p>
+                    One Refresh collects jobs, then automatically extracts saved
+                    details. Duo approval may be required. Limits or unknown
+                    usage can leave analysis incomplete.
+                  </p>
+                  {refresh.challenge?.code && (
+                    <TextField isReadOnly value={refresh.challenge.code}>
+                      <Label>Current Duo verification code</Label>
+                      <Input autoComplete="off" spellCheck={false} />
+                    </TextField>
+                  )}
+                  <Description>
+                    Authentication expires within 3 minutes overall. The code
+                    clears on expiry, close, sign-out, account change or hiding
+                    this browser tab.
+                  </Description>
+                  <p role="status">{refresh.message}</p>
+                </Card.Content>
+              </Card>
+            </Tabs.Panel>
+          </Tabs>
+        </AdminSettingsDialog>
+      )}
+    </>
+  );
+}
+
 export function AuthenticatedApp() {
   const { state, signIn, signOut } = useAppAuth();
   const profile = useAccountProfile(
@@ -121,7 +599,14 @@ export function AuthenticatedApp() {
       {state.status === 'ready' && (
         <App
           key={state.session.uid}
-          account={<AccountMenu profile={profile} signOut={signOut} />}
+          account={
+            <AccountMenu
+              profile={profile}
+              signOut={signOut}
+              role={state.session.role}
+              uid={state.session.uid}
+            />
+          }
         />
       )}
     </AuthGate>

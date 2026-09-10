@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { countryInput, hash } from './country-lib.mjs';
 import { transaction, assertIdleSource } from './extraction-store.mjs';
+import { compatibleOrigin } from './inference-reuse.mjs';
 
 const now = () => new Date().toISOString();
 export const sourceQuery = `SELECT p.posting_id,p.listing_json,p.content_hash listing_hash,c.content_json,c.content_hash,
@@ -100,19 +101,46 @@ export function beginCountryRun(
       throw new Error('missing_source');
     for (const source of sources) {
       const digest = inputHash(source);
-      const cached = db
+      let cached = db
         .prepare(
-          `SELECT i.* FROM country_inference_items i JOIN country_inference_runs r USING(run_id)
-        WHERE i.posting_id=? AND i.listing_hash=? AND i.content_hash IS ? AND i.input_hash=? AND r.configuration_hash=?
-        AND i.status IN ('accepted','unknown') ORDER BY r.created_at DESC,r.run_id DESC LIMIT 1`,
+          `SELECT i.*,origin.configuration_hash,origin.configuration_json,
+          r.configuration_json selected_configuration_json,r.configuration_hash selected_configuration_hash
+        FROM country_inference_items i JOIN country_inference_runs r USING(run_id)
+        JOIN country_inference_items original ON original.run_id=coalesce(i.origin_run_id,i.run_id)
+          AND original.posting_id=i.posting_id AND original.status=i.status
+          AND original.country IS i.country AND original.confidence IS i.confidence
+          AND original.reason IS i.reason AND original.evidence_json=i.evidence_json
+          AND original.input_hash=i.input_hash AND original.listing_revision_id=i.listing_revision_id
+          AND original.content_revision_id IS i.content_revision_id
+        JOIN country_inference_runs origin ON origin.run_id=original.run_id
+        WHERE i.posting_id=? AND i.listing_hash=? AND i.content_hash IS ? AND i.input_hash=?
+          AND i.listing_revision_id=? AND i.content_revision_id IS ?
+          AND i.status IN ('accepted','unknown')
+          AND NOT EXISTS (SELECT 1 FROM country_inference_items newer JOIN country_inference_runs nr USING(run_id)
+            WHERE newer.posting_id=i.posting_id AND (nr.created_at,nr.run_id)>(r.created_at,r.run_id))
+        ORDER BY r.created_at DESC,r.run_id DESC LIMIT 1`,
         )
         .get(
           source.posting_id,
           source.listing_hash,
           source.content_hash,
           digest,
-          engine.configurationHash,
+          source.listing_revision_id,
+          source.content_revision_id,
         );
+      if (
+        cached &&
+        (!compatibleOrigin(cached, engine, 'country') ||
+          !compatibleOrigin(
+            cached,
+            {
+              configuration: JSON.parse(cached.selected_configuration_json),
+              configurationHash: cached.selected_configuration_hash,
+            },
+            'country',
+          ))
+      )
+        cached = null;
       db.prepare(
         `INSERT INTO country_inference_items(run_id,posting_id,listing_revision_id,content_revision_id,listing_hash,content_hash,input_hash,status,country,confidence,reason,evidence_json,origin_run_id)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,

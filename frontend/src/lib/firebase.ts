@@ -1,4 +1,5 @@
-import { initializeApp } from 'firebase/app';
+import { deleteApp, initializeApp } from 'firebase/app';
+import { runAuthOperation } from './authLifecycle';
 import {
   browserPopupRedirectResolver,
   GoogleAuthProvider,
@@ -34,4 +35,48 @@ export async function renewedToken(uid: string) {
 }
 export function signOutGoogle() {
   return signOut(auth);
+}
+
+// Dedicated ephemeral instance: works after reload with only the app cookie,
+// and never replaces the main SDK user or app session. Prepare before click two.
+export function createGoogleStepUp(uid: string) {
+  const isolatedApp = initializeApp(
+    app.options,
+    `ww-step-up-${crypto.randomUUID()}`,
+  );
+  const isolatedAuth = initializeAuth(isolatedApp, {
+    persistence: inMemoryPersistence,
+    popupRedirectResolver: browserPopupRedirectResolver,
+  });
+  const google = new GoogleAuthProvider();
+  google.setCustomParameters({ prompt: 'select_account' });
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    void runAuthOperation((operation) => operation.wait(signOut(isolatedAuth)))
+      .catch(() => {})
+      .finally(() => {
+        void deleteApp(isolatedApp).catch(() => {});
+      });
+  };
+  return {
+    ready: () => isolatedAuth.authStateReady(),
+    dispose,
+    verify: () => {
+      if (disposed) return Promise.reject(new Error('Verification cancelled.'));
+      // Invoke popup directly in the second user gesture, before any awaited work.
+      return signInWithPopup(isolatedAuth, google)
+        .then(async (result) => {
+          if (disposed || result.user.uid !== uid)
+            throw new Error('Verify the same administrator account.');
+          const token = await runAuthOperation((operation) =>
+            operation.wait(result.user.getIdToken()),
+          );
+          if (disposed) throw new Error('Verification cancelled.');
+          return token;
+        })
+        .finally(dispose);
+    },
+  };
 }

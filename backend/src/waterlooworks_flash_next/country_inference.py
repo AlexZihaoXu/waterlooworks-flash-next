@@ -8,6 +8,10 @@ from typing import Any
 
 from waterlooworks_flash_next.api_models import CountryEvidence, CountryInference
 from waterlooworks_flash_next.country_schema import COUNTRIES, COUNTRY_VERSION
+from waterlooworks_flash_next.inference_reuse import (
+    compatible_origin,
+    configuration_valid,
+)
 
 
 def _hash(value: str) -> str:
@@ -15,6 +19,8 @@ def _hash(value: str) -> str:
 
 
 def _configuration_valid(config: dict[str, Any], raw: str, digest: str) -> bool:
+    if config.get("provider") == "openai-responses":
+        return configuration_valid(raw, digest, "country")
     model = config.get("model", {})
     return (
         _hash(raw) == digest
@@ -47,7 +53,10 @@ def read_country_inferences(
         "SELECT i.*,r.configuration_hash,r.configuration_json,p.listing_json,"
         "p.content_hash current_listing_hash,c.content_json,"
         "c.content_hash current_content_hash,"
-        "lr.content_hash revision_listing_hash,cr.content_hash revision_content_hash "
+        "lr.content_hash revision_listing_hash,cr.content_hash revision_content_hash, "
+        "origin.configuration_json origin_configuration_json, "
+        "origin.configuration_hash origin_configuration_hash, "
+        "original.run_id verified_origin "
         "FROM country_inference_items i JOIN country_inference_runs r USING(run_id) "
         "JOIN postings p USING(posting_id) "
         "LEFT JOIN posting_contents c USING(posting_id) "
@@ -56,6 +65,17 @@ def read_country_inferences(
         "LEFT JOIN posting_content_revisions cr "
         "ON cr.revision_id=i.content_revision_id "
         "AND cr.posting_id=i.posting_id "
+        "LEFT JOIN country_inference_items original ON original.run_id=i.origin_run_id "
+        "AND original.posting_id=i.posting_id AND original.status=i.status "
+        "AND original.status IN ('accepted','unknown') "
+        "AND original.country IS i.country AND original.confidence IS i.confidence "
+        "AND original.reason IS i.reason AND original.evidence_json=i.evidence_json "
+        "AND original.input_hash=i.input_hash "
+        "AND original.listing_revision_id=i.listing_revision_id "
+        "AND original.content_revision_id IS i.content_revision_id "
+        "AND original.listing_hash=i.listing_hash "
+        "AND original.content_hash IS i.content_hash "
+        "LEFT JOIN country_inference_runs origin ON origin.run_id=original.run_id "
         "WHERE NOT EXISTS (SELECT 1 FROM country_inference_items newer "
         "JOIN country_inference_runs nr ON nr.run_id=newer.run_id "
         "WHERE newer.posting_id=i.posting_id "
@@ -96,6 +116,20 @@ def read_country_inferences(
             ):
                 output.state = "stale"
                 continue
+            if (
+                row["origin_run_id"] is not None
+                and row["origin_run_id"] != row["run_id"]
+            ):
+                if row["verified_origin"] is None or not compatible_origin(
+                    row["origin_configuration_json"],
+                    row["origin_configuration_hash"],
+                    row["configuration_json"],
+                    row["configuration_hash"],
+                    "country",
+                ):
+                    output.state = "stale"
+                    continue
+                config = json.loads(row["origin_configuration_json"])
             output.model_id = config["model"]["id"]
             output.prompt_version = config["version"]
             state = row["status"]

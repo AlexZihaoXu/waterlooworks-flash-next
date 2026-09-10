@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
-import { currentModel, localRequest } from './lm-client.mjs';
-import { chooseReasoning, parseFinal } from './benchmark-lib.mjs';
+import { OPENAI_MODEL, OPENAI_PROFILE } from './openai-bridge.mjs';
 import {
   VERSION,
   COUNTRIES,
@@ -10,95 +9,64 @@ import {
   validateCountry,
 } from './country-lib.mjs';
 
-export async function loadCountryEngine({ concurrency = 4 } = {}) {
-  const model = await currentModel('unsloth/gemma-4-26b-a4b-it');
+export async function loadCountryEngine({ concurrency = 4, bridge } = {}) {
   if (
-    model.quantization?.name !== 'Q2_K_XL' ||
-    model.config?.context_length !== 65536 ||
-    model.config?.parallel !== 4 ||
-    chooseReasoning(model.reasoning, 'auto') !== 'none'
+    !bridge ||
+    !Number.isInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > 4
   )
-    throw new Error('model_profile');
+    throw new Error('OpenAI country engine configuration is invalid');
   const codeHashes = {};
   for (const file of [
     'country.mjs',
     'country-lib.mjs',
     'country-store.mjs',
     'country-engine.mjs',
-    'lm-client.mjs',
-    'benchmark-lib.mjs',
+    'openai-bridge.mjs',
     'extraction-store.mjs',
   ])
     codeHashes[file] = hash(await fs.readFile(new URL(file, import.meta.url)));
   const configuration = {
     version: VERSION,
-    model,
-    reasoning: 'none',
-    temperature: 0,
-    max_tokens: 1024,
+    provider: 'openai-responses',
+    providerVersion: OPENAI_PROFILE,
+    model: { id: OPENAI_MODEL },
+    reasoning: 'low',
+    serviceTier: 'default',
+    max_tokens: 4096,
     timeout: 120,
     concurrency,
     prompt_hash: hash(PROMPT),
     countries_hash: hash(JSON.stringify(COUNTRIES)),
     codeHashes,
+    reusePolicy: 'compatible-origin-v1',
   };
   return {
     configuration,
     configurationHash: hash(JSON.stringify(configuration)),
+    bridge,
   };
 }
-export async function inferCountry(engine, input) {
+export async function inferCountry(engine, input, operationHash) {
   if (input.reason) return { status: 'unknown', reason: input.reason };
-  const config = engine.configuration;
-  const assertModel = async () => {
-    if (
-      JSON.stringify(await currentModel(config.model.id)) !==
-      JSON.stringify(config.model)
-    )
-      throw new Error('model_changed');
-  };
-  await assertModel();
-  const response = await localRequest(
-    '/v1/chat/completions',
-    {
-      model: config.model.id,
-      reasoning_effort: 'none',
-      temperature: 0,
-      max_tokens: config.max_tokens,
-      store: false,
-      messages: [
-        { role: 'system', content: PROMPT },
-        {
-          role: 'user',
-          content: JSON.stringify(input.fields)
-            .replaceAll('<', '\\u003c')
-            .replaceAll('>', '\\u003e'),
-        },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'job_country',
-          strict: true,
-          schema: countryOutputSchema(input.fields),
-        },
+  const text = await engine.bridge.complete(
+    operationHash,
+    [
+      { role: 'system', content: PROMPT },
+      {
+        role: 'user',
+        content: JSON.stringify(input.fields)
+          .replaceAll('<', '\\u003c')
+          .replaceAll('>', '\\u003e'),
       },
-    },
-    config.timeout,
+    ],
+    'job_country',
+    countryOutputSchema(input.fields),
+    engine.configuration.max_tokens,
   );
-  await assertModel();
-  const choice = response.choices?.[0];
-  if (
-    response.model !== config.model.id ||
-    response.usage?.completion_tokens_details?.reasoning_tokens !== 0 ||
-    choice?.message?.reasoning ||
-    choice?.message?.reasoning_content
-  )
-    throw new Error('model_framing');
-  if (choice?.finish_reason !== 'stop')
-    return { status: 'failed', reason: 'invalid_output' };
   try {
-    return validateCountry(parseFinal(choice.message.content), input.fields);
+    return validateCountry(JSON.parse(text), input.fields);
   } catch {
     return { status: 'failed', reason: 'invalid_output' };
   }

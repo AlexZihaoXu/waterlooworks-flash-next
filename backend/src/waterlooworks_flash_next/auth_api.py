@@ -4,7 +4,6 @@ import asyncio
 import threading
 import time
 from typing import Annotated, cast
-from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -39,8 +38,6 @@ def install_auth(
         request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         transport: AuthTransport = app.state.transport
-        hosts = {"localhost", "127.0.0.1"}
-        hosts.update(urlsplit(origin).hostname or "" for origin in transport.origins)
 
         def refuse(status: int, message: str) -> JSONResponse:
             return JSONResponse(
@@ -49,13 +46,17 @@ def install_auth(
                 headers={"Cache-Control": "no-store"},
             )
 
-        if request.url.hostname not in hosts:
+        try:
+            host_allowed = transport.allowed_host(request)
+        except ValueError:
+            host_allowed = False
+        if not host_allowed:
             return refuse(403, "Host is not allowed.")
         if request.url.path != "/api/health":
-            if request.url.scheme != "https" and transport.secure_cookie(request):
+            if not transport.is_https(request) and transport.secure_cookie(request):
                 return refuse(403, "Secure transport required.")
-            origin = request.headers.get("origin")
-            if origin is not None and origin not in transport.origins:
+            origins = request.headers.getlist("origin")
+            if len(origins) > 1 or (origins and origins[0] not in transport.origins):
                 return refuse(403, "Origin is not allowed.")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             if request.headers.get("origin") not in transport.origins:

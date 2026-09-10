@@ -21,7 +21,6 @@ import {
   extractionStatusLabel,
   jobUrl,
   shouldOpenJob,
-  uniqueSkillMentions,
 } from '../lib/jobDetail';
 import type { DetailState } from '../lib/useJobDetail';
 import type { SimilarJobsState } from '../lib/similarJobs';
@@ -177,7 +176,6 @@ export function JobDetailContent({
     history,
   } = state.data;
   const sections = content ? contentCards(content.fields) : [];
-  const skills = uniqueSkillMentions(analysis.skills);
   const arrangement = ['Remote', 'Hybrid', 'In-person'].find(
     (value) =>
       value === content?.fields['Employment Location Arrangement:']?.trim(),
@@ -381,45 +379,6 @@ export function JobDetailContent({
               </Card.Content>
             </Card>
             <ApplicationTrend observations={history.observations} />
-            {(skills.length > 0 || analysis.keyword_extraction) && (
-              <Card>
-                <Card.Header>
-                  <Card.Title>Keywords and skills</Card.Title>
-                </Card.Header>
-                <Separator />
-                <Card.Content>
-                  <Typography type="body-sm" weight="semibold">
-                    Extracted keywords
-                  </Typography>
-                  <Typography type="body-xs" color="muted">
-                    {analysis.keyword_extraction
-                      ? extractionStatusLabel(analysis.keyword_extraction.state)
-                      : 'Saved extraction status unavailable from this API.'}{' '}
-                    Keywords are source mentions, not applicant requirements.
-                    Coverage may be incomplete.
-                  </Typography>
-                  <div className="detail-chip-list">
-                    {(analysis.keywords ?? []).map((keyword) => (
-                      <Chip size="sm" key={keyword.name}>
-                        {keyword.name}
-                      </Chip>
-                    ))}
-                  </div>
-                  {skills.length > 0 && (
-                    <Typography type="body-sm" weight="semibold">
-                      Validated skill mentions
-                    </Typography>
-                  )}
-                  <div className="detail-chip-list">
-                    {skills.map((skill) => (
-                      <Chip size="sm" key={skill.name}>
-                        {skill.name}
-                      </Chip>
-                    ))}
-                  </div>
-                </Card.Content>
-              </Card>
-            )}
             <Card>
               <Card.Header>
                 <Card.Title>Application route</Card.Title>

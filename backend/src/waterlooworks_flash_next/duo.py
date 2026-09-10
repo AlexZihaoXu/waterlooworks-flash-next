@@ -1,36 +1,28 @@
 """Single sign-in submission and DOM-only Duo observation; never retries a push."""
 
-import os
 import re
-import sys
-import time
+from collections.abc import Callable
 from typing import Never
-from urllib.parse import urlsplit
 
 from playwright.sync_api import Page
 
 from waterlooworks_flash_next.logging import stage_logger
 from waterlooworks_flash_next.login import (
     STEP_DELAY_MS,
+    LoginFlowError,
     LoginSession,
+    exact_auth_origin,
     require_auth_host,
 )
 
 POLL_INTERVAL_MS = 500
 CODE_POLL_ATTEMPTS = 10
 DUO_HOST = "api-4ccc589b.duosecurity.com"
-TRANSITION_TIMEOUT_SECONDS = 60
 
 
 def authenticated_destination(url: str, dashboard: bool, logout: bool) -> bool:
     """Require both the verified origin and observed authenticated navigation."""
-    target = urlsplit(url)
-    return (
-        target.scheme == "https"
-        and target.hostname == "waterlooworks.uwaterloo.ca"
-        and dashboard
-        and logout
-    )
+    return exact_auth_origin(url, "waterlooworks.uwaterloo.ca") and dashboard and logout
 
 
 def at_waterlooworks(page: Page) -> bool:
@@ -45,26 +37,19 @@ def at_waterlooworks(page: Page) -> bool:
 
 
 def on_duo(page: Page) -> bool:
-    target = urlsplit(page.url)
-    return target.scheme == "https" and target.hostname == DUO_HOST
+    return exact_auth_origin(page.url, DUO_HOST)
 
 
 def stop_login(session: LoginSession, message: str) -> Never:
-    """Log a fixed safe reason, close after three seconds, and exit even in -i mode."""
-    log = stage_logger("duo")
-    log.error("%s Closing browser in 3 seconds; exit code 1.", message)
-    time.sleep(3)
+    """Raise safely after cleanup; never terminate the API process."""
+    stage_logger("duo").error("Authentication stopped; no automatic retry.")
     try:
         session.close()
     except Exception:
-        log.error("Browser cleanup failed; sensitive diagnostics suppressed.")
-    finally:
-        # SystemExit in a startup script can leave `python -i` at its prompt.
-        try:
-            sys.stdout.flush()
-            sys.stderr.flush()
-        finally:
-            os._exit(1)
+        stage_logger("duo").error(
+            "Browser cleanup failed; sensitive diagnostics suppressed."
+        )
+    raise LoginFlowError(message) from None
 
 
 def check_duo_failure(session: LoginSession) -> None:
@@ -119,79 +104,90 @@ def accept_device_if_prompted(page: Page) -> bool:
     return True
 
 
-def observe_duo(session: LoginSession) -> None:
-    """Observe both challenged and trusted-device redirects without extra requests.
-
-    Logging the MFA code is explicitly user-authorized. Run in a private console;
-    do not enable log collection or share output. No credentials-file values log.
-    """
+def observe_duo(
+    session: LoginSession,
+    on_code: Callable[[str], None] | None = None,
+    clear_code: Callable[[], None] | None = None,
+) -> None:
+    """Observe only verified DOM branches within the original overall deadline."""
     page = session.page
     log = stage_logger("duo")
     attempts = 0
-    code_logged = False
+    code_seen = False
     trust_accepted = False
-    deadline = time.monotonic() + TRANSITION_TIMEOUT_SECONDS
     while True:
-        page.wait_for_timeout(POLL_INTERVAL_MS)
+        session.deadline.bound_page(page)
+        page.wait_for_timeout(min(POLL_INTERVAL_MS, session.deadline.remaining_ms()))
+        session.deadline.bound_page(page)
         if at_waterlooworks(page):
+            session.deadline.remaining_ms()
+            page.set_default_timeout(30_000)
+            page.set_default_navigation_timeout(60_000)
             log.info("WaterlooWorks reached: Dashboard and logout controls visible.")
             return
-        target = urlsplit(page.url)
-        if target.scheme != "https" or target.hostname not in (
-            DUO_HOST,
-            "adfs.uwaterloo.ca",
-            "waterlooworks.uwaterloo.ca",
-        ):
-            log.warning(
-                "Unrecognized authentication destination; pausing for guidance."
+        if not any(
+            exact_auth_origin(page.url, host)
+            for host in (
+                DUO_HOST,
+                "adfs.uwaterloo.ca",
+                "waterlooworks.uwaterloo.ca",
             )
-            return
+        ):
+            stop_login(session, "Unrecognized authentication destination.")
         check_duo_failure(session)
         if on_duo(page):
             if not trust_accepted and accept_device_if_prompted(page):
                 trust_accepted = True
-                deadline = time.monotonic() + TRANSITION_TIMEOUT_SECONDS
+                if clear_code:
+                    clear_code()
             elif not trust_accepted:
                 code = visible_code(page)
                 if code is not None:
-                    if not code_logged:
-                        log.info("Detected verification code: [%s] (waiting...)", code)
-                        code_logged = True
+                    if not code_seen:
+                        log.info(
+                            "Duo approval required; open Admin settings "
+                            "from the account button."
+                        )
+                        code_seen = True
+                    if on_code:
+                        on_code(code)
                     del code
-                    # The visible challenge is still awaiting approval. Its own
-                    # timeout UI controls expiry; don't time out a user mid-approval.
-                    deadline = time.monotonic() + TRANSITION_TIMEOUT_SECONDS
-                elif not code_logged:
+                elif not code_seen:
                     attempts += 1
-                    log.debug(
-                        "Checking existing DOM for code (%d/%d).",
-                        attempts,
-                        CODE_POLL_ATTEMPTS,
-                    )
                     if attempts >= CODE_POLL_ATTEMPTS:
                         stop_login(
                             session,
                             "Verification code not detected after 10 DOM checks.",
                         )
-        # A brief Duo hop may never be observed; WaterlooWorks is a valid direct
-        # destination. ADFS/DOM transitions are not automatically a failure.
-        if time.monotonic() >= deadline:
-            stop_login(session, "Authentication transition exceeded 60 seconds.")
+        session.deadline.remaining_ms()
 
 
-def submit_and_observe_duo(session: LoginSession) -> None:
-    """Submit once and observe either Duo or the authenticated WaterlooWorks page."""
+def submit_and_observe_duo(
+    session: LoginSession,
+    on_code: Callable[[str], None] | None = None,
+    clear_code: Callable[[], None] | None = None,
+) -> None:
+    """Submit at most once, including after an ambiguous click failure."""
     log = stage_logger("duo")
     try:
+        if session.submitted:
+            raise LoginFlowError("Sign-in was already submitted; no retry.")
         require_auth_host(session.page.url)
-        session.page.wait_for_timeout(STEP_DELAY_MS)
+        session.deadline.bound_page(session.page)
+        session.page.wait_for_timeout(
+            min(STEP_DELAY_MS, session.deadline.remaining_ms())
+        )
+        session.deadline.bound_page(session.page)
+        require_auth_host(session.page.url)
+        session.claim_submission()
         log.info("Starting stage: sign in (single submission).")
         session.page.get_by_role("button", name="Sign in", exact=True).click()
         log.info(
             "Completed stage: sign in. Observing Duo or WaterlooWorks via DOM only."
         )
-        observe_duo(session)
+        observe_duo(session, on_code, clear_code)
     except Exception:
-        stop_login(
-            session, "Duo observation stopped; sensitive diagnostics suppressed."
-        )
+        stop_login(session, "Authentication stopped; sensitive diagnostics suppressed.")
+    finally:
+        if clear_code:
+            clear_code()

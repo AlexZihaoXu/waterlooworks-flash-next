@@ -19,6 +19,8 @@ from waterlooworks_flash_next.app_auth import (
 
 PROTECTED = (
     "/api/workspace",
+    "/api/admin/openai-usage",
+    "/api/admin/refresh-auth",
     "/api/postings/1",
     "/api/postings/1/analysis",
     "/api/postings/1/history",
@@ -123,6 +125,12 @@ def test_member_cannot_mutate_and_logout_invalidates_cookie(tmp_path: Path) -> N
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/workspace").json()["manual_refresh_available"] is False
         assert client.get("/api/auth/session").json()["role"] == "member"
+        challenge = client.get("/api/admin/refresh-auth")
+        assert challenge.status_code == 403
+        assert challenge.headers["cache-control"] == "no-store"
+        usage = client.get("/api/admin/openai-usage")
+        assert usage.status_code == 403
+        assert usage.headers["cache-control"] == "no-store"
         assert client.post("/api/refresh", json={}).status_code == 403
         response = client.post("/api/auth/logout", json={})
         assert response.status_code == 200
@@ -221,16 +229,28 @@ def test_loopback_exception_cannot_allow_insecure_lan(
 
 def test_auth_schema_upgrade_is_additive_and_bootstrap_cannot_reset(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from waterlooworks_flash_next.database import open_database
 
     path = tmp_path / "db.sqlite3"
-    connection = open_database(path)
+    from waterlooworks_flash_next import database
+
+    with monkeypatch.context() as legacy:
+        legacy.setattr(database, "SCHEMA_VERSION", 13)
+        connection = open_database(path)
     # Empty v10 boundary, not fabricated source records.
+    connection.execute("DROP TABLE openai_reauth_challenges")
+    connection.execute("DROP TABLE openai_credentials")
+    connection.execute("DROP TABLE waterlooworks_credentials")
     connection.execute("DROP TABLE app_sessions")
     connection.execute("DROP TABLE app_users")
     connection.execute("PRAGMA user_version=10")
-    before = set(connection.execute("SELECT type, name, sql FROM sqlite_master"))
+    before = set(
+        connection.execute(
+            "SELECT type, name, sql FROM sqlite_master WHERE name<>'inference_jobs'"
+        )
+    )
     connection.close()
     connection = open_database(path)
     after = set(connection.execute("SELECT type, name, sql FROM sqlite_master"))
@@ -318,3 +338,66 @@ def test_open_sse_stops_after_logout_or_expiry(tmp_path: Path, invalidate: str) 
                 await anext(iterator)
 
         asyncio.run(consume())
+
+
+def test_admin_refresh_challenge_empty_read_does_not_start_work(tmp_path: Path) -> None:
+    path = tmp_path / "db.sqlite3"
+    with session_client(path) as client:
+        response = client.get("/api/admin/refresh-auth")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json() == {
+            "run_id": None,
+            "approval_required": False,
+            "code": None,
+            "expires_in_seconds": 0,
+        }
+        with sqlite3.connect(path) as connection:
+            assert (
+                connection.execute("SELECT count(*) FROM collection_runs").fetchone()[0]
+                == 0
+            )
+
+
+def test_current_challenge_is_admin_only_and_never_in_refresh_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import secrets
+
+    from waterlooworks_flash_next import api
+    from waterlooworks_flash_next.api_models import RefreshSnapshot
+    from waterlooworks_flash_next.login import AuthDeadline
+    from waterlooworks_flash_next.refresh import RefreshService
+
+    services: list[RefreshService] = []
+
+    def capture_service(
+        path: Path, root: Path | None, *, detail_limit: int | None = None
+    ) -> RefreshService:
+        service = RefreshService(path, root, detail_limit=detail_limit)
+        services.append(service)
+        return service
+
+    # Observe the real service; no authentication or provider behavior is replaced.
+    monkeypatch.setattr(api, "RefreshService", capture_service)
+    path = tmp_path / "empty.sqlite3"
+    with session_client(path) as client:
+        service = services[0]
+        service.state = RefreshSnapshot(run_id="current", status="running")
+        service.auth_challenge.begin("current", AuthDeadline())
+        code = f"{secrets.randbelow(1000):03d}"
+        service.auth_challenge.publish("current", code)
+        response = client.get("/api/admin/refresh-auth")
+        assert response.status_code == 200
+        assert (response.json()["code"] == code) is True
+        assert response.headers["cache-control"] == "no-store"
+        assert "code" not in client.get("/api/refresh").json()
+        assert '"code":' not in client.get("/api/refresh/events?once=true").text
+        service.state.run_id = "different"
+        assert client.get("/api/admin/refresh-auth").json()["code"] is None
+        service.state.run_id = "current"
+        service.state.status = "failed"
+        assert client.get("/api/admin/refresh-auth").json()["code"] is None
+        service.auth_challenge.clear("current")
+        client.post("/api/auth/logout", json={})
+        assert client.get("/api/admin/refresh-auth").status_code == 401

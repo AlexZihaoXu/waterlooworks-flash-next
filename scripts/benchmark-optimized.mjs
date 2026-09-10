@@ -43,6 +43,7 @@ async function main() {
     throw new Error('Invalid private dataset');
   }
   const engine = await loadEngine({
+    provider: 'local-benchmark',
     maxTokens: options.maxTokens,
     timeout: options.timeout,
     concurrency: options.concurrency,

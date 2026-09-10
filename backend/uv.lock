@@ -1322,8 +1322,10 @@ name = "waterlooworks-flash-next"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "firebase-admin" },
+    { name = "httpx" },
     { name = "playwright" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -1333,7 +1335,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -1341,9 +1342,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=46,<51" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "firebase-admin", specifier = ">=7.5.0" },
-    { name = "playwright", specifier = ">=1,<2" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "playwright", specifier = "==1.62.0" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "tzdata", specifier = ">=2026.3" },
@@ -1352,7 +1355,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "mypy", specifier = ">=1,<2" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "ruff", specifier = ">=0.12,<1" },

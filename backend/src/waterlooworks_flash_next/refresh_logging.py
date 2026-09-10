@@ -13,7 +13,7 @@ from waterlooworks_flash_next.login import STEPS
 
 FORMATS = frozenset(
     {
-        "%s Closing browser in 3 seconds; exit code 1.",
+        "Authentication stopped; no automatic retry.",
         "Accepted optional device trust prompt; waiting for WaterlooWorks.",
         "All Jobs click completed; checking captured listing responses.",
         "Batch %d/%d: pages %d-%d (sequential).",
@@ -27,7 +27,7 @@ FORMATS = frozenset(
         "Completed stage: sign in. Observing Duo or WaterlooWorks via DOM only.",
         "Dashboard not confirmed; skipping job-board navigation.",
         "Disable DEBUG and PWDEBUG before entering credentials.",
-        "Duo approval required; use the code in the browser.",
+        "Duo approval required; open Admin settings from the account button.",
         "Failed stage: %s. Sensitive diagnostics suppressed.",
         (
             "Fetch finished: page %d/%d | received %d | records %d | "
@@ -120,7 +120,9 @@ def safe_message(record: logging.LogRecord) -> str:
     if type(message) is not str:
         return prefix + "Unreviewed log content withheld."
     if message.startswith("Detected verification code:"):
-        return prefix + "Duo approval required; use the code in the browser."
+        return prefix + (
+            "Duo approval required; open Admin settings from the account button."
+        )
     if not record.args and re.fullmatch(
         r"Detail capture blocked: resource=(image|font|stylesheet|media|texttrack|"
         r"script|document|xhr|fetch|other|unknown); method=(get|post|other|unknown); "

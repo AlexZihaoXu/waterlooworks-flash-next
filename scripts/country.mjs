@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { OpenAIBridge } from './openai-bridge.mjs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { safeDatasetPath } from './benchmark-lib.mjs';
@@ -21,7 +23,7 @@ async function main() {
        npm run country -- stop RUN_ID
        npm run country -- resume RUN_ID
 Options: --database PATH (default data/waterlooworks.sqlite3), --hours 10.
-Requires schema10/11, tested loaded Gemma Q2_K_XL at context65536/four slots.
+Requires schema10/11/12/13/14, schema14 for OpenAI gpt-5.6-luna/low; <=4 paid requests at once.
 No refresh, model loading, source updates or replacement of existing projections.
 Country predictions are separate from verified source facts. No salary/keyword calls.
 Resume never reissues terminal results or lost in-flight calls; start a new explicit run to retry failures.`);
@@ -79,7 +81,9 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
   const db = new DatabaseSync(dbPath, { readOnly: action === 'status' });
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
   if (
-    ![10, 11].includes(db.prepare('PRAGMA user_version').get().user_version)
+    ![10, 11, 12, 13, 14].includes(
+      db.prepare('PRAGMA user_version').get().user_version,
+    )
   ) {
     db.close();
     throw new Error(
@@ -124,8 +128,14 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
     return;
   }
   let heartbeat;
+  let bridge;
+  let activeOwner;
   try {
-    const engine = await loadCountryEngine({ concurrency });
+    if (db.prepare('PRAGMA user_version').get().user_version !== 14)
+      throw new Error('Schema14 is required for paid extraction');
+    bridge = new OpenAIBridge();
+    await bridge.initialize(dbPath);
+    const engine = await loadCountryEngine({ concurrency, bridge });
     const ownership = beginCountryRun(
       db,
       engine,
@@ -133,6 +143,11 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
     );
     runId = ownership.runId;
     const owner = ownership.owner;
+    activeOwner = owner;
+    await bridge.bind(runId, owner, 'country');
+    console.log(
+      'Paid OpenAI run: persisted request limit and known-cost stop threshold apply, not a hard monetary cap. Review admin usage before any new run after unknown usage.',
+    );
     console.log(
       `Run ${runId}; model ${engine.configuration.model.id}; concurrency ${concurrency}; deadline ${hours}h`,
     );
@@ -177,7 +192,19 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
           item = claimCountry(db, runId, owner);
           if (!item) return;
           if (item.stale) continue;
-          const result = await inferCountry(engine, item.input);
+          const result = await inferCountry(
+            engine,
+            item.input,
+            createHash('sha256')
+              .update(
+                JSON.stringify([
+                  item.posting_id,
+                  item.input_hash,
+                  engine.configurationHash,
+                ]),
+              )
+              .digest('hex'),
+          );
           persistCountry(db, runId, owner, item, result);
           finished++;
           console.log(`${finished} checkpointed: ${result.status}`);
@@ -209,22 +236,34 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
         "SELECT count(*) n FROM country_inference_items WHERE run_id=? AND status IN ('pending','running')",
       )
       .get(runId).n;
-    const status = fatal ? 'failed' : pending ? 'stopped' : 'completed';
+    const failures = db
+      .prepare(
+        "SELECT count(*) n FROM country_inference_items WHERE run_id=? AND status='failed'",
+      )
+      .get(runId).n;
+    const status =
+      fatal || failures ? 'failed' : pending ? 'stopped' : 'completed';
     db.prepare(
       'UPDATE country_inference_runs SET status=?,owner=NULL,lease_until_ms=0,updated_at=? WHERE run_id=? AND owner=?',
     ).run(status, new Date().toISOString(), runId, owner);
     console.log(`Run ${runId}: ${status}`);
     console.table(countryCounts(db, runId));
-    if (fatal) process.exitCode = 1;
+    if (fatal || failures) process.exitCode = 1;
     else if (pending) process.exitCode = 2;
   } finally {
     clearInterval(heartbeat);
+    if (bridge) await bridge.close();
+    if (activeOwner) {
+      db.prepare(
+        "UPDATE country_inference_runs SET status='stopped',owner=NULL,lease_until_ms=0 WHERE run_id=? AND owner=? AND status='running'",
+      ).run(runId, activeOwner);
+    }
     db.close();
   }
 }
 main().catch(() => {
   console.error(
-    'Country inference did not proceed; check schema10/11, CLI bounds, idle sources and the tested loaded model. Diagnostics suppressed.',
+    'Country inference did not proceed; check schema10/11/12/13/14, CLI bounds, idle sources OpenAI settings, usage and persisted budget limits. Diagnostics suppressed.',
   );
   process.exitCode = 1;
 });

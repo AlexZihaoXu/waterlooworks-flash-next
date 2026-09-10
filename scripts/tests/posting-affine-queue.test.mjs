@@ -161,7 +161,14 @@ test('explicit expired-run resume retains terminal checkpoints and the existing 
     db.exec(
       "UPDATE source_extraction_items SET attempts=2 WHERE posting_id='2'",
     );
-    const ownership = resumeRun(db, { configurationHash: 'same' }, 'r');
+    const ownership = resumeRun(
+      db,
+      {
+        configurationHash: 'same',
+        configuration: { provider: 'local-benchmark' },
+      },
+      'r',
+    );
     assert.notEqual(ownership.owner, 'old');
     assert.deepEqual(
       counts(db, 'r').map((x) => [x.status, x.count]),

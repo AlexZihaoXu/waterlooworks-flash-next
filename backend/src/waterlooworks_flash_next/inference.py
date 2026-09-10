@@ -1,12 +1,10 @@
-"""Explicit resumable loopback Qwen extraction for already saved postings."""
+"""Explicit bounded Responses extraction for already saved postings."""
 
 import argparse
 import concurrent.futures
 import hashlib
 import json
 import sqlite3
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,30 +12,44 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from waterlooworks_flash_next.compact_history import revision_snapshot
 from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.credentials import CredentialError
 from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.inference_prompt import build_responses_prompt
 from waterlooworks_flash_next.model_validation import (
+    EXTRACTION_INSTRUCTIONS,
     INPUT_VERSION,
-    TEMPLATE_VERSION,
     VALIDATOR_VERSION,
+    ExtractionCandidate,
     ModelOutputError,
     ValidatedExtraction,
-    build_raw_prompt,
-    parse_completion_text,
+    _reject_constant,
+    _strict_object,
     validate_extraction,
 )
 from waterlooworks_flash_next.normalized_storage import decimal_to_storage
+from waterlooworks_flash_next.openai_ledger import (
+    AttemptLedger,
+    BudgetLimits,
+    BudgetStopped,
+)
+from waterlooworks_flash_next.openai_provider import (
+    ENDPOINT,
+    TEMPLATE_VERSION,
+    ProviderError,
+    ResponsesProvider,
+)
+from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
 from waterlooworks_flash_next.parser_models import ParserModel
+from waterlooworks_flash_next.provider_lease import ProviderLease
 
-MODEL_ID = "qwen3.8-27b@q4_k_m"
-MODEL_NAME = "qwen3.8-27b"
-MODEL_VERSION = "q4_k_m"
-ENDPOINT = "http://127.0.0.1:1234"
+MODEL_NAME = MODEL_ID
+MODEL_VERSION = "responses-low-default-v1"
 MAX_TOKENS = 4096
-TIMEOUT_SECONDS = 600
+TIMEOUT_SECONDS = 120
 LEASE_SECONDS = TIMEOUT_SECONDS + 60
 MAX_JOB_POSTINGS = 10_000
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -55,7 +67,10 @@ class _OwnershipLost(Exception):
 
 
 class _ProviderError(Exception):
-    def __init__(self, category: str, retryable: bool = False) -> None:
+    def __init__(
+        self, category: str, retryable: bool = False, halt: bool = False
+    ) -> None:
+        self.halt = halt
         super().__init__(category)
         self.category = category
         self.retryable = retryable
@@ -63,7 +78,7 @@ class _ProviderError(Exception):
 
 class InferenceConfig(ParserModel):
     concurrency: int = Field(default=4, ge=1, le=4)
-    max_attempts: int = Field(default=2, ge=1, le=3)
+    max_attempts: int = Field(default=1, ge=1, le=1)
 
 
 @dataclass(frozen=True)
@@ -87,19 +102,6 @@ class _Item:
     request_compensation: bool
     request_skills: bool
     deterministic_skills: tuple[str, ...]
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: object,
-        newurl: str,
-    ) -> None:
-        return None
 
 
 def _now() -> str:
@@ -128,76 +130,39 @@ def _renew_lease(
 def _pipeline_version() -> str:
     value = (
         f"{MODEL_ID}|{INPUT_VERSION}|{TEMPLATE_VERSION}|"
-        f"{VALIDATOR_VERSION}|{MAX_TOKENS}"
+        f"{VALIDATOR_VERSION}|{MAX_TOKENS}|{EXTRACTION_INSTRUCTIONS}|"
+        f"{json.dumps(ExtractionCandidate.model_json_schema(), sort_keys=True)}"
     )
     return f"{VALIDATOR_VERSION}-{hashlib.sha256(value.encode()).hexdigest()[:12]}"
 
 
-def _request(path: str, body: dict[str, object] | None = None) -> object:
-    data = None if body is None else json.dumps(body, separators=(",", ":")).encode()
-    if data is not None and len(data) > MAX_BODY_BYTES:
-        raise _ProviderError("configuration")
-    request = urllib.request.Request(
-        ENDPOINT + path,
-        data=data,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST" if data is not None else "GET",
-    )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+def _database_path(connection: sqlite3.Connection) -> Path:
+    return Path(connection.execute("PRAGMA database_list").fetchone()[2])
+
+
+def _complete(item: _Item, path: Path) -> ValidatedExtraction:
+    schema = ExtractionCandidate.model_json_schema()
+    schema["$defs"]["EvidenceCandidate"]["properties"]["field"] = {
+        "type": "string",
+        "enum": sorted(item.fields),
+    }
     try:
-        with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-            declared = response.headers.get("Content-Length")
-            if declared is not None and int(declared) > MAX_BODY_BYTES:
-                raise _ProviderError("response_size")
-            raw = response.read(MAX_BODY_BYTES + 1)
-            if len(raw) > MAX_BODY_BYTES:
-                raise _ProviderError("response_size")
-    except urllib.error.HTTPError as error:
-        if error.code == 429 or error.code >= 500:
-            raise _ProviderError("http_server", retryable=True) from None
-        raise _ProviderError("http_client") from None
-    except TimeoutError:
-        raise _ProviderError("timeout", retryable=True) from None
-    except (urllib.error.URLError, ConnectionError, OSError, ValueError):
-        raise _ProviderError("connection", retryable=True) from None
-    try:
-        return json.loads(
-            raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError())
+        text = ResponsesProvider(path).complete(
+            item.job_id,
+            hashlib.sha256(f"{item.posting_id}|{item.input_hash}".encode()).hexdigest(),
+            [
+                {"role": "system", "content": EXTRACTION_INSTRUCTIONS},
+                {"role": "user", "content": item.prompt},
+            ],
+            "posting_extraction",
+            schema,
+            MAX_TOKENS,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-        raise _ProviderError("response_schema") from None
-
-
-def _verify_model() -> None:
-    payload = _request("/api/v1/models")
-    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
-        raise _ProviderError("response_schema")
-    loaded = [
-        model
-        for model in payload["models"]
-        if isinstance(model, dict) and model.get("loaded_instances")
-    ]
-    if len(loaded) != 1 or loaded[0].get("key") != MODEL_ID:
-        raise _ProviderError("model_unavailable")
-
-
-def _complete(item: _Item) -> ValidatedExtraction:
-    payload = _request(
-        "/v1/completions",
-        {
-            "model": MODEL_ID,
-            "prompt": item.prompt,
-            "temperature": 0,
-            "max_tokens": MAX_TOKENS,
-            "stop": ["<|im_end|>", "<|endoftext|>"],
-        },
-    )
-    try:
-        choices = payload["choices"]  # type: ignore[index]
-        choice = choices[0]
-        if len(choices) != 1 or choice["finish_reason"] != "stop":
-            raise TypeError
-        candidate = parse_completion_text(choice["text"])
+        candidate = ExtractionCandidate.model_validate(
+            json.loads(
+                text, object_pairs_hook=_strict_object, parse_constant=_reject_constant
+            )
+        )
         return validate_extraction(
             candidate,
             item.fields,
@@ -206,15 +171,30 @@ def _complete(item: _Item) -> ValidatedExtraction:
             request_skills=item.request_skills,
             deterministic_skills=item.deterministic_skills,
         )
-    except ModelOutputError as error:
+    except BudgetStopped:
+        raise _ProviderError("configuration", halt=True) from None
+    except CredentialError:
+        raise _ProviderError("configuration", halt=True) from None
+    except ProviderError as error:
         category = (
-            "thinking_boundary"
-            if "thinking boundary" in str(error)
+            error.category
+            if error.category
+            in (
+                "configuration",
+                "timeout",
+                "connection",
+                "http_client",
+                "http_server",
+                "response_size",
+                "response_schema",
+            )
             else "evidence_rejected"
+            if error.category == "refusal"
+            else "response_schema"
         )
-        raise _ProviderError(category) from None
-    except (KeyError, IndexError, TypeError):
-        raise _ProviderError("response_schema") from None
+        raise _ProviderError(category, halt=category != "evidence_rejected") from None
+    except (ModelOutputError, ValidationError, ValueError):
+        raise _ProviderError("evidence_rejected") from None
 
 
 def _source(
@@ -257,14 +237,41 @@ def _source(
             (row[4],),
         )
     )
+    from waterlooworks_flash_next.inference_compatibility import (
+        trusted_model_projection,
+    )
+    from waterlooworks_flash_next.source_enrichment import read_source_enrichment
+
+    model = trusted_model_projection(connection, posting_id)
+    reused = (False, False)
+    if model is not None:
+        reused = tuple(
+            connection.execute(
+                "SELECT coalesce(max(request_compensation),0),"
+                "coalesce(max(request_skills),0) "
+                "FROM inference_job_items WHERE cache_id=? AND status='accepted'",
+                (model["cache_id"],),
+            ).fetchone()
+        )
+    enrichment = read_source_enrichment(connection, posting_id).get(posting_id)
+    salary_saved = enrichment is not None and enrichment.salary.state in (
+        "accepted",
+        "empty",
+        "partial",
+    )
+    keywords_saved = enrichment is not None and enrichment.keywords_status.state in (
+        "accepted",
+        "empty",
+        "partial",
+    )
     return (
         row[0],
         row[1],
         row[2],
         row[3],
         content,
-        row[5] == "needs_analysis",
-        row[6] == "unknown",
+        row[5] == "needs_analysis" and not reused[0] and not salary_saved,
+        row[6] == "unknown" and not reused[1] and not keywords_saved,
         skills,
     )
 
@@ -300,7 +307,7 @@ def create_inference_job(
             items = []
             for posting_id in posting_ids:
                 source = _source(connection, posting_id)
-                _, input_hash = build_raw_prompt(
+                _, input_hash = build_responses_prompt(
                     source[4].fields,
                     request_compensation=source[5],
                     request_skills=source[6],
@@ -354,6 +361,9 @@ def create_inference_job(
                         None if needed else created,
                     ),
                 )
+        AttemptLedger(_database_path(connection)).create_run(
+            job_id, BudgetLimits.from_environment()
+        )
         return job_id
     except InferenceError:
         raise
@@ -443,7 +453,7 @@ def _prepare_item(connection: sqlite3.Connection, row: sqlite3.Row) -> _Item:
             (row["posting_id"],),
         )
     )
-    prompt, input_hash = build_raw_prompt(
+    prompt, input_hash = build_responses_prompt(
         content.fields,
         request_compensation=bool(row["request_compensation"]),
         request_skills=bool(row["request_skills"]),
@@ -757,6 +767,22 @@ def run_inference_job(
     job_id: str,
     *,
     on_progress: Callable[[], None] | None = None,
+    provider_lease: ProviderLease | None = None,
+) -> None:
+    path = _database_path(connection)
+    if provider_lease is not None:
+        provider_lease.require_owner(path)
+        _run_inference_job(connection, job_id, on_progress=on_progress)
+    else:
+        with ProviderLease(path):
+            _run_inference_job(connection, job_id, on_progress=on_progress)
+
+
+def _run_inference_job(
+    connection: sqlite3.Connection,
+    job_id: str,
+    *,
+    on_progress: Callable[[], None] | None = None,
 ) -> None:
     """Run pending items; report progress only after durable checkpoints commit."""
     row = connection.execute(
@@ -785,8 +811,12 @@ def run_inference_job(
     if on_progress is not None:
         on_progress()
     try:
-        _verify_model()
-    except _ProviderError as error:
+        path = _database_path(connection)
+        ledger = AttemptLedger(path)
+        ledger.create_run(job_id, BudgetLimits.from_environment())
+        ledger.require_resumable(job_id)
+        ResponsesProvider(path).require_ready()
+    except (CredentialError, BudgetStopped):
         try:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -794,7 +824,7 @@ def run_inference_job(
                 connection.execute(
                     "UPDATE inference_jobs SET status='failed',finished_at=?,"
                     "lease_expires_at=NULL,error_category=? WHERE job_id=?",
-                    (_now(), error.category, job_id),
+                    (_now(), "configuration", job_id),
                 )
         except _OwnershipLost:
             pass
@@ -849,7 +879,9 @@ def run_inference_job(
         if not calls:
             continue
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {pool.submit(_complete, item): (row, item) for row, item in calls}
+            futures = {
+                pool.submit(_complete, item, path): (row, item) for row, item in calls
+            }
             remaining = set(futures)
             while remaining:
                 done, remaining = concurrent.futures.wait(
@@ -882,12 +914,20 @@ def run_inference_job(
                                     (job_id, item.posting_id),
                                 ).fetchone()[0]
                                 retry = error.retryable and attempt < max_attempts
+                                if error.halt:
+                                    connection.execute(
+                                        "UPDATE inference_jobs "
+                                        "SET stop_requested=1 WHERE job_id=?",
+                                        (job_id,),
+                                    )
                                 connection.execute(
                                     "UPDATE inference_job_items SET status=?,"
                                     "error_category=?,finished_at=? "
                                     "WHERE job_id=? AND posting_id=?",
                                     (
-                                        "pending"
+                                        "interrupted"
+                                        if error.halt
+                                        else "pending"
                                         if retry
                                         else "failed"
                                         if error.retryable
@@ -944,6 +984,32 @@ def _prepare_resume(connection: sqlite3.Connection, job_id: str) -> bool:
             and lease > datetime.now(UTC)
         ):
             raise InferenceError("Inference job is still active.")
+        identity = connection.execute(
+            (
+                "SELECT "
+                "model_id,endpoint,input_version,template_version,valid"
+                "ator_version,max_tokens FROM inference_jobs WHERE "
+                "job_id=?"
+            ),
+            (job_id,),
+        ).fetchone()
+        if tuple(identity) != (
+            MODEL_ID,
+            ENDPOINT,
+            INPUT_VERSION,
+            TEMPLATE_VERSION,
+            VALIDATOR_VERSION,
+            MAX_TOKENS,
+        ):
+            raise InferenceError(
+                "Historical inference configuration cannot resume with this provider."
+            )
+        try:
+            AttemptLedger(_database_path(connection)).require_resumable(job_id)
+        except BudgetStopped:
+            raise InferenceError(
+                "Unknown OpenAI usage requires review before an explicit new run."
+            ) from None
         if job[0] not in ("running", "stopping", "interrupted", "failed"):
             raise InferenceError("Inference job is not resumable.")
         now = _now()
@@ -988,10 +1054,15 @@ def _prepare_resume(connection: sqlite3.Connection, job_id: str) -> bool:
         return False
 
 
-def resume_inference_job(connection: sqlite3.Connection, job_id: str) -> None:
+def resume_inference_job(
+    connection: sqlite3.Connection,
+    job_id: str,
+    *,
+    provider_lease: ProviderLease | None = None,
+) -> None:
     """Explicitly reset retryable abandoned work, then run it."""
     if _prepare_resume(connection, job_id):
-        run_inference_job(connection, job_id)
+        run_inference_job(connection, job_id, provider_lease=provider_lease)
 
 
 def start_inference_job(
@@ -999,15 +1070,16 @@ def start_inference_job(
     posting_ids: list[str],
     config: InferenceConfig | None = None,
 ) -> str:
-    job_id = create_inference_job(connection, posting_ids, config)
-    if inference_job_status(connection, job_id).persisted_status == "pending":
-        run_inference_job(connection, job_id)
-    return job_id
+    with ProviderLease(_database_path(connection)) as lease:
+        job_id = create_inference_job(connection, posting_ids, config)
+        if inference_job_status(connection, job_id).persisted_status == "pending":
+            run_inference_job(connection, job_id, provider_lease=lease)
+        return job_id
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Explicit saved-posting Qwen extraction"
+        description="Explicit saved-posting OpenAI extraction (paid; bounded run)"
     )
     parser.add_argument("database", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1016,12 +1088,15 @@ def main() -> None:
     selection.add_argument("--posting-id", action="append")
     selection.add_argument("--all", action="store_true", dest="all_postings")
     start.add_argument("--concurrency", type=int, default=4)
-    start.add_argument("--max-attempts", type=int, default=2)
+    start.add_argument("--max-attempts", type=int, default=1)
     for name in ("resume", "stop", "status"):
         commands.add_parser(name).add_argument("job_id")
     args = parser.parse_args()
     connection = open_database(args.database)
+    lease = None
     try:
+        if args.command in ("start", "resume"):
+            lease = ProviderLease(args.database).acquire()
         if args.command == "start":
             posting_ids = (
                 [
@@ -1042,16 +1117,18 @@ def main() -> None:
                 ),
             )
             print(json.dumps({"job_id": job_id, "status": "pending"}), flush=True)
-            run_inference_job(connection, job_id)
+            run_inference_job(connection, job_id, provider_lease=lease)
         else:
             job_id = args.job_id
             if args.command == "resume":
-                resume_inference_job(connection, job_id)
+                resume_inference_job(connection, job_id, provider_lease=lease)
             elif args.command == "stop":
                 request_inference_stop(connection, job_id)
         status = inference_job_status(connection, job_id)
         print(json.dumps(status.__dict__, sort_keys=True, separators=(",", ":")))
     finally:
+        if lease is not None:
+            lease.close()
         connection.close()
 
 

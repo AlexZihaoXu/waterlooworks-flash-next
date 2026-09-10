@@ -1,0 +1,97 @@
+# Production artifacts (B3), not live deployment acceptance
+
+This stage supplies a Linux x86_64 backend image, frontend SPA/API proxy and Compose configuration. It does **not** authorize source/private-file transfer, SSH, container starts, production migration, TLS configuration, real authentication/refresh or paid inference. Those are parent/owner gates. No GPU or local model service is needed to browse saved jobs. Startup, GET and saving admin configuration make zero paid calls; refresh is disabled by default.
+
+## Images and isolation
+
+- `backend/Dockerfile`: Python3.12 from `mcr.microsoft.com/playwright/python:v1.62.0-noble`, exact `playwright==1.62.0`, `uv.lock` installed at build time with uv0.9.22. No runtime installer/uv wrapper. Node22.22.3 is copied from its pinned Debian image; run `node scripts/extract.mjs` / `node scripts/country.mjs` directly. The private bridge starts `/opt/venv/bin/python` via `UV_PROJECT_ENVIRONMENT=/opt/venv`. Generic prompts and source-owned compatibility contracts are included, never source data.
+- One API process/worker/replica, init enabled, UID/GID10001, all capabilities dropped, no-new-privileges, read-only root, private1GiB `/dev/shm` (not host IPC). Only `/app/data`, `/app/browser-profile`, private512MiB `/tmp` and shared memory are writable. SQLite/provider lock stays on local persistent storage; do not scale, use network filesystems, hardlink aliases or attach other provider workers around the shared lease.
+- `frontend/Dockerfile`: Node22.22.3 build and nginx-unprivileged1.28.2 runtime, UID/GID101, read-only root,32MiB private `/tmp`, no capabilities. SPA fallback and `/api` plus `/doc` proxying are configured. SSE buffering/cache/compression are not enabled; access logging is disabled and error logging restricted. The API's own sanitized/no-store policies remain authoritative.
+- The dedicated bridge subnet is `172.30.87.0/29`, frontend `.2`, backend `.3`. No API port is published. The bridge allows necessary outbound HTTPS for Google, WaterlooWorks, FX and explicitly admitted OpenAI; it is **not** an internet-denying `internal` network. Only frontend publishes `127.0.0.1:8080`. No CDP, browser-server, VNC, SSH or GPU service. Check subnet collisions before deployment; a change must update IPAM, both static addresses and the backend's exact trusted peer together. Never attach unrelated containers to this trusted network.
+
+### Chromium sandbox gate
+
+The [official Playwright Python Docker guidance](https://playwright.dev/python/docs/docker) recommends a separate user and Docker's default seccomp profile with `clone`, `setns`, `unshare` allowances for scraping. `deployment/chromium-seccomp.json` vendors the [Playwright v1.62.0 profile](https://github.com/microsoft/playwright/blob/v1.62.0/utils/docker/seccomp_profile.json) (Apache-2.0 upstream); it retains default deny and capability-conditioned rules. Beyond JSON formatting, a narrow `clone3` deny rule returns `ENOSYS` (errno38), allowing noble/glibc to fall back to the profile-filtered `clone` syscall instead of failing thread creation on `EPERM`. This does not allow `clone3` or disable confinement. The profile additionally allows `openat2`, alongside its existing `openat` access, for runc's secure procfs path resolution. The older upstream profile omitted this syscall and failed before Python started on the server's runc1.3.3; Docker's default confined profile passed the same basic execution check. `chroot` is allowed without the profile's container-capability condition so Chromium can use it after creating its own user namespace. Kernel capability checks still apply; Compose continues dropping **all** container capabilities. This fixes the observed `sys_chroot("/proc/self/fdinfo/")` sandbox assertion without adding `CAP_SYS_CHROOT` to the container. The upstream recommendation of host IPC is intentionally replaced by private1GiB shm. Do **not** add privileged mode, SYS_ADMIN, `--no-sandbox`, unconfined seccomp/AppArmor, or disable kernel AppArmor restrictions to make it pass.
+
+Parent's read-only server preflight found Ubuntu24.04 x86_64, Compose2.37.1,190GiB free disk/18GiB available RAM, user namespaces enabled but `kernel.apparmor_restrict_unprivileged_userns=1`. This can still prevent Chromium sandbox initialization. Parent built both images on that server and verified Python thread start/join, a Node worker thread, and sandbox-enabled Chromium `about:blank` under the exact nonroot/read-only/cap-drop/seccomp/tmpfs settings below, with no secrets, DB/profile mounts or network. No AppArmor or host security setting was changed. Repeat this gate after runtime/profile changes. Example for the parent only, after choosing the built image tag:
+
+```sh
+docker run --rm --init --network none --read-only --user 10001:10001 \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --security-opt seccomp=./deployment/chromium-seccomp.json --shm-size 1g \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m,uid=10001,gid=10001,mode=0700 \
+  --entrypoint /opt/venv/bin/python "$REVIEWED_BACKEND_IMAGE" -c \
+  'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True, chromium_sandbox=True); page=b.new_page(); page.goto("about:blank"); assert page.url == "about:blank"; b.close(); p.stop(); print("Sandbox-enabled blank launch completed")'
+```
+
+Under the same runtime security options, also verify Python thread start/join, Node initialization and API health before deploying. The blank-page check verifies sandbox-enabled launch, not WaterlooWorks/SSO compatibility or a full sandbox security audit. On failure, retain a sanitized failure category and stop for parent/owner security review. Do not weaken confinement. The B3 writer performed only static checks; the parent subsequently ran the image builds and isolated runtime gate successfully. Real SSO/Duo and API/proxy acceptance are separate.
+
+## Exact TLS boundary
+
+Owner must choose **Tailscale-only versus a public DNS domain**; no private hostname or actual Tailscale Serve configuration is committed. Set `WW_PUBLIC_HOST` to the exact lowercase public DNS hostname, with optional explicit TLS port, in a private non-secret Compose interpolation file copied from `deployment/production.env.example`. No slash, wildcard, scheme or userinfo. This produces one backend origin `https://${WW_PUBLIC_HOST}`. Host matching includes the exact port spelling; configure clients/terminator consistently (normally omit default443).
+
+The operator's TLS proxy/Tailscale Serve terminates HTTPS and sends HTTP **only to host loopback8080**, preserving the exact public Host. It must not publish that listener, expose an HTTP bypass, or forward another host. It must reject unsupported Hosts, apply appropriate request/rate limits, disable private URL/body/header logging and preserve unbuffered long-lived SSE. TLS keys belong to the operator's terminator, not these images. The local host and Docker administrators are part of this trust boundary; loopback is not authentication against local users. Restrict host access accordingly.
+
+nginx rejects any different Host (including unexpected ports), overwrites Host with the configured value, **sets** `X-Forwarded-Proto: https` based on this fixed TLS-only deployment boundary and strips caller-supplied Forwarded/X-Forwarded-For/Host/Port/X-Real-IP. It does not infer security from client headers. The API accepts that one exact HTTPS assertion only from the concrete frontend socket peer `172.30.87.2`. Keep Uvicorn `--no-proxy-headers --no-access-log`; otherwise an upstream header parser could replace the peer before the application checks it. No wildcard, subnet, DNS-name proxy trust, forwarding chains or automatic public URL derivation. Cookies remain Secure even on this internal HTTP hop. The credential-free loopback `/api/health` is the only production HTTP liveness read; it grants no application access.
+
+`WW_AUTH_ALLOW_LOOPBACK_HTTP=0` is fixed in production. Local development's existing explicit loopback Vite exception remains separate; never use it to repair TLS deployment. Exact Origin, JSON and `X-WW-Request: 1` mutation guards, session checks and reveal step-up remain intact. Owner must add the chosen browser hostname to Firebase project's **Authentication → Authorized domains** and verify real Google popup/renewal/step-up behavior. Keep initial access closed until the owner confirms the sole admin role. Existing migrated users/ownership are preserved; never clear them to reopen bootstrap.
+
+## Runtime file secrets and permissions
+
+Do **not** pass the root `.env` to Docker/Compose. Always supply an explicit non-secret `--env-file` so Compose does not implicitly load it. The example contains only public host, absolute secret **paths**, and non-secret bounds. Do not put secret contents in Compose variables, build arguments, frontend VITE variables, config output or `docker inspect` environment output. Protective build exclusions include `.env*`, `*.env`, `.credentials.json`, `.experiment`, `data`, `privatekeys`, key/certificate/database files and `.git`. Provision all real private inputs outside the source/build tree; exclusions do not make arbitrary secret filenames safe to put there.
+
+Two read-only Compose file secrets:
+
+| App variable                    | Mounted path                            | File contents (same encoding as local env)                                                                                           |
+| ------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `FIREBASE_SERVICE_ACCOUNT_FILE` | `/run/secrets/firebase_service_account` | Canonical standard base64 of the same-project service-account JSON, at most32,768 bytes. **Not raw JSON.** Base64 is not encryption. |
+| `WW_CREDENTIALS_KEY_FILE`       | `/run/secrets/ww_credentials_key`       | Existing canonical44-character Fernet key, independent of the database.                                                              |
+
+At most one terminal LF/CRLF is allowed for file inputs. Reads require explicit absolute regular-file paths, are bounded, do not export values into the process environment, and yield only sanitized errors. Missing/unreadable/oversized/malformed keys fail closed. Supplying both an environment variable and its `_FILE` variable is refused **even when one is empty**. Local ignored `.env` behavior is unchanged: environment takes precedence over dotenv, and backend auth/login/bridge code alone may load it at explicit runtime points. Choose one input form; do not leave empty local secret env assignments alongside file settings.
+
+Only backend auth/credential code reads mounted contents. OpenAI stays purpose-encrypted in the schema13 singleton, using the same vetted Fernet helper, not a third plaintext runtime environment key. Its plaintext reveal remains solely the dedicated no-store POST after a one-use challenge and another verified Google OAuth authentication for the same session/admin UID. WW password readback remains forbidden. No secret rotation, plaintext fallback, initialization, credential test or provider request occurs on startup/save.
+
+Compose local file secrets are read-only bind mounts, not an encrypted secret vault. File `uid/gid/mode` remapping is not reliably implemented for this source type; provision host permissions **before** start. The backend must read them as UID/GID10001, and nobody else should: for a rootful daemon, operator can use owner10001/group10001, mode0400, in an operator-only traversable parent directory (Docker daemon needs access). With userns remapping/rootless Docker, calculate the actual mapped host UID/GID instead; do not solve unreadability with0444/0777. Restrict backups and host root access too. Never mount the entire private directory or Docker socket into the app.
+
+Preserve the original encryption key exactly when transferring an existing DB. Never generate a new key for existing ciphertext. For a genuinely empty deployment only, use the existing explicit offline `python -m waterlooworks_flash_next.credentials --env-file <private-provisioning-env> --database <empty-schema14-db>` command with services stopped. The owner privately exports the generated key from that private env file to the mounted key file without printing/logging it, verifies permissions and securely handles the intermediate file. This command refuses existing keys or saved credentials; it is never an entrypoint/test on real data. The obsolete root `.credentials.json` must never be read or migrated.
+
+## Storage, migration, backup and recovery
+
+Named `database` and **fresh** `browser-profile` volumes copy initial0700 ownership10001:10001 from image directories on first use. Do not reuse a local logged-in browser profile or copy browser state with source. Existing volumes need explicit offline ownership/mode verification; Docker will not repair them. The API umask077 protects new SQLite/WAL/provider-lock files; profile and temporary directories are private. No volume is image content. Do not use `docker compose down -v` for upgrades/recovery.
+
+Before the parent transfers private data or starts any writer:
+
+1. Confirm collection and extraction are idle. Stop all writers only through the owner-approved procedure; no production restart is authorized by this document. Retain the original source/version and configuration.
+2. Make a **consistent** private SQLite backup via SQLite's backup API or after cleanly stopping all writers and checkpointing WAL. Copying only the main file while WAL is live is not a backup. Back up the independent encryption key separately; a DB-only restore cannot decrypt credentials. Restrict backup access; other SQLite data is not encrypted.
+3. Restore a private offline copy first. Call `open_database(copy_path).close()` with the new backend; verify `PRAGMA user_version=14`, integrity/FKs, exact table counts and source/history reconstruction/reuse equivalence against the backup. Schema14 narrowly rebuilds **only `inference_jobs`** to allow the exact historical/local or fixed OpenAI model/endpoint pairs and adds metadata-only OpenAI ledger tables. The migration checks retained schema/rows, dependencies, FKs and integrity; unknown dependencies abort/roll back. Auth ownership, hashed sessions, encrypted settings, listings/content/observations, append-only compact history and original extraction provenance must survive unchanged. Populated equivalence is a parent gate, not proven by empty tests.
+4. Only after review, migrate the deployed copy via the same explicit primitive or approved API startup. Startup can migrate schema and mark interrupted work but never resumes/collects/normalizes/infers. Ensure ample temporary disk; no automatic VACUUM. Do not run old incompatible binaries against the upgraded DB.
+5. On failure, stop writers and restore the consistent backup **as a unit** with its matching old application/schema/key/configuration. Keep failed/new evidence private for review; never splice WAL files or run an automatic downgrade. Losing the encryption key requires a separate owner recovery decision, not silent rotation. Never reset users/admin, append-only history or unknown-usage ledger rows as a workaround.
+
+## Staged operator flow (parent gates)
+
+Static credential-free configuration checking does not require secret files or a Docker daemon:
+
+```sh
+docker compose --env-file deployment/production.env.example --profile prod config --quiet
+```
+
+Use `--quiet`, not expanded production config/environment dumps. The existing `dev` profile still serves the frontend only; supplying this explicit non-secret env example also satisfies Compose interpolation for inactive production services. Run the local API separately with its documented loopback safeguards.
+
+After independent artifact review, parent-approved source transfer/image build and the sandbox-only gate, the parent may separately authorize private secret/DB provisioning, chosen TLS/Firebase setup and a browse-only start using a **private** non-secret interpolation file:
+
+```sh
+# NOT executed by B3; owner approval and the prior gates are mandatory.
+docker compose --env-file /operator/private/production.env --profile prod up -d --build
+```
+
+Leave `WW_ENABLE_REFRESH=0` until real HTTPS/session checks and headless pilot approval. Health means only API/database liveness, not valid credentials, sandbox, SSO or provider readiness. Check exact/wrong Host/Origin/forwarded peers, Secure cookie, denied member mutation, no-store admin status, logout/SSE closure and fresh same-admin Google key-reveal step-up. Do not collect private screenshots/traces/form values.
+
+For an explicitly authorized bounded refresh pilot: keep `WW_DETAIL_LIMIT=12`, source pacing unchanged, <=4 actual provider calls in flight, default20 actual attempts and $1 **known-cost stop threshold**. This is not a guaranteed monetary cap: already-dispatched calls may add charges; missing counters/unknown outcomes block more work/resume. Changing limits affects new runs only and cannot erase persisted budgets. Full listings still complete before capped detail collection; paid work reuses trusted source-current caches across the saved workspace. No automatic refresh, full re-extraction, startup/resume job or fallback to a local GPU model is added.
+
+Admin explicitly selects Refresh, then opens **Admin settings** from the account button for the ephemeral current Duo code and usage status. One180-second total auth deadline, one submission, no resend/bypass. Code remains memory-only/admin-only and clears on expiry/terminal/close/logout/account change/tab hiding; it never goes into logs, SSE, DB or OpenAI. Fresh profile real headless SSO/Duo and once-only cleanup must be verified by the owner. Incompatible/unknown flows fail safely and preserve checkpoints; do not restart or retry blindly.
+
+Saved-only `node scripts/extract.mjs` / `node scripts/country.mjs` are explicit operator actions, not deployment commands. Pass `--database /app/data/waterlooworks.sqlite3` and preserve original provider/configuration/bounds when considering resume; prefer status/stop review first. Shared OS lease and immutable run ownership/history remain mandatory. Do not run automatic full-corpus extraction merely because the provider changed. See [provider budgets, reuse and recovery](openai-provider.md).
+
+## Acceptance still required
+
+Independent B3 artifact review; actual image build/native Node+Python bridge validation; Linux seccomp/AppArmor sandbox/private-volume permissions; source and secret transfer approval; populated schema14 migration/restore/reuse; chosen TLS/Tailscale and Firebase authorized-domain/bootstrap/session checks; real fresh-profile headless WW/Duo/Google step-up; bounded OpenAI model/schema/usage/pricing/accuracy pilot. None is implied by successful static/unit/build checks. No live/paid/private/remote operations were performed by this stage.

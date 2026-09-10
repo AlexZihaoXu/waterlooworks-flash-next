@@ -20,12 +20,7 @@ from waterlooworks_flash_next.api_models import (
 )
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import StoredListing
-from waterlooworks_flash_next.inference import MAX_TOKENS, MODEL_ID
-from waterlooworks_flash_next.model_validation import (
-    INPUT_VERSION,
-    TEMPLATE_VERSION,
-    VALIDATOR_VERSION,
-)
+from waterlooworks_flash_next.inference_compatibility import trusted_model_projection
 from waterlooworks_flash_next.observations import observation_series
 from waterlooworks_flash_next.source_enrichment import (
     SourceEnrichment,
@@ -145,25 +140,7 @@ def read_analysis(
         "SELECT 1 FROM posting_projection_current WHERE posting_id=?", (posting_id,)
     ).fetchone()
     model = (
-        connection.execute(
-            """SELECT a.* FROM effective_model_projections e
-           JOIN analysis_projections a ON a.projection_id=e.projection_id
-           JOIN inference_cache cache ON cache.cache_id=e.cache_id
-           WHERE e.posting_id=? AND cache.content_hash=a.content_hash
-             AND cache.model_id=? AND cache.input_version=?
-             AND cache.template_version=? AND cache.validator_version=?
-             AND cache.max_tokens=?""",
-            (
-                posting_id,
-                MODEL_ID,
-                INPUT_VERSION,
-                TEMPLATE_VERSION,
-                VALIDATOR_VERSION,
-                MAX_TOKENS,
-            ),
-        ).fetchone()
-        if row is not None
-        else None
+        trusted_model_projection(connection, posting_id) if row is not None else None
     )
     latest_model = connection.execute(
         """SELECT item.status,item.error_category FROM inference_job_items item
