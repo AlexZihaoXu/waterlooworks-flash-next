@@ -1,0 +1,24 @@
+{
+  "name": "@waterlooworks-flash-next/inference-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Disposable headless Pi agent runner spawned by the backend per inference run.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test --test-concurrency=1 \"dist/test/*.test.js\"",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}
