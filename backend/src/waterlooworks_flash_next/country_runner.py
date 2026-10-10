@@ -388,6 +388,50 @@ def _persist(
         )
 
 
+_INVALID_OUTPUT = frozenset(
+    {"evidence_rejected", "no_submission", "max_turns", "max_tool_calls"}
+)
+
+
+def infer_one(
+    session: PiSession, posting_id: str, fields: dict[str, str], ai: AIConfig
+) -> tuple[dict[str, Any], bool]:
+    """One posting's checkpoint result and whether the run must halt.
+
+    A sidecar failure (crash, protocol, transport) is an infrastructure failure
+    that halts the run but never escapes, so the final status is still written.
+    """
+    user = (
+        json.dumps({"fields": fields}, ensure_ascii=False, separators=(",", ":"))
+        .replace("<", r"\u003c")
+        .replace(">", r"\u003e")
+    )
+    try:
+        outcome = session.run_item(
+            PiItem(
+                item_id=f"c-{posting_id}",
+                kind="country",
+                system=f"{PROMPT.strip()} {COUNTRY_TOOL_INSTRUCTIONS}",
+                user=user,
+                sections=tuple(fields.items()),
+                submit_schema=country_schema(fields),
+                operation_key=f"country|{posting_id}|{_hash(user)}",
+                check=_checker(fields),
+            )
+        )
+    except Exception:
+        return {"status": "failed", "reason": "infrastructure"}, True
+    if outcome.status == "submitted" and outcome.payload is not None:
+        try:
+            return validate_country(outcome.payload, fields), False
+        except ValueError as error:
+            return {"status": "failed", "reason": str(error)}, False
+    category = outcome.category or "internal"
+    halt = category in _HALTING or (not ai.is_zero_cost and category == "timeout")
+    reason = "invalid_output" if category in _INVALID_OUTPUT else "infrastructure"
+    return {"status": "failed", "reason": reason}, halt
+
+
 def run_country(
     connection: sqlite3.Connection,
     run_id: str,
@@ -463,6 +507,12 @@ def run_country(
     claim_again: tuple[str, dict[str, str]] = ("", {})
 
     def worker(session: PiSession) -> None:
+        try:
+            work(session)
+        except Exception:
+            fatal.set()  # Still reaches the final status update below.
+
+    def work(session: PiSession) -> None:
         while True:
             claimed_item = claim()
             if claimed_item is None:
@@ -470,48 +520,9 @@ def run_country(
             if claimed_item is claim_again:
                 continue
             posting_id, fields = claimed_item
-            user = (
-                json.dumps(
-                    {"fields": fields}, ensure_ascii=False, separators=(",", ":")
-                )
-                .replace("<", r"\u003c")
-                .replace(">", r"\u003e")
-            )
-            outcome = session.run_item(
-                PiItem(
-                    item_id=f"c-{posting_id}",
-                    kind="country",
-                    system=f"{PROMPT.strip()} {COUNTRY_TOOL_INSTRUCTIONS}",
-                    user=user,
-                    sections=tuple(fields.items()),
-                    submit_schema=country_schema(fields),
-                    operation_key=f"country|{posting_id}|{_hash(user)}",
-                    check=_checker(fields),
-                )
-            )
-            if outcome.status == "submitted" and outcome.payload is not None:
-                try:
-                    result = validate_country(outcome.payload, fields)
-                except ValueError as error:
-                    result = {"status": "failed", "reason": str(error)}
-            else:
-                category = outcome.category or "internal"
-                if category in _HALTING or (
-                    not ai.is_zero_cost and category == "timeout"
-                ):
-                    fatal.set()
-                result = {
-                    "status": "failed",
-                    "reason": "invalid_output"
-                    if category
-                    in (
-                        "evidence_rejected",
-                        "no_submission",
-                        "max_turns",
-                        "max_tool_calls",
-                    )
-                    else "infrastructure",
-                }
+            result, halt = infer_one(session, posting_id, fields, ai)
+            if halt:
+                fatal.set()
             with lock:
                 _persist(connection, run_id, posting_id, result)
 

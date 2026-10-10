@@ -106,3 +106,39 @@ def test_pi_country_configuration_is_valid_on_read_and_tamper_evident() -> None:
         AIConfig(model_id="gpt-5.6-luna", reasoning_effort="high")
     )
     assert other[1] != digest
+
+
+class _Session:
+    def __init__(self, outcome: object) -> None:
+        self.outcome = outcome
+
+    def run_item(self, _item: object) -> object:
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+def test_sidecar_errors_become_halting_infrastructure_failures() -> None:
+    from waterlooworks_flash_next.country_runner import infer_one
+    from waterlooworks_flash_next.pi_bridge import ItemResult, SidecarError
+
+    paid = AIConfig(model_id="gpt-5.6-luna")
+    for raised in (SidecarError("connection"), RuntimeError("boom")):
+        result, halt = infer_one(_Session(raised), "1", FIELDS, paid)  # type: ignore[arg-type]
+        assert result == {"status": "failed", "reason": "infrastructure"}
+        assert halt is True
+    result, halt = infer_one(
+        _Session(ItemResult("failed", None, "max_turns", 6, 3)),  # type: ignore[arg-type]
+        "1",
+        FIELDS,
+        paid,
+    )
+    assert (result["reason"], halt) == ("invalid_output", False)
+    answer = _answer()
+    result, halt = infer_one(
+        _Session(ItemResult("submitted", answer, None, 2, 1)),  # type: ignore[arg-type]
+        "1",
+        FIELDS,
+        paid,
+    )
+    assert (result["status"], halt) == ("accepted", False)
