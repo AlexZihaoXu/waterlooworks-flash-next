@@ -23,6 +23,7 @@ import {
   shouldOpenJob,
 } from '../lib/jobDetail';
 import type { DetailState } from '../lib/useJobDetail';
+import { safeExternalUrl } from '../lib/safeExternalUrl';
 import type { SimilarJobsState } from '../lib/similarJobs';
 import type { Posting } from '../lib/workspace';
 import {
@@ -396,14 +397,20 @@ export function JobDetailContent({
                   >
                     {externalStatus}
                   </Typography>
-                  <Link
-                    href={analysis.waterlooworks_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    WaterlooWorks job board
-                    <Link.Icon />
-                  </Link>
+                  {safeExternalUrl(analysis.waterlooworks_url) ? (
+                    <Link
+                      href={safeExternalUrl(analysis.waterlooworks_url)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      WaterlooWorks job board
+                      <Link.Icon />
+                    </Link>
+                  ) : (
+                    <Typography type="body-sm" color="muted">
+                      WaterlooWorks job board link unavailable.
+                    </Typography>
+                  )}
                   {analysis.employer_links.map((link) => (
                     <div
                       className="stack-small"
@@ -412,14 +419,20 @@ export function JobDetailContent({
                       <Typography type="body-xs" color="muted">
                         {link.classification}
                       </Typography>
-                      <Link
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Employer application link
-                        <Link.Icon />
-                      </Link>
+                      {safeExternalUrl(link.url) ? (
+                        <Link
+                          href={safeExternalUrl(link.url)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Employer application link
+                          <Link.Icon />
+                        </Link>
+                      ) : (
+                        <Typography type="body-sm" color="muted">
+                          Unsupported link address (not opened): {link.url}
+                        </Typography>
+                      )}
                     </div>
                   ))}
                 </div>
