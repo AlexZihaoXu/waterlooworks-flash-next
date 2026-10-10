@@ -15,7 +15,7 @@ from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from ssl import SSLError
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, build_opener
+from urllib.request import Request
 
 from waterlooworks_flash_next.content import (
     ContentError,
@@ -33,7 +33,7 @@ from waterlooworks_flash_next.listings import (
     LISTING_URL,
     FailureCategory,
     ListingFetchError,
-    NoRedirect,
+    build_direct_opener,
     decode_response_text,
 )
 
@@ -215,7 +215,7 @@ class DetailSource:
             request = Request(
                 LISTING_URL, data=body, headers=self.headers, method="POST"
             )
-            with build_opener(NoRedirect()).open(request, timeout=30) as response:
+            with build_direct_opener().open(request, timeout=30) as response:
                 if response.status != 200:
                     raise DetailFetchError(FailureCategory.HTTP, status=response.status)
                 if response.headers.get("Content-Encoding", "identity") != "identity":

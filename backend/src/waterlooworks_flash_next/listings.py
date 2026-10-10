@@ -12,7 +12,13 @@ from ssl import SSLError
 from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import (
+    HTTPRedirectHandler,
+    OpenerDirector,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from playwright.sync_api import Page, Response
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
@@ -86,6 +92,16 @@ def http_failure(status: int) -> ListingFetchError:
         retryable=status in (408, 500, 502, 503, 504),
         status=status,
     )
+
+
+def build_direct_opener() -> OpenerDirector:
+    """One opener for authenticated replays: no redirects and never any proxy.
+
+    An explicit empty ProxyHandler stops *_proxy environment variables from routing
+    session-cookie-bearing WaterlooWorks requests through a third party, matching the
+    OpenAI client's trust_env=False.
+    """
+    return build_opener(ProxyHandler({}), NoRedirect())
 
 
 def attempt_delay(attempt: int) -> float:
@@ -308,7 +324,7 @@ class ListingSource:
             request = Request(
                 LISTING_URL, data=body, headers=self.headers, method="POST"
             )
-            with build_opener(NoRedirect()).open(request, timeout=30) as response:
+            with build_direct_opener().open(request, timeout=30) as response:
                 if response.status != 200:
                     raise http_failure(response.status)
                 declared_charset = response.headers.get_content_charset()
