@@ -98,6 +98,17 @@ def fail_content_attempt(
         )
 
 
+def interrupt_content_attempt(connection: sqlite3.Connection, attempt_id: str) -> None:
+    """Close an attempt stopped cleanly by a pacing cap or shutdown (not failed)."""
+    with _write(connection):
+        _pending(connection, attempt_id)
+        connection.execute(
+            "UPDATE posting_content_attempts SET status='interrupted',finished_at=?,"
+            "error_category='cancelled' WHERE attempt_id=?",
+            (datetime.now(UTC).isoformat(), attempt_id),
+        )
+
+
 def complete_content_attempt(
     connection: sqlite3.Connection, attempt_id: str, content: StoredPostingContent
 ) -> int:

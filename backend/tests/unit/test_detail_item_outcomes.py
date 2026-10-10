@@ -20,6 +20,12 @@ from waterlooworks_flash_next.detail_fetch import (
     DetailSource,
 )
 from waterlooworks_flash_next.listings import FailureCategory
+from waterlooworks_flash_next.ww_pacing import PacingConfig, RequestGate
+
+
+def control_gate() -> RequestGate:
+    # Real gate; collections here replace _content, so it never sleeps.
+    return RequestGate(PacingConfig(), daily_remaining=10_000, sleep=lambda s: None)
 
 
 class Recorder:
@@ -27,7 +33,13 @@ class Recorder:
         self.started: list[str] = []
         self.failed: list[tuple[str, str]] = []
         self.completed: list[str] = []
+        self.blocked: list[int] = []
         monkeypatch.setattr(detail_fetch, "start_content_attempt", self.start)
+        monkeypatch.setattr(
+            detail_fetch,
+            "record_blocked_until",
+            lambda connection, run, seconds: self.blocked.append(seconds),
+        )
         monkeypatch.setattr(detail_fetch, "fail_content_attempt", self.fail)
         monkeypatch.setattr(detail_fetch, "complete_content_attempt", self.complete)
 
@@ -69,6 +81,7 @@ def _collection(
         "control-run",
         postings,
         (progress if progress is not None else []).append,
+        gate=control_gate(),
     )
 
     def content(attempt_id: str, posting: StoredListing) -> StoredPostingContent:
@@ -131,6 +144,10 @@ def test_session_level_failures_still_abort_the_pass(
     assert stopped.value.category == category
     assert recorder.started == ["control-0"]
     assert recorder.failed == [("control-0", category.value)]
+    # Ban-risk signals also block refreshes durably; other stops do not.
+    assert bool(recorder.blocked) == (
+        category in (FailureCategory.AUTH, FailureCategory.RATE_LIMIT)
+    )
 
 
 def test_unexpected_exceptions_still_abort_as_internal(
@@ -164,6 +181,7 @@ def test_bootstrap_validation_failure_aborts_because_no_session_remains(
         _postings(2),
         lambda progress: None,
         bootstrap=bootstrap,
+        gate=control_gate(),
     )
     with pytest.raises(DetailFetchError):
         collection.run()

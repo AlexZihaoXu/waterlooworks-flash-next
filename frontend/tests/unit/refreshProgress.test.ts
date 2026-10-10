@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   refreshProgress,
   refreshStageLabel,
+  refreshStopLabel,
+  refreshWaitText,
 } from '../../src/lib/refreshProgress';
 
 // Primitive counters only, never fabricated refresh or posting payloads.
@@ -10,7 +12,10 @@ describe('refresh phase progress', () => {
     for (const [stage, stageLabel] of [
       ['details', 'Fetching posting details'],
       ['detail_retry', 'Fetching posting details (waiting to retry)'],
-      ['detail_rest', 'Fetching posting details (scheduled pause)'],
+      [
+        'detail_rest',
+        'Fetching posting details (resting to stay polite to WaterlooWorks)',
+      ],
     ]) {
       expect(refreshProgress(stage, [25, 25], [2, 12])).toEqual({
         detailsPhase: true,
@@ -29,6 +34,38 @@ describe('refresh phase progress', () => {
       maxValue: 25,
       isIndeterminate: false,
     });
+  });
+  it('keeps listing rests and retries on listing progress with polite copy', () => {
+    expect(refreshProgress('listing_rest', [4, 25], [0, 0])).toEqual({
+      detailsPhase: false,
+      label: 'Listing refresh progress',
+      stageLabel:
+        'Collecting listings (resting to stay polite to WaterlooWorks)',
+      value: 4,
+      maxValue: 25,
+      isIndeterminate: false,
+    });
+    expect(refreshStageLabel('listing_retry')).toBe(
+      'Collecting listings (waiting to retry)',
+    );
+  });
+  it('labels early stops and flags ban-risk warnings', () => {
+    expect(refreshStopLabel(null)).toBeNull();
+    expect(refreshStopLabel('request_cap')).toBe(
+      'Finished partially: per-run WaterlooWorks request cap reached',
+    );
+    expect(refreshStopLabel('daily_cap')).toMatch(/24-hour/);
+    expect(refreshStopLabel('ban_risk')).toBe(
+      'Stopped: WaterlooWorks ban-risk warning; refreshes are blocked',
+    );
+    expect(refreshStopLabel('unknown')).toBeNull();
+  });
+  it('formats refusal waits coarsely', () => {
+    expect(refreshWaitText(30)).toBe('about 1 min');
+    expect(refreshWaitText(1200)).toBe('about 20 min');
+    expect(refreshWaitText(3600)).toBe('about 1 h');
+    expect(refreshWaitText(6 * 3600 - 10)).toBe('about 6 h');
+    expect(refreshWaitText(3 * 3600 + 300)).toBe('about 3 h 5 min');
   });
   it('never creates a zero maximum for unavailable totals', () => {
     expect(

@@ -37,6 +37,7 @@ from waterlooworks_flash_next.refresh import (
     claim_refresh,
     recover_interrupted_runs,
 )
+from waterlooworks_flash_next.ww_pacing import PacingConfig, RequestGate
 
 
 def _running_control_run(path: Path) -> str:
@@ -193,6 +194,7 @@ def test_detail_pass_stops_between_postings(monkeypatch: pytest.MonkeyPatch) -> 
         postings,
         lambda progress: None,
         should_stop=lambda: bool(started),
+        gate=RequestGate(PacingConfig(), daily_remaining=10),
     )
     collection._content = content  # type: ignore[method-assign]
     with pytest.raises(CollectionInterrupted):

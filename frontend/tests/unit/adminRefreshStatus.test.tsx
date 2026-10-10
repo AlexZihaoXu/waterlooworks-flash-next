@@ -2,8 +2,28 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   parseRefreshAuth,
+  parseRefreshPacing,
   useAdminRefreshStatus,
 } from '../../src/lib/useAdminRefreshStatus';
+
+// The backend default policy with no recorded usage (api_models defaults).
+const pacing = {
+  request_cap: 400,
+  daily_request_cap: 1200,
+  min_interval_minutes: 30,
+  min_gap_seconds: 3,
+  max_gap_seconds: 6,
+  rest_every_min: 20,
+  rest_every_max: 30,
+  rest_min_seconds: 45,
+  rest_max_seconds: 120,
+  used_24h: 0,
+  remaining_24h: 1200,
+  next_allowed_at: null,
+  blocked_until: null,
+  last_pacing_stop: null,
+  last_error_category: null,
+};
 
 const empty = {
   run_id: null,
@@ -86,6 +106,41 @@ it('rejects malformed challenge metadata without input diagnostics', () => {
       'Refresh status unavailable.',
     );
   }
+});
+
+it('separates the pacing status from the challenge and validates it strictly', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((path) =>
+    String(path).endsWith('refresh-auth')
+      ? Promise.resolve(Response.json({ ...empty, pacing }))
+      : new Promise(() => {}),
+  );
+  const { result } = renderHook(() => useAdminRefreshStatus(true, 'admin-a'));
+  await waitFor(() => expect(result.current.pacing).toEqual(pacing));
+  expect(parseRefreshAuth({ ...empty, pacing })).toEqual(empty);
+  const blocked = new Date().toISOString();
+  expect(
+    parseRefreshPacing({
+      ...pacing,
+      blocked_until: blocked,
+      next_allowed_at: blocked,
+      last_pacing_stop: 'ban_risk',
+      last_error_category: 'rate_limit',
+    }).last_pacing_stop,
+  ).toBe('ban_risk');
+  for (const value of [
+    { ...pacing, used_24h: -1 },
+    { ...pacing, request_cap: 1.5 },
+    { ...pacing, last_pacing_stop: 'other' },
+    { ...pacing, blocked_until: 'not a time' },
+    { ...pacing, last_error_category: '<b>' },
+    { ...pacing, extra: true },
+  ]) {
+    expect(() => parseRefreshPacing(value)).toThrow(
+      'Refresh status unavailable.',
+    );
+  }
+  act(() => result.current.clear());
+  expect(result.current.pacing).toBeNull();
 });
 
 it('retains exact Decimal scientific cost strings and unknown subsets without adding tokens', async () => {

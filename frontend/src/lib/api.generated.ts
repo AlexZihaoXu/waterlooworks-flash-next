@@ -397,6 +397,27 @@ export interface components {
       /** Username */
       username: string | null;
     };
+    /**
+     * AdminRefreshStatus
+     * @description Current Duo challenge plus the WaterlooWorks pacing status (admin only).
+     */
+    AdminRefreshStatus: {
+      /** Run Id */
+      run_id?: string | null;
+      /**
+       * Approval Required
+       * @default false
+       */
+      approval_required: boolean;
+      /** Code */
+      code?: string | null;
+      /**
+       * Expires In Seconds
+       * @default 0
+       */
+      expires_in_seconds: number;
+      pacing: components['schemas']['RefreshPacingStatus'];
+    };
     /** AnalysisEvidence */
     AnalysisEvidence: {
       /**
@@ -444,23 +465,6 @@ export interface components {
       source_field: string;
       /** Evidence Text */
       evidence_text: string;
-    };
-    /** AuthChallengeStatus */
-    AuthChallengeStatus: {
-      /** Run Id */
-      run_id?: string | null;
-      /**
-       * Approval Required
-       * @default false
-       */
-      approval_required: boolean;
-      /** Code */
-      code?: string | null;
-      /**
-       * Expires In Seconds
-       * @default 0
-       */
-      expires_in_seconds: number;
     };
     /** ComparablePosting */
     ComparablePosting: {
@@ -1009,6 +1013,66 @@ export interface components {
       message: string;
     };
     /**
+     * RefreshPacingStatus
+     * @description Server pacing policy and rolling usage; no credentials or source data.
+     */
+    RefreshPacingStatus: {
+      /**
+       * Request Cap
+       * @description WW_REFRESH_REQUEST_CAP per run.
+       */
+      request_cap: number;
+      /**
+       * Daily Request Cap
+       * @description WW_REFRESH_DAILY_REQUEST_CAP per rolling 24 hours.
+       */
+      daily_request_cap: number;
+      /**
+       * Min Interval Minutes
+       * @description WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes.
+       */
+      min_interval_minutes: number;
+      /** Min Gap Seconds */
+      min_gap_seconds: number;
+      /** Max Gap Seconds */
+      max_gap_seconds: number;
+      /** Rest Every Min */
+      rest_every_min: number;
+      /** Rest Every Max */
+      rest_every_max: number;
+      /** Rest Min Seconds */
+      rest_min_seconds: number;
+      /** Rest Max Seconds */
+      rest_max_seconds: number;
+      /**
+       * Used 24H
+       * @description Requests counted in the last 24 hours.
+       */
+      used_24h: number;
+      /** Remaining 24H */
+      remaining_24h: number;
+      /**
+       * Next Allowed At
+       * @description UTC ISO time a refresh may start; null when allowed now.
+       */
+      next_allowed_at: string | null;
+      /**
+       * Blocked Until
+       * @description Active ban-risk/rate-limit block end (UTC ISO), if any.
+       */
+      blocked_until: string | null;
+      /**
+       * Last Pacing Stop
+       * @description Why the most recent finished run stopped early, if it did.
+       */
+      last_pacing_stop: ('request_cap' | 'daily_cap' | 'ban_risk') | null;
+      /**
+       * Last Error Category
+       * @description Fixed failure category of the most recent finished run.
+       */
+      last_error_category: string | null;
+    };
+    /**
      * RefreshRequest
      * @description An explicit empty object starts one guarded listing-then-content refresh.
      */
@@ -1077,11 +1141,13 @@ export interface components {
       detail_retries: number;
       /**
        * Detail Bursts
+       * @description Polite rest breaks the shared WaterlooWorks pacing gate took.
        * @default 0
        */
       detail_bursts: number;
       /**
        * Detail Wait Seconds
+       * @description Current scheduled rest/retry wait in seconds.
        * @default 0
        */
       detail_wait_seconds: number;
@@ -1090,6 +1156,27 @@ export interface components {
        * @default false
        */
       detail_limited: boolean;
+      /**
+       * Ww Requests
+       * @description WaterlooWorks requests counted for this run: paced requests, retries and counted browser page loads.
+       * @default 0
+       */
+      ww_requests: number;
+      /**
+       * Ww Request Budget
+       * @description This run's allowance: min(per-run cap, rolling remaining).
+       */
+      ww_request_budget: number | null;
+      /**
+       * Pacing Stop
+       * @description Why the run stopped early: a request cap (finished partial, remaining postings wait for the next refresh) or a ban-risk signal from WaterlooWorks (failed; refreshes blocked).
+       */
+      pacing_stop: ('request_cap' | 'daily_cap' | 'ban_risk') | null;
+      /**
+       * Error Category
+       * @description Fixed failure category of a failed run.
+       */
+      error_category: string | null;
       /** Analysis Job Id */
       analysis_job_id: string | null;
       /**
@@ -1958,7 +2045,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['AuthChallengeStatus'];
+          'application/json': components['schemas']['AdminRefreshStatus'];
         };
       };
       /** @description Unauthorized */

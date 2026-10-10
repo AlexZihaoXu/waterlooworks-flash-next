@@ -16,6 +16,7 @@ from waterlooworks_flash_next.refresh import (
     UNCHANGED,
     configured_full_refetch,
     detail_skip_reason,
+    prefer_unsaved,
     select_detail_queue,
 )
 
@@ -139,3 +140,11 @@ def test_service_carries_server_owned_full_refetch(tmp_path: Path) -> None:
         RefreshService(tmp_path / "db.sqlite3", None, full_refetch=True).full_refetch
         is True
     )
+
+
+def test_capped_runs_progress_by_fetching_unsaved_postings_first() -> None:
+    # Identity-only sentinels; no posting records.
+    queue = [cast(StoredListing, SimpleNamespace(id=str(n))) for n in range(5)]
+    ordered = prefer_unsaved(queue, {"0", "2"})
+    assert [item.id for item in ordered] == ["1", "3", "4", "0", "2"]
+    assert prefer_unsaved(queue, set()) == queue

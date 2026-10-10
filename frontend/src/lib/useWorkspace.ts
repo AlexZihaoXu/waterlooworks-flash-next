@@ -119,6 +119,22 @@ export function parseRefresh(value: unknown): RefreshSnapshot {
         value[key] >= 0,
     ) ||
     typeof value.detail_limited !== 'boolean' ||
+    // Pacing fields are optional on read; when present they must be exact.
+    (value.ww_requests !== undefined &&
+      (typeof value.ww_requests !== 'number' ||
+        !Number.isSafeInteger(value.ww_requests) ||
+        value.ww_requests < 0)) ||
+    (value.ww_request_budget != null &&
+      (typeof value.ww_request_budget !== 'number' ||
+        !Number.isSafeInteger(value.ww_request_budget) ||
+        value.ww_request_budget < 0)) ||
+    (value.pacing_stop != null &&
+      !['request_cap', 'daily_cap', 'ban_risk'].includes(
+        String(value.pacing_stop),
+      )) ||
+    (value.error_category != null &&
+      (typeof value.error_category !== 'string' ||
+        !/^[a-z_]{1,40}$/.test(value.error_category))) ||
     typeof value.detail_wait_seconds !== 'number' ||
     !Number.isFinite(value.detail_wait_seconds) ||
     value.detail_wait_seconds < 0 ||
