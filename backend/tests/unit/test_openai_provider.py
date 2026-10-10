@@ -1,6 +1,7 @@
 """Provider contract checks use empty databases and structural primitives only."""
 
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -413,6 +414,20 @@ def test_daily_cost_stop_is_optional_and_fails_closed(
         with pytest.raises(BudgetStopped) as error:
             daily_cost_stop_from_environment()
         assert str(error.value) == "OpenAI budget configuration is invalid."
+
+
+def test_daily_cost_stop_reads_private_local_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from waterlooworks_flash_next.openai_ledger import daily_cost_stop_from_environment
+    from waterlooworks_flash_next.runtime_secrets import load_local_environment
+
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    local = tmp_path / "local.env"
+    local.write_text("WW_OPENAI_DAILY_COST_STOP_USD=3.25\n", encoding="utf-8")
+    load_local_environment(local)
+    assert daily_cost_stop_from_environment() == Decimal("3.25")
+    assert "WW_OPENAI_DAILY_COST_STOP_USD" not in os.environ
 
 
 def test_rolling_daily_ceiling_spans_runs_and_expires(

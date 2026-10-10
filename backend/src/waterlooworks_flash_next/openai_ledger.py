@@ -54,7 +54,7 @@ DAILY_COST_STOP_MAX_USD = Decimal(1000)
 
 def daily_cost_stop_from_environment() -> Decimal | None:
     """Optional rolling 24-hour known-cost stop across all runs; unset disables."""
-    raw = os.environ.get("WW_OPENAI_DAILY_COST_STOP_USD")
+    raw = runtime_value("WW_OPENAI_DAILY_COST_STOP_USD")
     if raw is None or raw == "":
         return None  # Empty supports Compose pass-through of an unset value.
     try:
