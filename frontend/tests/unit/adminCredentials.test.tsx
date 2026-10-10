@@ -178,7 +178,7 @@ describe('admin settings request boundaries', () => {
     }
   });
 
-  it('Escape closes and clears both input fields before reopening from the keyboard', async () => {
+  it('Escape asks first, then a confirmed discard closes and clears both input fields before reopening from the keyboard', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
       Promise.resolve(Response.json(emptyStatus)),
     );
@@ -205,6 +205,10 @@ describe('admin settings request boundaries', () => {
     fireEvent(
       screen.getByRole('dialog'),
       new Event('cancel', { cancelable: true }),
+    );
+    // Non-empty drafts are not dropped by a stray Escape.
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Discard changes' }),
     );
     await waitFor(() =>
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),

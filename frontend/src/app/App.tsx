@@ -1,4 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  memo,
+  use,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { usePayPreferences } from '../lib/usePayPreferences';
 import { compensationForSorting, presentSummary } from '../lib/hourlyPay';
 import { countryFlagUrl, inferredCountryName } from '../lib/countryInference';
@@ -24,6 +36,8 @@ import {
   Button,
   Card,
   Chip,
+  Disclosure,
+  Drawer,
   Label,
   ListBox,
   Link,
@@ -35,8 +49,10 @@ import {
   Separator,
   Skeleton,
   Toast,
-  Tabs,
+  Tooltip,
   toast,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useTheme,
 } from '@heroui/react';
@@ -53,16 +69,18 @@ import {
   type PostingFilters,
   type WorkspaceState,
   type Posting,
+  type RefreshSnapshot,
 } from '../lib/workspace';
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
+import { refreshInterruption, refreshRunning } from '../lib/refreshState';
 import {
   compensationMetric,
   sortLabels,
   sortPostings,
   type PostingSort,
 } from '../lib/sorting';
-import { deadlineBadge, parseDeadline } from '../lib/deadlines';
+import { deadlineBadge, exactDeadline, parseDeadline } from '../lib/deadlines';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { groupedOptionRows } from '../lib/optionGroups';
 import { FilterOptionList } from './FilterOptionList';
@@ -88,31 +106,105 @@ const notice = {
   ],
 } as const;
 
+// Live refresh snapshots change about once a second during a refresh. Only the
+// refresh presentation subscribes to them; the memoized browser receives
+// primitive summaries so the posting grid does not re-render on every tick.
+const RefreshContext = createContext<RefreshSnapshot | null>(null);
+
+function LiveRefreshActivity() {
+  return <RefreshActivity refresh={use(RefreshContext)} />;
+}
+
 export function App({
   state: suppliedState,
+  refresh: suppliedRefresh = null,
   signedOutContent,
   account,
+  onOpenAdminSettings,
 }: {
   state?: WorkspaceState;
+  /** Presentation input for a supplied state; live mode uses the SSE stream. */
+  refresh?: RefreshSnapshot | null;
   signedOutContent?: ReactNode;
   account?: ReactNode;
+  /** Admin only: opens Admin settings (Refresh tab) from workspace notices. */
+  onOpenAdminSettings?: () => void;
 }) {
   const signedOut = signedOutContent !== undefined;
-  const remote = useWorkspace(!signedOut && suppliedState === undefined);
+  const live = suppliedState === undefined;
+  const remote = useWorkspace(!signedOut && live);
   const state = suppliedState ?? remote.state;
-  const refresh = suppliedState === undefined ? remote.refresh : null;
+  const refresh = live ? remote.refresh : suppliedRefresh;
+  // useWorkspace recreates manualRefresh with each snapshot; keep one stable
+  // callback that always invokes the latest decision logic.
+  const latestManualRefresh = useRef(remote.manualRefresh);
+  useLayoutEffect(() => {
+    latestManualRefresh.current = remote.manualRefresh;
+  });
+  const manualRefresh = useCallback(() => latestManualRefresh.current(), []);
+  return (
+    <RefreshContext value={refresh}>
+      <WorkspaceView
+        state={state}
+        live={live}
+        refreshKey={`${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`}
+        refreshing={refreshRunning(refresh)}
+        interruption={refreshInterruption(refresh)}
+        authenticating={
+          refreshRunning(refresh) && refresh?.stage === 'authentication'
+        }
+        onOpenAdminSettings={onOpenAdminSettings}
+        requesting={remote.requesting}
+        streamConnected={remote.streamConnected}
+        streamInterrupted={remote.streamInterrupted}
+        actionError={remote.actionError}
+        manualRefresh={manualRefresh}
+        signedOutContent={signedOutContent}
+        account={account}
+      />
+    </RefreshContext>
+  );
+}
+
+const WorkspaceView = memo(function WorkspaceView({
+  state,
+  live,
+  refreshKey,
+  refreshing,
+  interruption,
+  authenticating,
+  requesting,
+  streamConnected,
+  streamInterrupted,
+  actionError,
+  manualRefresh,
+  signedOutContent,
+  account,
+  onOpenAdminSettings,
+}: {
+  state: WorkspaceState;
+  live: boolean;
+  refreshKey: string;
+  refreshing: boolean;
+  interruption: ReturnType<typeof refreshInterruption>;
+  authenticating: boolean;
+  requesting: boolean;
+  streamConnected: boolean;
+  streamInterrupted: boolean;
+  actionError: string | null;
+  manualRefresh: ReturnType<typeof useWorkspace>['manualRefresh'];
+  signedOutContent?: ReactNode;
+  account?: ReactNode;
+  onOpenAdminSettings?: () => void;
+}) {
+  const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
+  const filterIds = useId();
   const [initialView] = useState(() => readBrowseUrl(window.location.search));
   const navigation = useRef(true);
   const [jobId, setJobId] = useState(() => readJobId(window.location.search));
-  const detail = useJobDetail(
-    signedOut ? null : jobId,
-    `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
-  );
-  const similarJobs = useSimilarJobs(
-    detail,
-    `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
-  );
+  const detail = useJobDetail(signedOut ? null : jobId, refreshKey);
+  const similarJobs = useSimilarJobs(detail, refreshKey);
   const detailOpen = !signedOut && jobId !== null;
   const returnTarget = useRef<{
     element: HTMLAnchorElement;
@@ -194,13 +286,16 @@ export function App({
     };
   }, []);
   const refreshToast = useRef<string | null>(null);
-  const needsTierFx =
-    state.status === 'ready' &&
-    state.postings.some((posting) =>
-      posting.compensation_sort?.source_rates.some(
-        (rate) => rate.currency !== null && rate.currency !== 'CAD',
+  const needsTierFx = useMemo(
+    () =>
+      state.status === 'ready' &&
+      state.postings.some((posting) =>
+        posting.compensation_sort?.source_rates.some(
+          (rate) => rate.currency !== null && rate.currency !== 'CAD',
+        ),
       ),
-    );
+    [state],
+  );
   const { preferences, setPreferences, fx, fxStatus } = usePayPreferences(
     needsTierFx,
     !signedOut,
@@ -364,10 +459,17 @@ export function App({
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
   );
-  const lastObserved = postings
-    .map((posting) => posting.last_seen_at)
-    .sort()
-    .at(-1);
+  const lastObserved = useMemo(
+    () =>
+      postings.reduce<string | undefined>(
+        (latest, posting) =>
+          latest === undefined || posting.last_seen_at > latest
+            ? posting.last_seen_at
+            : latest,
+        undefined,
+      ),
+    [postings],
+  );
   const hasFilters = Boolean(
     appliedQuery.trim() ||
     Object.values(activeFilters).some((values) => values.length > 0),
@@ -384,13 +486,210 @@ export function App({
       node.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
     else if (node) node.scrollTop = 0;
   }, [currentPage, appliedQuery, activeFilters, sort, reducedMotion]);
-  const refreshing = refresh?.status === 'running';
   const canRefresh =
-    suppliedState === undefined &&
+    live &&
     state.status === 'ready' &&
     state.manual_refresh_available &&
-    remote.streamConnected &&
-    !remote.requesting;
+    streamConnected &&
+    !requesting &&
+    interruption !== 'recovery_required';
+
+  const activeFilterCount = Object.values(activeFilters).reduce(
+    (count, values) => count + values.length,
+    0,
+  );
+  const sidebarContent = (
+    <div className="sidebar-content">
+      <Card>
+        <Card.Header>
+          <div className="workspace-toolbar">
+            <div className="filter-heading">
+              <LuFilter aria-hidden="true" />
+              <Typography type="h6" role="heading" aria-level={2}>
+                Filters
+              </Typography>
+            </div>
+            <Button
+              size="sm"
+              variant="tertiary"
+              aria-label="Clear filters"
+              isDisabled={
+                !connected ||
+                !Object.values(activeFilters).some(
+                  (values) => values.length > 0,
+                )
+              }
+              onPress={() => {
+                setFilters(emptyFilters);
+                setPage(1);
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        </Card.Header>
+        <Separator />
+        <Card.Content>
+          <div className="filter-grid">
+            {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
+              <div className={`filter-slot filter-slot-${key}`} key={key}>
+                <div className="stack-small">
+                  <Typography
+                    id={`${filterIds}-${key}-label`}
+                    type="body-sm"
+                    weight={activeFilters[key].length ? 'medium' : 'normal'}
+                    color={activeFilters[key].length ? 'default' : 'muted'}
+                  >
+                    {filterLabels[key]}
+                  </Typography>
+                  <Button
+                    fullWidth
+                    variant={
+                      activeFilters[key].length ? 'secondary' : 'tertiary'
+                    }
+                    aria-labelledby={`${filterIds}-${key}-label ${filterIds}-${key}-value`}
+                    aria-haspopup="dialog"
+                    isDisabled={
+                      !connected ||
+                      (options[key].length === 0 &&
+                        activeFilters[key].length === 0)
+                    }
+                    onPress={() => {
+                      setDraft([...activeFilters[key]]);
+                      setPickerQuery('');
+                      setPicker(key);
+                      setPickerOpen(true);
+                    }}
+                  >
+                    <span className="filter-trigger-content">
+                      <Typography
+                        id={`${filterIds}-${key}-value`}
+                        type="body-sm"
+                        truncate
+                        color={activeFilters[key].length ? 'default' : 'muted'}
+                        weight={activeFilters[key].length ? 'medium' : 'normal'}
+                      >
+                        {activeFilters[key].length === 0
+                          ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : 'organizations'}`
+                          : activeFilters[key].length === 1
+                            ? activeFilters[key][0]
+                            : `${activeFilters[key].length} selected`}
+                      </Typography>
+                      <LuChevronDown
+                        aria-hidden="true"
+                        color={
+                          activeFilters[key].length
+                            ? 'currentColor'
+                            : 'var(--muted)'
+                        }
+                      />
+                    </span>
+                  </Button>
+                  {connected &&
+                    key === 'country' &&
+                    options.country.length === 0 && (
+                      <Typography type="body-xs" color="muted">
+                        No current country predictions yet.
+                      </Typography>
+                    )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card.Content>
+      </Card>
+      <Card>
+        <Card.Header>
+          <Card.Title>Options</Card.Title>
+        </Card.Header>
+        <Separator />
+        <Card.Content>
+          <div className="stack">
+            <Select
+              fullWidth
+              isDisabled={!connected}
+              value={preferences.format}
+              onChange={(value) => {
+                if (value === 'hour' || value === 'month') {
+                  setPreferences({ ...preferences, format: value });
+                  setPage(1);
+                }
+              }}
+            >
+              <Label>Compensation format</Label>
+              <Select.Trigger>
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  <ListBox.Item id="hour" textValue="Hourly">
+                    Hourly
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                  <ListBox.Item id="month" textValue="Monthly">
+                    Monthly
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            <Select
+              fullWidth
+              isDisabled={!connected}
+              value={preferences.currency}
+              onChange={(value) => {
+                if (
+                  value === 'original' ||
+                  value === 'CAD' ||
+                  value === 'USD'
+                ) {
+                  setPreferences({ ...preferences, currency: value });
+                  setPage(1);
+                }
+              }}
+            >
+              <Label>Currency</Label>
+              <Select.Trigger>
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  <ListBox.Item id="original" textValue="Original currency">
+                    Original currency
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                  <ListBox.Item id="CAD" textValue="Approx. CAD">
+                    Approx. CAD
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                  <ListBox.Item id="USD" textValue="Approx. USD">
+                    Approx. USD
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            {preferences.currency !== 'original' && (
+              <Typography type="body-xs" color="muted">
+                {fxStatus === 'loading'
+                  ? 'Loading reference rates…'
+                  : fxStatus === 'unavailable'
+                    ? 'FX unavailable; showing original currencies.'
+                    : fx
+                      ? `Bank of Canada · ${fx.as_of} · approximate conversion`
+                      : 'Reference rates not loaded.'}
+              </Typography>
+            )}
+            <Typography type="body-xs" color="muted">
+              * Currency assumed to be CAD; retained after conversion.
+            </Typography>
+          </div>
+        </Card.Content>
+      </Card>
+    </div>
+  );
 
   return (
     <main className="workspace">
@@ -467,7 +766,7 @@ export function App({
       <header className="workspace-header">
         <div className="stack-small">
           <div className="brand-heading">
-            <BrandMark active={refreshing || remote.requesting} />
+            <BrandMark active={refreshing || requesting} />
             <Typography type="h4" role="heading" aria-level={1}>
               WaterlooWorks Flash Next
             </Typography>
@@ -483,39 +782,30 @@ export function App({
         <div className="stack-small">
           <div className="inline-layout">
             {account}
-            <Tabs
-              selectedKey={theme}
-              onSelectionChange={(key) => {
+            <ToggleButtonGroup
+              aria-label="Color theme"
+              selectionMode="single"
+              disallowEmptySelection
+              size="sm"
+              selectedKeys={[theme]}
+              onSelectionChange={(keys) => {
+                const [key] = keys;
                 if (key === 'system' || key === 'light' || key === 'dark')
                   setTheme(key);
               }}
             >
-              <Tabs.ListContainer>
-                <Tabs.List aria-label="Color theme">
-                  <Tabs.Tab id="system">
-                    <span className="theme-choice">
-                      <LuMonitor aria-hidden="true" />
-                      System
-                    </span>
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="light">
-                    <span className="theme-choice">
-                      <LuSun aria-hidden="true" />
-                      Light
-                    </span>
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="dark">
-                    <span className="theme-choice">
-                      <LuMoon aria-hidden="true" />
-                      Dark
-                    </span>
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                </Tabs.List>
-              </Tabs.ListContainer>
-            </Tabs>
+              <ToggleButton isIconOnly aria-label="System" id="system">
+                <LuMonitor aria-hidden="true" />
+              </ToggleButton>
+              <ToggleButton isIconOnly aria-label="Light" id="light">
+                <ToggleButtonGroup.Separator />
+                <LuSun aria-hidden="true" />
+              </ToggleButton>
+              <ToggleButton isIconOnly aria-label="Dark" id="dark">
+                <ToggleButtonGroup.Separator />
+                <LuMoon aria-hidden="true" />
+              </ToggleButton>
+            </ToggleButtonGroup>
           </div>
           {connected &&
             state.status === 'ready' &&
@@ -536,16 +826,16 @@ export function App({
           </Alert.Content>
         </Alert>
       )}
-      {remote.actionError && (
+      {actionError && (
         <Alert status="warning">
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Title>Refresh notice</Alert.Title>
-            <Alert.Description>{remote.actionError}</Alert.Description>
+            <Alert.Description>{actionError}</Alert.Description>
           </Alert.Content>
         </Alert>
       )}
-      {connected && remote.streamInterrupted && suppliedState === undefined && (
+      {connected && streamInterrupted && live && (
         <Alert status="warning">
           <Alert.Indicator />
           <Alert.Content>
@@ -557,7 +847,36 @@ export function App({
           </Alert.Content>
         </Alert>
       )}
-      <RefreshActivity refresh={refresh} />
+      {interruption && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Previous refresh was interrupted</Alert.Title>
+            <Alert.Description>
+              {interruption === 'recovery_required'
+                ? 'It stopped before finishing, so saved postings may be incomplete. Manual recovery is required before another refresh can start; see the operator recovery steps.'
+                : 'It stopped before finishing, so saved postings may be incomplete. A new refresh can be started.'}
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {authenticating && onOpenAdminSettings && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Duo approval may be required</Alert.Title>
+            <Alert.Description>
+              The refresh is signing in to WaterlooWorks. Authentication expires
+              within 3 minutes; open Admin settings to see the verification code
+              and approve only the refresh you requested.
+            </Alert.Description>
+          </Alert.Content>
+          <Button size="sm" variant="secondary" onPress={onOpenAdminSettings}>
+            Open Admin settings
+          </Button>
+        </Alert>
+      )}
+      <LiveRefreshActivity />
 
       <motion.div
         className="browser-layout"
@@ -590,13 +909,11 @@ export function App({
             <Typography type="h2">Postings</Typography>
             <Button
               size="sm"
-              variant={
-                refreshing || remote.requesting ? 'secondary' : 'tertiary'
-              }
+              variant={refreshing || requesting ? 'secondary' : 'tertiary'}
               isDisabled={!canRefresh}
-              isPending={remote.requesting}
+              isPending={requesting}
               onPress={async () => {
-                const result = await remote.manualRefresh();
+                const result = await manualRefresh();
                 if (result === 'cooldown' || result === 'running') {
                   if (refreshToast.current) toast.close(refreshToast.current);
                   refreshToast.current = toast.warning(
@@ -616,14 +933,12 @@ export function App({
               <LuRefreshCw
                 aria-hidden="true"
                 color={
-                  refreshing || remote.requesting
-                    ? 'currentColor'
-                    : 'var(--muted)'
+                  refreshing || requesting ? 'currentColor' : 'var(--muted)'
                 }
               />
               <Typography
                 type="body-sm"
-                color={refreshing || remote.requesting ? 'default' : 'muted'}
+                color={refreshing || requesting ? 'default' : 'muted'}
               >
                 {refreshing ? 'Refreshing…' : 'Refresh postings'}
               </Typography>
@@ -668,229 +983,46 @@ export function App({
             visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
           }}
         >
-          <ScrollShadow
-            hideScrollBar
-            tabIndex={0}
-            aria-label="Filters and options"
-          >
-            <div className="sidebar-content">
-              <Card>
-                <Card.Header>
-                  <div className="workspace-toolbar">
-                    <div className="filter-heading">
-                      <LuFilter aria-hidden="true" />
-                      <Typography type="h6" role="heading" aria-level={2}>
-                        Filters
-                      </Typography>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="tertiary"
-                      aria-label="Clear filters"
-                      isDisabled={
-                        !connected ||
-                        !Object.values(activeFilters).some(
-                          (values) => values.length > 0,
-                        )
-                      }
-                      onPress={() => {
-                        setFilters(emptyFilters);
-                        setPage(1);
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                </Card.Header>
-                <Separator />
-                <Card.Content>
-                  <div className="filter-grid">
-                    {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
-                      <div
-                        className={`filter-slot filter-slot-${key}`}
-                        key={key}
-                      >
-                        <div className="stack-small">
-                          <Typography
-                            type={compact ? 'body-xs' : 'body-sm'}
-                            weight={
-                              activeFilters[key].length ? 'medium' : 'normal'
-                            }
-                            color={
-                              activeFilters[key].length ? 'default' : 'muted'
-                            }
-                          >
-                            {filterLabels[key]}
-                          </Typography>
-                          <Button
-                            fullWidth
-                            variant={
-                              activeFilters[key].length
-                                ? 'secondary'
-                                : 'tertiary'
-                            }
-                            aria-label={`${filterLabels[key]} filter`}
-                            aria-description={
-                              activeFilters[key].length === 0
-                                ? 'All options'
-                                : `${activeFilters[key].length} selected`
-                            }
-                            aria-haspopup="dialog"
-                            isDisabled={
-                              !connected ||
-                              (options[key].length === 0 &&
-                                activeFilters[key].length === 0)
-                            }
-                            onPress={() => {
-                              setDraft([...activeFilters[key]]);
-                              setPickerQuery('');
-                              setPicker(key);
-                              setPickerOpen(true);
-                            }}
-                          >
-                            <span className="filter-trigger-content">
-                              <Typography
-                                type="body-sm"
-                                truncate
-                                color={
-                                  activeFilters[key].length
-                                    ? 'default'
-                                    : 'muted'
-                                }
-                                weight={
-                                  activeFilters[key].length
-                                    ? 'medium'
-                                    : 'normal'
-                                }
-                              >
-                                {compact
-                                  ? activeFilters[key].length === 0
-                                    ? 'All'
-                                    : String(activeFilters[key].length)
-                                  : activeFilters[key].length === 0
-                                    ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : 'organizations'}`
-                                    : activeFilters[key].length === 1
-                                      ? activeFilters[key][0]
-                                      : `${activeFilters[key].length} selected`}
-                              </Typography>
-                              <LuChevronDown
-                                aria-hidden="true"
-                                color={
-                                  activeFilters[key].length
-                                    ? 'currentColor'
-                                    : 'var(--muted)'
-                                }
-                              />
-                            </span>
-                          </Button>
-                          {connected &&
-                            key === 'country' &&
-                            options.country.length === 0 && (
-                              <Typography type="body-xs" color="muted">
-                                No current country predictions yet.
-                              </Typography>
-                            )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card.Content>
-              </Card>
-              <Card>
-                <Card.Header>
-                  <Card.Title>Options</Card.Title>
-                </Card.Header>
-                <Separator />
-                <Card.Content>
-                  <div className="stack">
-                    <Select
-                      fullWidth
-                      isDisabled={!connected}
-                      value={preferences.format}
-                      onChange={(value) => {
-                        if (value === 'hour' || value === 'month') {
-                          setPreferences({ ...preferences, format: value });
-                          setPage(1);
-                        }
-                      }}
-                    >
-                      <Label>Compensation format</Label>
-                      <Select.Trigger>
-                        <Select.Value />
-                        <Select.Indicator />
-                      </Select.Trigger>
-                      <Select.Popover>
-                        <ListBox>
-                          <ListBox.Item id="hour" textValue="Hourly">
-                            Hourly
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                          <ListBox.Item id="month" textValue="Monthly">
-                            Monthly
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                        </ListBox>
-                      </Select.Popover>
-                    </Select>
-                    <Select
-                      fullWidth
-                      isDisabled={!connected}
-                      value={preferences.currency}
-                      onChange={(value) => {
-                        if (
-                          value === 'original' ||
-                          value === 'CAD' ||
-                          value === 'USD'
-                        ) {
-                          setPreferences({ ...preferences, currency: value });
-                          setPage(1);
-                        }
-                      }}
-                    >
-                      <Label>Currency</Label>
-                      <Select.Trigger>
-                        <Select.Value />
-                        <Select.Indicator />
-                      </Select.Trigger>
-                      <Select.Popover>
-                        <ListBox>
-                          <ListBox.Item
-                            id="original"
-                            textValue="Original currency"
-                          >
-                            Original currency
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                          <ListBox.Item id="CAD" textValue="Approx. CAD">
-                            Approx. CAD
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                          <ListBox.Item id="USD" textValue="Approx. USD">
-                            Approx. USD
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                        </ListBox>
-                      </Select.Popover>
-                    </Select>
-                    {preferences.currency !== 'original' && (
-                      <Typography type="body-xs" color="muted">
-                        {fxStatus === 'loading'
-                          ? 'Loading reference rates…'
-                          : fxStatus === 'unavailable'
-                            ? 'FX unavailable; showing original currencies.'
-                            : fx
-                              ? `Bank of Canada · ${fx.as_of} · approximate conversion`
-                              : 'Reference rates not loaded.'}
-                      </Typography>
-                    )}
-                    <Typography type="body-xs" color="muted">
-                      * Currency assumed to be CAD; retained after conversion.
-                    </Typography>
-                  </div>
-                </Card.Content>
-              </Card>
-            </div>
-          </ScrollShadow>
+          {compact ? (
+            // Phones: one full-width trigger opens the same filters and
+            // options in a documented HeroUI Drawer, with full value text.
+            <Drawer>
+              <Button
+                fullWidth
+                variant={activeFilterCount ? 'secondary' : 'tertiary'}
+                aria-haspopup="dialog"
+                isDisabled={!connected}
+              >
+                <LuFilter aria-hidden="true" />
+                {activeFilterCount
+                  ? `Filters (${activeFilterCount})`
+                  : 'Filters'}
+              </Button>
+              <Drawer.Backdrop>
+                <Drawer.Content placement="bottom">
+                  <Drawer.Dialog>
+                    <Drawer.Handle />
+                    <Drawer.CloseTrigger />
+                    <Drawer.Header>
+                      <Drawer.Heading>Filters</Drawer.Heading>
+                    </Drawer.Header>
+                    <Drawer.Body>{sidebarContent}</Drawer.Body>
+                    <Drawer.Footer>
+                      <Button slot="close">Done</Button>
+                    </Drawer.Footer>
+                  </Drawer.Dialog>
+                </Drawer.Content>
+              </Drawer.Backdrop>
+            </Drawer>
+          ) : (
+            <ScrollShadow
+              hideScrollBar
+              tabIndex={0}
+              aria-label="Filters and options"
+            >
+              {sidebarContent}
+            </ScrollShadow>
+          )}
         </motion.aside>
         <motion.section
           className="posting-results stack"
@@ -982,16 +1114,33 @@ export function App({
             </Typography>
           )}
           {payMetric && paySortAvailable && (
-            <Typography type="body-xs" color="muted">
-              Highest first within comparable currency / pay-period groups.
-              Average = (minimum + maximum) ÷ 2; tiers use outer bounds.
-              Weekly/monthly/yearly pay uses stated hours or 40h/week, with 52
-              weeks/year. Currency conversion follows your display setting using
-              dated FX. Unspecified currencies count as CAD for sorting and
-              colors; * marks that assumption. Missing salary sorts as zero;
-              unknown units and disputed pay remain unranked. Colors use maximum
-              CAD/hour pay.
-            </Typography>
+            <Disclosure>
+              <Disclosure.Heading>
+                <Disclosure.Trigger>
+                  <span className="filter-heading">
+                    <Typography type="body-xs" color="muted">
+                      How pay sorting works
+                    </Typography>
+                    <Disclosure.Indicator />
+                  </span>
+                </Disclosure.Trigger>
+              </Disclosure.Heading>
+              <Disclosure.Content>
+                <Disclosure.Body>
+                  <Typography type="body-xs" color="muted">
+                    Highest first within comparable currency / pay-period
+                    groups. Average = (minimum + maximum) ÷ 2; tiers use outer
+                    bounds. Weekly/monthly/yearly pay uses stated hours or
+                    40h/week, with 52 weeks/year. Currency conversion follows
+                    your display setting using dated FX. Unspecified currencies
+                    count as CAD for sorting and colors; * marks that
+                    assumption. Missing salary sorts as zero; unknown units and
+                    disputed pay remain unranked. Colors use maximum CAD/hour
+                    pay.
+                  </Typography>
+                </Disclosure.Body>
+              </Disclosure.Content>
+            </Disclosure>
           )}
           {signedOut ? (
             <div className="auth-results">
@@ -1216,31 +1365,36 @@ export function App({
                                           {posting.posting_id}
                                         </Typography>
                                       </div>
-                                      <div
-                                        title={
-                                          deadline === null
-                                            ? 'Deadline could not be verified'
-                                            : `${displayValue(posting.listing.deadline)} Eastern Time`
-                                        }
-                                      >
-                                        {badge.quiet ? (
-                                          <Typography
-                                            type="body-xs"
-                                            color="muted"
-                                            weight="normal"
-                                          >
-                                            {badge.label}
-                                          </Typography>
-                                        ) : (
-                                          <Chip
-                                            size="sm"
-                                            variant={badge.variant}
-                                            color={badge.color}
-                                          >
-                                            {badge.label}
-                                          </Chip>
-                                        )}
-                                      </div>
+                                      <Tooltip delay={300}>
+                                        <Tooltip.Trigger
+                                          aria-label={`${badge.label}. Deadline: ${exactDeadline(deadline, posting.listing.deadline)}`}
+                                        >
+                                          {badge.quiet ? (
+                                            <Typography
+                                              type="body-xs"
+                                              color="muted"
+                                              weight="normal"
+                                            >
+                                              {badge.label}
+                                            </Typography>
+                                          ) : (
+                                            <Chip
+                                              size="sm"
+                                              variant={badge.variant}
+                                              color={badge.color}
+                                            >
+                                              {badge.label}
+                                            </Chip>
+                                          )}
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Content showArrow>
+                                          <Tooltip.Arrow />
+                                          {exactDeadline(
+                                            deadline,
+                                            posting.listing.deadline,
+                                          )}
+                                        </Tooltip.Content>
+                                      </Tooltip>
                                     </div>
                                   </Card.Header>
                                   <Separator />
@@ -1487,4 +1641,4 @@ export function App({
       </motion.div>
     </main>
   );
-}
+});

@@ -103,6 +103,21 @@ describe('AdminSettings documented tab composition', () => {
     expect(
       screen.queryByText(/20 attempts|\$1 known-cost/),
     ).not.toBeInTheDocument();
+    // Styled semantic headings and a loading skeleton, not a merged
+    // "unavailable or loading" message.
+    expect(
+      screen.getByRole('heading', {
+        name: 'OpenAI usage and limits',
+        level: 3,
+      }),
+    ).toHaveClass('typography');
+    expect(
+      screen.getByRole('button', { name: 'About these estimates' }),
+    ).toHaveAttribute('aria-expanded', 'false');
+    const loadingUsage = screen.getByRole('status', { name: 'Loading usage' });
+    expect(loadingUsage).toHaveAttribute('aria-busy', 'true');
+    expect(loadingUsage.querySelector('.skeleton')).not.toBeNull();
+    expect(screen.queryByText(/Usage unavailable/)).not.toBeInTheDocument();
     fireEvent.keyDown(usage, { key: 'ArrowRight' });
     fireEvent.keyUp(usage, { key: 'ArrowRight' });
     expect(
@@ -128,9 +143,14 @@ describe('AdminSettings documented tab composition', () => {
       await screen.findByText(/Duo status unavailable/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
+    const alert = (await screen.findByText('Usage unavailable')).closest(
+      '.alert',
+    ) as HTMLElement;
+    expect(alert).toHaveClass('alert--warning');
+    expect(alert).toHaveTextContent(/Unknown is not zero/);
     expect(
-      screen.getByText(/Usage unavailable or loading. Unknown is not zero/),
-    ).toBeInTheDocument();
+      screen.queryByRole('status', { name: 'Loading usage' }),
+    ).not.toBeInTheDocument();
   });
 
   it.each(['Usage', 'Go to Refresh'])(
@@ -195,6 +215,14 @@ describe('AdminSettings documented tab composition', () => {
         fetch.mock.calls.every(([, options]) => options?.method === 'GET'),
       ).toBe(true);
       fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      // Unsaved WaterlooWorks drafts require an explicit discard.
+      const confirm = await screen.findByRole('alertdialog', {
+        name: 'Discard unsaved changes?',
+      });
+      expect(
+        screen.getByRole('dialog', { name: 'Admin settings' }),
+      ).toContainElement(confirm);
+      fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
       await waitFor(() =>
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
       );
@@ -205,6 +233,42 @@ describe('AdminSettings documented tab composition', () => {
       expect(screen.getByLabelText('WaterlooWorks password')).toHaveValue('');
     },
   );
+
+  it.each(['WaterlooWorks username', 'Replacement OpenAI API key'])(
+    'keeps a typed %s draft after an accidental Escape until discard is confirmed',
+    async (label) => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        () => new Promise(() => {}),
+      );
+      openSettings();
+      const dialog = (await screen.findByRole('dialog')) as HTMLDialogElement;
+      const value = crypto.randomUUID();
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      fireEvent(dialog, new Event('cancel', { cancelable: true }));
+      await screen.findByRole('alertdialog', {
+        name: 'Discard unsaved changes?',
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() =>
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument(),
+      );
+      expect(
+        (screen.getByLabelText(label) as HTMLInputElement).value === value,
+      ).toBe(true);
+      expect(dialog.open).toBe(true);
+    },
+  );
+
+  it('closes without confirmation when no draft was typed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () => new Promise(() => {}),
+    );
+    openSettings();
+    const dialog = await screen.findByRole('dialog');
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 
   it.each(['Usage', 'Go to Refresh'])(
     'aborts a pending key read through %s and fences its late response before reconciling on return',
@@ -311,9 +375,14 @@ describe('AdminSettings usage and pending-save boundaries', () => {
       expect(screen.getByText(/Input: unknown/)).toHaveTextContent(
         'Input: unknown (includes cached read: 0, cache write: unknown). Output: 0 (includes reasoning: unknown).',
       );
-      expect(screen.getByText(/not extra tokens/)).toBeVisible();
       expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
       expect(screen.getByText(/not a guaranteed cap/)).toBeVisible();
+      // Shared disclaimers appear once, not repeated in every run panel.
+      fireEvent.click(
+        screen.getByRole('button', { name: 'About these estimates' }),
+      );
+      expect(await screen.findByText(/not extra tokens/)).toBeVisible();
+      expect(screen.getAllByText(/not extra tokens/)).toHaveLength(1);
       expect(screen.getByText(/Partial or failed runs/)).toBeVisible();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     },
@@ -451,6 +520,7 @@ describe('AdminSettings transient key presentation', () => {
           expires_in_seconds: 180,
         },
         usage: null,
+        usageError: false,
         message: '',
         clear: vi.fn(),
       });

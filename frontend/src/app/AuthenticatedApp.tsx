@@ -1,4 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { FcGoogle } from 'react-icons/fc';
 import { LuUserRound } from 'react-icons/lu';
 import {
@@ -13,8 +20,10 @@ import {
   Form,
   Input,
   Label,
+  Skeleton,
   Tabs,
   TextField,
+  Typography,
 } from '@heroui/react';
 import { useAdminCredentials } from '../lib/useAdminCredentials';
 import { useOpenAISettings } from '../lib/useOpenAISettings';
@@ -37,8 +46,10 @@ export function AuthGate({
   signIn: () => void;
   children: ReactNode;
 }) {
-  if (state.status === 'ready') return children;
-  const pending = state.status === 'checking' || state.status === 'refreshing';
+  // Renewal keeps the same verified session: never tear down the workspace.
+  if (state.status === 'ready' || state.status === 'refreshing')
+    return children;
+  const pending = state.status === 'checking';
   return (
     <App
       key="signed-out"
@@ -53,19 +64,59 @@ export function AuthGate({
             </Card.Description>
           </Card.Header>
           <Card.Content>
-            {state.status === 'error' && (
-              <Alert status="danger">
+            {state.status === 'error' && state.reason === 'cancelled' && (
+              <Alert>
                 <Alert.Indicator />
                 <Alert.Content>
-                  <Alert.Title>Authentication unavailable</Alert.Title>
+                  <Alert.Title>Sign-in cancelled</Alert.Title>
                   <Alert.Description>
-                    Sign-in or sign-out could not be confirmed. Check your
-                    connection and try again. Saved jobs are hidden.
+                    The Google window closed before sign-in finished. Try again
+                    when you are ready.
                   </Alert.Description>
                 </Alert.Content>
               </Alert>
             )}
-            {state.status === 'refreshing' && <p>Renewing your session…</p>}
+            {state.status === 'error' && state.reason === 'unauthorized' && (
+              <Alert status="warning">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>Account not authorized</Alert.Title>
+                  <Alert.Description>
+                    This Google account was not accepted. If you expected
+                    access, ask the administrator to approve it, then sign in
+                    again. You can also try a different Google account.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert>
+            )}
+            {state.status === 'error' &&
+              state.reason !== 'cancelled' &&
+              state.reason !== 'unauthorized' && (
+                <Alert status="danger">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title>Authentication unavailable</Alert.Title>
+                    <Alert.Description>
+                      Sign-in or sign-out could not be confirmed. Check your
+                      connection (and that pop-ups are allowed), then try again.
+                      Saved jobs are hidden.
+                    </Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
+            {state.status === 'signed-out' &&
+              state.notice === 'session-ended' && (
+                <Alert status="warning">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title>Session ended</Alert.Title>
+                    <Alert.Description>
+                      Your session could not be renewed or confirmed. Sign in
+                      again to continue. Saved jobs are hidden until then.
+                    </Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
           </Card.Content>
           <Card.Footer>
             <Button
@@ -91,11 +142,14 @@ export function AccountMenu({
   signOut,
   role = 'member',
   uid = '',
+  settingsRef,
 }: {
   profile: AccountProfile | null;
   signOut: () => void;
   role?: 'admin' | 'member';
   uid?: string;
+  /** Admin only: lets workspace notices open Admin settings. */
+  settingsRef?: Ref<AdminSettingsHandle>;
 }) {
   const photo = googlePhotoUrl(profile?.photo_url);
   const content = (
@@ -125,6 +179,7 @@ export function AccountMenu({
         uid={uid}
         content={content}
         signOut={signOut}
+        settingsRef={settingsRef}
       />
     );
   return (
@@ -148,15 +203,19 @@ export function AccountMenu({
   );
 }
 
+export type AdminSettingsHandle = { open: () => void };
+
 // Official v3 content in the owner-approved bounded native dialog shell.
 function AdminAccountMenu({
   uid,
   content,
   signOut,
+  settingsRef,
 }: {
   uid: string;
   content: ReactNode;
   signOut: () => void;
+  settingsRef?: Ref<AdminSettingsHandle>;
 }) {
   const [selectedTab, setSelectedTab] = useState('credentials');
   const settings = useAdminCredentials(uid);
@@ -165,6 +224,15 @@ function AdminAccountMenu({
     uid,
   );
   const refresh = useAdminRefreshStatus(settings.isOpen, uid);
+  // Workspace Duo notice: open straight to the Refresh tab. Never reopen an
+  // open dialog, because opening clears and rereads credential state.
+  useImperativeHandle(settingsRef, () => ({
+    open: () => {
+      if (settings.isOpen) return;
+      setSelectedTab('refresh');
+      settings.setOpen(true);
+    },
+  }));
   const closeSettings = (open: boolean) => {
     refresh.clear();
     openai.hide();
@@ -197,6 +265,11 @@ function AdminAccountMenu({
       {settings.isOpen && (
         <AdminSettingsDialog
           onDismiss={() => closeSettings(false)}
+          dirty={
+            settings.username !== '' ||
+            settings.password !== '' ||
+            openai.draft !== ''
+          }
           notification={
             refresh.challenge?.approval_required && (
               <div className="flex flex-wrap items-center gap-4">
@@ -221,8 +294,9 @@ function AdminAccountMenu({
               </div>
             )
           }
-          footer={
+          footer={(requestDismiss) => (
             <>
+              {/* Explicit sign-out always proceeds and clears drafts. */}
               <Button
                 variant="ghost"
                 onPress={() => {
@@ -232,11 +306,11 @@ function AdminAccountMenu({
               >
                 Sign out
               </Button>
-              <Button variant="secondary" onPress={() => closeSettings(false)}>
+              <Button variant="secondary" onPress={requestDismiss}>
                 Done
               </Button>
             </>
-          }
+          )}
         >
           <Tabs
             selectedKey={selectedTab}
@@ -443,19 +517,19 @@ function AdminAccountMenu({
             <Tabs.Panel id="usage">
               <div className="grid gap-4">
                 <div className="grid gap-2">
-                  <h3>OpenAI usage and limits</h3>
-                  <p>
-                    The known-cost stop threshold is not a guaranteed cap.
-                    In-flight calls may add charges.
-                  </p>
+                  <Typography type="h5" render={(props) => <h3 {...props} />}>
+                    OpenAI usage and limits
+                  </Typography>
                   <Description>
-                    Partial or failed runs and unknown usage can leave analysis
-                    incomplete. Usage is not proof of completed analysis.
+                    The known-cost stop threshold is not a guaranteed cap.
+                    Unknown is not zero.
                   </Description>
                 </div>
                 {refresh.usage ? (
                   <div className="grid gap-2">
-                    <h4>Current operator limits</h4>
+                    <Typography type="h6" render={(props) => <h4 {...props} />}>
+                      Current operator limits
+                    </Typography>
                     <p>
                       {refresh.usage.default_request_limit} attempts per run · $
                       {refresh.usage.default_known_cost_stop_usd} USD known-cost
@@ -512,24 +586,65 @@ function AdminAccountMenu({
                                 {run.output_tokens ?? 'unknown'} (includes
                                 reasoning: {run.reasoning_tokens ?? 'unknown'}).
                               </Description>
-                              <Description>
-                                Cached and reasoning subsets are already
-                                included, not extra tokens. Costs are estimates,
-                                not invoices.
-                              </Description>
                             </Accordion.Body>
                           </Accordion.Panel>
                         </Accordion.Item>
                       ))}
                     </Accordion>
                   </div>
+                ) : refresh.usageError ? (
+                  <Alert status="warning">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Title>Usage unavailable</Alert.Title>
+                      <Alert.Description>
+                        Usage could not be loaded. Unknown is not zero. Check
+                        your session or reopen settings.
+                      </Alert.Description>
+                    </Alert.Content>
+                  </Alert>
                 ) : (
-                  <p role="status">
-                    Usage unavailable or loading. Unknown is not zero.
-                  </p>
+                  <div
+                    className="grid gap-2"
+                    role="status"
+                    aria-label="Loading usage"
+                    aria-busy="true"
+                  >
+                    {[75, 55, 65].map((width) => (
+                      <div
+                        key={width}
+                        className="skeleton-text-line"
+                        style={{ width: `${width}%` }}
+                      >
+                        <Skeleton>
+                          <div className="skeleton-line-space" />
+                        </Skeleton>
+                      </div>
+                    ))}
+                  </div>
                 )}
                 <Accordion>
-                  <Accordion.Item>
+                  <Accordion.Item id="about-estimates">
+                    <Accordion.Heading>
+                      <Accordion.Trigger>
+                        About these estimates
+                        <Accordion.Indicator />
+                      </Accordion.Trigger>
+                    </Accordion.Heading>
+                    <Accordion.Panel>
+                      <Accordion.Body>
+                        <Description>
+                          In-flight calls may add charges after the stop
+                          threshold. Partial or failed runs and unknown usage
+                          can leave analysis incomplete; usage is not proof of
+                          completed analysis. Cached and reasoning token subsets
+                          are already included in input/output totals, not extra
+                          tokens. Costs are estimates, not invoices.
+                        </Description>
+                      </Accordion.Body>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                  <Accordion.Item id="model-pricing">
                     <Accordion.Heading>
                       <Accordion.Trigger>
                         Model and pricing details
@@ -542,8 +657,7 @@ function AdminAccountMenu({
                         <Description>
                           Standard pricing estimate as of 2026-09-09, USD per
                           million tokens: input $0.20; cached read $0.02; cache
-                          write $0.25; output $1.20. Estimate only, not an
-                          invoice.
+                          write $0.25; output $1.20.
                         </Description>
                       </Accordion.Body>
                     </Accordion.Panel>
@@ -591,20 +705,31 @@ function AdminAccountMenu({
 
 export function AuthenticatedApp() {
   const { state, signIn, signOut } = useAppAuth();
-  const profile = useAccountProfile(
-    state.status === 'ready' ? state.session.uid : null,
+  const session =
+    state.status === 'ready' || state.status === 'refreshing'
+      ? state.session
+      : null;
+  const profile = useAccountProfile(session?.uid ?? null);
+  const adminSettings = useRef<AdminSettingsHandle>(null);
+  const openAdminSettings = useCallback(
+    () => adminSettings.current?.open(),
+    [],
   );
   return (
     <AuthGate state={state} signIn={signIn}>
-      {state.status === 'ready' && (
+      {session && (
         <App
-          key={state.session.uid}
+          key={session.uid}
+          onOpenAdminSettings={
+            session.role === 'admin' ? openAdminSettings : undefined
+          }
           account={
             <AccountMenu
               profile={profile}
               signOut={signOut}
-              role={state.session.role}
-              uid={state.session.uid}
+              role={session.role}
+              uid={session.uid}
+              settingsRef={adminSettings}
             />
           }
         />

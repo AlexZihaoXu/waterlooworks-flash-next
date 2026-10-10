@@ -100,11 +100,6 @@ body {
   font-size: 0.75rem;
   font-weight: 400;
 }
-.theme-choice {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-}
 .workspace-header,
 .workspace-toolbar,
 .inline-layout {
@@ -406,12 +401,15 @@ body {
   .filter-sidebar {
     max-height: none;
   }
+  /* Four filters as a balanced 2×2 grid; phones use the Drawer below 40rem. */
   .filter-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (max-width: 40rem) {
+  /* Inside the filter Drawer: one full-width trigger per row. */
   .filter-grid {
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.5rem;
   }
   .pagination-word {
@@ -422,10 +420,12 @@ body {
     padding: 0.75rem;
     overflow-y: auto;
   }
+  /* Results fill the remaining viewport; filters collapse into one Drawer
+     trigger. A modest floor keeps results usable when notices stack. */
   .browser-layout {
     gap: 0.75rem;
     flex-shrink: 0;
-    min-height: 64rem;
+    min-height: 24rem;
   }
 }
 

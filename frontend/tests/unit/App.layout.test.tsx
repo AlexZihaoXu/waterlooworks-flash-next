@@ -18,7 +18,9 @@ it('keeps picker actions in a wrapping native layout', async () => {
     />,
   );
   fireEvent.click(
-    screen.getByRole('button', { name: 'Targeted disciplines filter' }),
+    screen.getByRole('button', {
+      name: 'Targeted disciplines unknown',
+    }),
   );
   const apply = await screen.findByRole('button', { name: 'Apply filters' });
   const layout = apply.parentElement!;
