@@ -14,6 +14,7 @@ from typing import Any
 
 from waterlooworks_flash_next.ai_settings import AIConfig
 from waterlooworks_flash_next.model_validation import (
+    EXTRACTION_INSTRUCTIONS,
     INPUT_VERSION,
     VALIDATOR_VERSION,
     ExtractionCandidate,
@@ -241,3 +242,51 @@ def build_pi_prompt(
         submit_schema=schema,
     )
     return prompt, hashlib.sha256(identity.encode()).hexdigest()
+
+
+# ----- v9 baseline (evaluation only) -------------------------------------------
+# The previous deployed template, kept so pi_eval can compare against it. It is
+# never used for real runs: exact-text evidence only and the old prompt.
+_V9_SUFFIX = (
+    "No tools or external actions. After one brief evidence check, output only JSON."
+)
+V9_INSTRUCTIONS = EXTRACTION_INSTRUCTIONS.replace(
+    _V9_SUFFIX,
+    "Saved sections are given inline or through list_sections, read_section and "
+    "find_span; inline text is identical to the section text. check_pay can "
+    "normalise one pay sentence. Finish by calling submit_extraction exactly "
+    "once with the final result; never answer in prose.",
+)
+
+
+def build_v9_prompt(
+    fields: dict[str, str],
+    *,
+    request_compensation: bool,
+    request_skills: bool,
+    deterministic_skills: tuple[str, ...],
+) -> PiPrompt:
+    priority = (("Compensation and Benefits:",) if request_compensation else ()) + (
+        SKILL_FIELDS if request_skills else ()
+    )
+    inline = _inline(fields, priority)
+    header = {
+        "request": {"compensation": request_compensation, "skills": request_skills},
+        "deterministic_skills": list(deterministic_skills),
+        "sections": [
+            {"name": name, "chars": len(value), "inline": name in inline}
+            for name, value in sorted(fields.items())
+        ],
+        "inline_text": inline,
+    }
+    schema = ExtractionCandidate.model_json_schema()
+    schema["$defs"]["EvidenceCandidate"]["properties"]["field"] = {
+        "type": "string",
+        "enum": sorted(fields),
+    }
+    return PiPrompt(
+        system=V9_INSTRUCTIONS,
+        user=_escape(json.dumps(header, ensure_ascii=False, separators=(",", ":"))),
+        sections=tuple(sorted(fields.items())),
+        submit_schema=strict_schema(schema),
+    )

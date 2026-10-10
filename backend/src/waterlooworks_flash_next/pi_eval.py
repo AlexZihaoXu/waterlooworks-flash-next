@@ -33,9 +33,10 @@ from waterlooworks_flash_next.ai_settings import AIConfig, AISettingsStore
 from waterlooworks_flash_next.compact_history import revision_snapshot
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.inference import _Item, submission_context
-from waterlooworks_flash_next.inference_prompt import build_pi_prompt
+from waterlooworks_flash_next.inference_prompt import build_pi_prompt, build_v9_prompt
 from waterlooworks_flash_next.pi_bridge import PiItem, PiSession
 from waterlooworks_flash_next.pi_submission import (
+    V9_GENERIC_HINT,
     SubmissionRejected,
     reason_code,
     validate_submission,
@@ -110,7 +111,11 @@ _SELECT = """SELECT pointer.posting_id, results.compensation_state,
 
 
 def select_items(
-    connection: sqlite3.Connection, config: AIConfig, limit: int, offset: int
+    connection: sqlite3.Connection,
+    config: AIConfig,
+    limit: int,
+    offset: int,
+    template: str = "v10",
 ) -> list[_Item]:
     """Postings deterministic parsing left for analysis, ignoring prior model
     results, so repeated evaluations compare the same work."""
@@ -137,6 +142,13 @@ def select_items(
             deterministic_skills=skills,
             config=config,
         )
+        if template == "v9":
+            prompt = build_v9_prompt(
+                content.fields,
+                request_compensation=compensation,
+                request_skills=skills_needed,
+                deterministic_skills=skills,
+            )
         items.append(
             _Item(
                 "eval",
@@ -153,19 +165,22 @@ def select_items(
     return items
 
 
-def evaluate_item(session: PiSession, index: int, item: _Item) -> EvalRow:
+def evaluate_item(
+    session: PiSession, index: int, item: _Item, template: str = "v10"
+) -> EvalRow:
     """One posting through the real sidecar; returns fixed categories only."""
     assert item.prompt is not None
     context = submission_context(item)
+    exact = template == "v9"
     last_reason = [""]
 
     def check(payload: dict[str, Any]) -> tuple[bool, str | None]:
         try:
-            validate_submission(dict(payload), context)
+            validate_submission(dict(payload), context, exact=exact)
             return True, None
         except SubmissionRejected as rejected:
             last_reason[0] = reason_code(rejected)
-            return False, rejected.hint
+            return False, V9_GENERIC_HINT if exact else rejected.hint
 
     item_id = f"e-{index}"
     started = time.monotonic()
@@ -192,7 +207,7 @@ def evaluate_item(session: PiSession, index: int, item: _Item) -> EvalRow:
     elif result.status == "submitted" and result.payload is not None:
         turns, tools = result.turns, result.tool_calls
         try:
-            validate_submission(dict(result.payload), context)
+            validate_submission(dict(result.payload), context, exact=exact)
             outcome, category, reason = "accepted", "", ""
         except SubmissionRejected as rejected:
             outcome, category = "rejected", "evidence_rejected"
@@ -277,11 +292,12 @@ def run_eval(
     session: PiSession,
     parallel: int,
     emit: Callable[[str], None] = print,
+    template: str = "v10",
 ) -> list[EvalRow]:
     rows: list[EvalRow] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [
-            pool.submit(evaluate_item, session, index, item)
+            pool.submit(evaluate_item, session, index, item, template)
             for index, item in enumerate(items)
         ]
         for future in futures:
@@ -320,6 +336,12 @@ def main() -> None:
         default="current",
         help="Only the active access mode is supported.",
     )
+    parser.add_argument(
+        "--template",
+        choices=("v10", "v9"),
+        default="v10",
+        help="v9 replays the previous prompt with exact-text evidence (baseline).",
+    )
     parser.add_argument("--model")
     parser.add_argument("--reasoning", help='Effort, or "default" for none.')
     parser.add_argument("--max-turns", type=int)
@@ -355,7 +377,7 @@ def main() -> None:
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)
     connection.execute("PRAGMA query_only=ON")
     try:
-        items = select_items(connection, config, args.limit, args.offset)
+        items = select_items(connection, config, args.limit, args.offset, args.template)
     finally:
         connection.close()
     endpoint = (
@@ -367,12 +389,10 @@ def main() -> None:
     with PiSession(
         path, config, str(uuid4()), endpoint=endpoint, ledger=MemoryLedger()
     ) as session:
-        rows = run_eval(items, session, config.parallel_streams)
-    print(
-        json.dumps(
-            summarize(rows, config, time.monotonic() - started), separators=(",", ":")
-        )
-    )
+        rows = run_eval(items, session, config.parallel_streams, template=args.template)
+    summary = summarize(rows, config, time.monotonic() - started)
+    summary["summary"]["template"] = args.template
+    print(json.dumps(summary, separators=(",", ":")))
 
 
 if __name__ == "__main__":

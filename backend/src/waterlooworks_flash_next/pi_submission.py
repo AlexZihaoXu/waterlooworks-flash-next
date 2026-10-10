@@ -273,14 +273,23 @@ class SubmissionContext:
     deterministic_skills: tuple[str, ...]
 
 
+V9_GENERIC_HINT = (
+    "Rejected: every evidence text must be copied exactly from the named "
+    "section, categories must follow the request flags, and the pay and "
+    "skill rules apply. Fix the evidence or return empty lists."
+)
+
+
 def validate_submission(
-    payload: dict[str, Any], context: SubmissionContext
+    payload: dict[str, Any], context: SubmissionContext, *, exact: bool = False
 ) -> ValidatedExtraction:
     """Resolve evidence, then run the authoritative validator.
 
     Raises SubmissionRejected with the first failing path and a fixed code.
+    `exact=True` reproduces the v9 baseline (exact text only, no resolution)
+    for evaluation comparisons.
     """
-    resolved = resolve_payload(payload, context.fields)
+    resolved = payload if exact else resolve_payload(payload, context.fields)
     try:
         candidate = ExtractionCandidate.model_validate(resolved)
     except ValidationError as error:

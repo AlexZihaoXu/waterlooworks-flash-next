@@ -204,3 +204,29 @@ def test_memory_ledger_refuses_duplicate_operations() -> None:
     assert ledger.reserve("run", "op") != ledger.reserve("run", "op2")
     with pytest.raises(BudgetStopped):
         ledger.reserve("run", "op")
+
+
+def test_v9_baseline_uses_exact_text_and_the_generic_hint(path: Path) -> None:
+    sloppy = {
+        "base_rates": [
+            _rate(
+                {
+                    "field": "Compensation and Benefits:",
+                    "text": "pay starts at usd 25 per hour for 35 hours/week",
+                }
+            )
+        ],
+        "skills": [],
+    }
+    with PiSession(
+        path, CUSTOM, "run", endpoint=ENDPOINT, ledger=pi_eval.MemoryLedger()
+    ) as session:
+        baseline = pi_eval.evaluate_item(
+            session, 0, _item(_turn(sloppy), submit=sloppy), "v9"
+        )
+        current = pi_eval.evaluate_item(
+            session, 1, _item(_turn(sloppy), submit=sloppy), "v10"
+        )
+    # Exact matching rejects a case-only difference; v10 maps it to the span.
+    assert (baseline.outcome, baseline.reason) == ("rejected", "evidence_not_unique")
+    assert current.outcome == "accepted"
