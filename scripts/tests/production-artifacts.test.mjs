@@ -17,6 +17,9 @@ test('production Dockerfiles lock browser/Python/Node and install only at build 
   const entrypoint = read('deployment/backend-entrypoint.sh');
   assert.match(entrypoint, /umask 077/);
   assert.match(entrypoint, /--workers 1 --no-proxy-headers --no-access-log/);
+  // Bounded backstop so lingering SSE streams cannot hold off the lifespan
+  // shutdown past compose's stop_grace_period.
+  assert.match(entrypoint, /--timeout-graceful-shutdown 10\b/);
   assert.doesNotMatch(
     entrypoint,
     /uv sync|pip install|playwright install|inference|refresh/,
@@ -197,11 +200,13 @@ test('nginx sends strict browser security headers on every response', () => {
 
 test('nginx rate-limits the anonymous auth endpoints', () => {
   const nginx = read('deployment/nginx.conf.template');
-  // Only /api/auth/ gets a non-empty key; empty keys are never limited.
+  // Only anonymous prepare/exchange get a non-empty key; empty keys are never
+  // limited, so cookie-gated session checks and logout cannot be 429ed by a flood.
   assert.match(
     nginx,
-    /map \$uri \$ww_auth_limit_key \{\s+~\^\/api\/auth\/ \$binary_remote_addr;\s+default "";\s+\}/,
+    /map \$uri \$ww_auth_limit_key \{\s+~\^\/api\/auth\/\(prepare\|exchange\)\$ \$binary_remote_addr;\s+default "";\s+\}/,
   );
+  assert.doesNotMatch(nginx, /~\^\/api\/auth\/ /);
   assert.match(
     nginx,
     /limit_req_zone \$ww_auth_limit_key zone=ww_auth:\d+m rate=\d+r\/s;/,
