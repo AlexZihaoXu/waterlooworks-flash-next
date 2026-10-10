@@ -104,8 +104,47 @@ export type AppSession = {
   role: 'admin' | 'member';
   expires_at: number;
 };
+export type SignInFailure = 'cancelled' | 'unauthorized' | 'unavailable';
+
+/** HTTP refusal from an auth route; never carries server-supplied text. */
+export class AuthHttpError extends Error {
+  readonly path: string;
+  readonly status: number;
+  constructor(path: string, status: number) {
+    super('Authentication unavailable.');
+    this.path = path;
+    this.status = status;
+  }
+}
+
+const cancelledCodes = new Set([
+  'auth/popup-closed-by-user',
+  'auth/cancelled-popup-request',
+  'auth/user-cancelled',
+]);
+
+// Only the exchange's verification refusal means "this account was not
+// accepted"; configuration, rate limits and transport stay "unavailable".
+export function classifySignInError(error: unknown): SignInFailure {
+  if (error instanceof AuthHttpError)
+    return error.path === 'exchange' &&
+      (error.status === 401 || error.status === 403)
+      ? 'unauthorized'
+      : 'unavailable';
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    cancelledCodes.has(error.code)
+  )
+    return 'cancelled';
+  return 'unavailable';
+}
+
 export type AuthState =
-  | { status: 'checking' | 'error' }
+  | { status: 'checking' }
+  | { status: 'error'; reason?: SignInFailure }
   // 'session-ended': renewal, expiry or a session check ended the session
   // without an explicit sign-out; the sign-in card explains it.
   | { status: 'signed-out'; notice?: 'session-ended' }

@@ -55,18 +55,46 @@ export function AuthGate({
             </Card.Description>
           </Card.Header>
           <Card.Content>
-            {state.status === 'error' && (
-              <Alert status="danger">
+            {state.status === 'error' && state.reason === 'cancelled' && (
+              <Alert>
                 <Alert.Indicator />
                 <Alert.Content>
-                  <Alert.Title>Authentication unavailable</Alert.Title>
+                  <Alert.Title>Sign-in cancelled</Alert.Title>
                   <Alert.Description>
-                    Sign-in or sign-out could not be confirmed. Check your
-                    connection and try again. Saved jobs are hidden.
+                    The Google window closed before sign-in finished. Try again
+                    when you are ready.
                   </Alert.Description>
                 </Alert.Content>
               </Alert>
             )}
+            {state.status === 'error' && state.reason === 'unauthorized' && (
+              <Alert status="warning">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>Account not authorized</Alert.Title>
+                  <Alert.Description>
+                    This Google account was not accepted. If you expected
+                    access, ask the administrator to approve it, then sign in
+                    again. You can also try a different Google account.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert>
+            )}
+            {state.status === 'error' &&
+              state.reason !== 'cancelled' &&
+              state.reason !== 'unauthorized' && (
+                <Alert status="danger">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title>Authentication unavailable</Alert.Title>
+                    <Alert.Description>
+                      Sign-in or sign-out could not be confirmed. Check your
+                      connection (and that pop-ups are allowed), then try again.
+                      Saved jobs are hidden.
+                    </Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
             {state.status === 'signed-out' &&
               state.notice === 'session-ended' && (
                 <Alert status="warning">

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AuthGeneration,
+  AuthHttpError,
   AuthQueue,
+  classifySignInError,
   parseSession,
   runAuthOperation,
   scheduleSessionRenewal,
@@ -21,7 +23,7 @@ async function authRequest(path: string, body?: object, signal?: AbortSignal) {
     credentials: 'same-origin',
     cache: 'no-store',
   });
-  if (!response.ok) throw new Error('Authentication unavailable.');
+  if (!response.ok) throw new AuthHttpError(path, response.status);
   return response.json() as Promise<unknown>;
 }
 
@@ -121,8 +123,9 @@ export function useAppAuth() {
           if (generation.current.current(current))
             setState({ status: 'ready', session });
         }, generation.current.signal);
-      } catch {
-        if (generation.current.current(current)) setState({ status: 'error' });
+      } catch (error) {
+        if (generation.current.current(current))
+          setState({ status: 'error', reason: classifySignInError(error) });
       }
     })();
   }, []);
