@@ -157,6 +157,11 @@ async function readJson(path: string, signal?: AbortSignal): Promise<unknown> {
   return response.json() as Promise<unknown>;
 }
 
+// EventSource reconnects by itself (the server asks for a 1-second retry); a
+// session renewal rotates the cookie and ends the old stream every hour, so
+// only a stream that stays down this long is reported as interrupted.
+export const STREAM_INTERRUPTED_GRACE_MS = 5_000;
+
 export function useWorkspace(enabled: boolean) {
   const [state, setState] = useState<WorkspaceState>({ status: 'loading' });
   const [refresh, setRefresh] = useState<RefreshSnapshot | null>(null);
@@ -172,7 +177,14 @@ export function useWorkspace(enabled: boolean) {
     const controller = new AbortController();
     mountController.current = controller;
     let events: EventSource | undefined;
+    let interruption: ReturnType<typeof setTimeout> | undefined;
     let active = true;
+    const reconnected = () => {
+      clearTimeout(interruption);
+      interruption = undefined;
+      setStreamConnected(true);
+      setStreamInterrupted(false);
+    };
     const shouldReload = createWorkspaceReloadPolicy();
     const latestRead = createLatestWorkspaceRead();
     const loadWorkspace = (fail: () => void) =>
@@ -200,16 +212,16 @@ export function useWorkspace(enabled: boolean) {
         setRefresh(snapshot);
         events = new EventSource('/api/refresh/events');
         events.onopen = () => {
-          if (active) {
-            setStreamConnected(true);
-            setStreamInterrupted(false);
-          }
+          if (active) reconnected();
         };
         events.onerror = () => {
-          if (active) {
-            setStreamConnected(false);
-            setStreamInterrupted(true);
-          }
+          if (!active) return;
+          // Refresh controls stay disabled at once; the warning waits.
+          setStreamConnected(false);
+          interruption ??= setTimeout(() => {
+            interruption = undefined;
+            if (active) setStreamInterrupted(true);
+          }, STREAM_INTERRUPTED_GRACE_MS);
         };
         events.addEventListener('refresh', (event) => {
           if (!active) return;
@@ -218,14 +230,14 @@ export function useWorkspace(enabled: boolean) {
               JSON.parse((event as MessageEvent<string>).data),
             );
             setRefresh(update);
-            setStreamConnected(true);
-            setStreamInterrupted(false);
+            reconnected();
             if (shouldReload(update.run_id, update.status, update.stage)) {
               // Show saved listings early, then include saved detail/filter values
               // once at termination, even when only partial details were saved.
               void loadWorkspace(() => setState({ status: 'error' }));
             }
           } catch {
+            clearTimeout(interruption);
             setStreamConnected(false);
             setStreamInterrupted(true);
             setActionError(
@@ -245,6 +257,7 @@ export function useWorkspace(enabled: boolean) {
       controller.abort();
       mountController.current = null;
       requestInFlight.current = false;
+      clearTimeout(interruption);
       events?.close();
     };
   }, [enabled]);

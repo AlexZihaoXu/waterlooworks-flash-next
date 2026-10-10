@@ -100,6 +100,8 @@ def test_event_endpoint_refuses_streams_beyond_the_session_cap(tmp_path: Path) -
         accepted = client.get("/api/refresh/events?once=true")
         assert accepted.status_code == 200
         assert "event: refresh" in accepted.text
+        # Session renewal ends a stream hourly; ask for a prompt reconnect.
+        assert accepted.text.startswith("retry: 1000\n")
         # A finished stream returns its slot.
         assert limiter.active == limiter.per_session - 1
         for lease in held[1:]:

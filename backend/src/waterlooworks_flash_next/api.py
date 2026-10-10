@@ -572,6 +572,9 @@ async def session_event_stream(
     """
     cookie = request.cookies.get(COOKIE)
     previous = ""
+    # Session renewal rotates the cookie and ends this stream within the grace
+    # window; a 1-second retry makes EventSource reconnect with the new cookie.
+    prefix = "retry: 1000\n"
     try:
         while not await request.is_disconnected():
             if shutdown is not None and shutdown.is_set():
@@ -580,8 +583,8 @@ async def session_event_stream(
                 break
             payload = await asyncio.to_thread(_snapshot_json, service)
             if payload != previous:
-                yield "event: refresh\ndata: " + payload + "\n\n"
-                previous = payload
+                yield prefix + "event: refresh\ndata: " + payload + "\n\n"
+                previous, prefix = payload, ""
             else:
                 yield ": keep-alive\n\n"
             if once:
