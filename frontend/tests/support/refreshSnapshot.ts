@@ -30,6 +30,7 @@ export function refreshSnapshot(
     analysis_failed: 0,
     analysis_skipped: 0,
     analysis_cache_hits: 0,
+    analysis_provider: null,
     eta_seconds: null,
     logs: [],
     ...overrides,

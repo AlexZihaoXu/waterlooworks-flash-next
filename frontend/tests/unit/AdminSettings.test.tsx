@@ -91,6 +91,11 @@ describe('AdminSettings documented tab composition', () => {
     credentials.focus();
     fireEvent.keyDown(credentials, { key: 'ArrowRight' });
     fireEvent.keyUp(credentials, { key: 'ArrowRight' });
+    const aiTab = screen.getByRole('tab', { name: 'AI' });
+    await waitFor(() => expect(aiTab).toHaveFocus());
+    expect(screen.getByRole('tabpanel', { name: 'AI' })).toBeInTheDocument();
+    fireEvent.keyDown(aiTab, { key: 'ArrowRight' });
+    fireEvent.keyUp(aiTab, { key: 'ArrowRight' });
     const usage = screen.getByRole('tab', { name: 'Usage' });
     await waitFor(() => expect(usage).toHaveFocus());
     expect(usage).toHaveAttribute('aria-selected', 'true');

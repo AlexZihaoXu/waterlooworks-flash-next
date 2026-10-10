@@ -723,6 +723,7 @@ class RefreshService:
             self.state.stage = "analysis"
             self.state.analysis_total = total
             self.state.analysis_job_id = job_id
+            self.state.analysis_provider = ai.label()
         self.emit(
             f"Extracting with {ai.label()} (job {job_id}{label}): {len(ids)} saved "
             f"postings queued; {skipped} without saved details skipped; "

@@ -7,7 +7,7 @@ const stageLabels: Record<string, string> = {
   detail_retry: 'Fetching posting details (waiting to retry)',
   detail_rest: 'Fetching posting details (scheduled pause)',
   normalizing: 'Normalizing saved postings',
-  analysis: 'Extracting with OpenAI',
+  analysis: 'Extracting with AI',
   complete: 'Complete',
   stopped: 'Stopped',
   recovery_required: 'Previous refresh was interrupted',
@@ -15,7 +15,11 @@ const stageLabels: Record<string, string> = {
 };
 
 /** Readable copy for a backend refresh stage; unknown stages stay legible. */
-export function refreshStageLabel(stage: string): string {
+export function refreshStageLabel(
+  stage: string,
+  provider?: string | null,
+): string {
+  if (stage === 'analysis' && provider) return `Extracting with ${provider}`;
   if (Object.hasOwn(stageLabels, stage)) return stageLabels[stage];
   const words = stage.replaceAll('_', ' ').trim();
   return words ? words[0].toUpperCase() + words.slice(1) : 'Unknown stage';
@@ -26,12 +30,13 @@ export function refreshProgress(
   listing: readonly [completed: number, total: number | null],
   details: readonly [completed: number, total: number],
   analysis: readonly [completed: number, total: number] = [0, 0],
+  provider?: string | null,
 ) {
   if (stage === 'analysis' || stage === 'normalizing')
     return {
       detailsPhase: false,
-      stageLabel: refreshStageLabel(stage),
-      label: 'OpenAI extraction progress',
+      stageLabel: refreshStageLabel(stage, provider),
+      label: 'AI extraction progress',
       value: stage === 'normalizing' ? 0 : analysis[0],
       maxValue: Math.max(1, analysis[1]),
       isIndeterminate: stage === 'normalizing' || !analysis[1],

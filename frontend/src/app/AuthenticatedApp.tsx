@@ -27,6 +27,7 @@ import {
 } from '@heroui/react';
 import { useAdminCredentials } from '../lib/useAdminCredentials';
 import { useOpenAISettings } from '../lib/useOpenAISettings';
+import { useAISettings } from '../lib/useAISettings';
 import { useAdminRefreshStatus } from '../lib/useAdminRefreshStatus';
 import { SECRET_MASK } from '../lib/openaiRevealState';
 import { googlePhotoUrl, type AccountProfile } from '../lib/accountProfile';
@@ -35,6 +36,7 @@ import type { AuthState } from '../lib/authLifecycle';
 import { useAppAuth } from '../lib/useAppAuth';
 import { App } from './App';
 import { AdminSettingsDialog } from './AdminSettingsDialog';
+import { AISettingsPanel } from './AISettingsPanel';
 
 // Documented HeroUI Card/Button/Alert composition; no custom visual widget.
 export function AuthGate({
@@ -236,6 +238,7 @@ function AdminAccountMenu({
     uid,
   );
   const refresh = useAdminRefreshStatus(settings.isOpen, uid);
+  const ai = useAISettings(settings.isOpen && selectedTab === 'ai', uid);
   // Workspace Duo notice: open straight to the Refresh tab. Never reopen an
   // open dialog, because opening clears and rereads credential state.
   useImperativeHandle(settingsRef, () => ({
@@ -280,7 +283,8 @@ function AdminAccountMenu({
           dirty={
             settings.username !== '' ||
             settings.password !== '' ||
-            openai.draft !== ''
+            openai.draft !== '' ||
+            ai.dirty
           }
           notification={
             refresh.challenge?.approval_required && (
@@ -332,6 +336,10 @@ function AdminAccountMenu({
               <Tabs.List aria-label="Admin settings sections">
                 <Tabs.Tab id="credentials">
                   Credentials
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="ai">
+                  AI
                   <Tabs.Indicator />
                 </Tabs.Tab>
                 <Tabs.Tab id="usage">
@@ -525,6 +533,12 @@ function AdminAccountMenu({
                   </Card.Content>
                 </Card>
               </div>
+            </Tabs.Panel>
+            <Tabs.Panel id="ai">
+              <AISettingsPanel
+                ai={ai}
+                onManageApiKey={() => selectTab('credentials')}
+              />
             </Tabs.Panel>
             <Tabs.Panel id="usage">
               <div className="grid gap-4">

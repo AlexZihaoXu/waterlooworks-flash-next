@@ -158,6 +158,7 @@ export function RefreshActivity({
     [refresh.pages_completed, refresh.total_pages],
     [refresh.details_completed, refresh.details_total],
     [refresh.analysis_completed ?? 0, refresh.analysis_total ?? 0],
+    refresh.analysis_provider,
   );
   const { detailsPhase } = progress;
   const analysisPhase =
@@ -230,7 +231,7 @@ export function RefreshActivity({
         <RefreshConsole
           key={runId}
           entries={entries}
-          status={`${refresh.status} · ${refreshStageLabel(refresh.stage)}`}
+          status={`${refresh.status} · ${refreshStageLabel(refresh.stage, refresh.analysis_provider)}`}
           revision={`${runId}:${refresh.logs.at(-1)?.sequence ?? 0}`}
         />
       </RefreshPanel>

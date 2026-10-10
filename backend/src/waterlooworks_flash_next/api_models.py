@@ -324,6 +324,11 @@ class RefreshSnapshot(Contract):
     analysis_failed: int = Field(default=0, ge=0)
     analysis_skipped: int = Field(default=0, ge=0)
     analysis_cache_hits: int = Field(default=0, ge=0)
+    analysis_provider: str | None = Field(
+        default=None,
+        max_length=300,
+        description="Active AI access mode and model label while extracting.",
+    )
     eta_seconds: int | None = Field(
         default=None,
         ge=0,

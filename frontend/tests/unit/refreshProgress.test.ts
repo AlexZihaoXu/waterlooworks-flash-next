@@ -45,7 +45,14 @@ describe('refresh phase progress', () => {
     ).toBe('Signing in to WaterlooWorks · Duo approval may be required');
     expect(refreshStageLabel('saving')).toBe('Saving listings');
     expect(refreshStageLabel('normalizing')).toBe('Normalizing saved postings');
-    expect(refreshStageLabel('analysis')).toBe('Extracting with OpenAI');
+    expect(refreshStageLabel('analysis')).toBe('Extracting with AI');
+    expect(refreshStageLabel('analysis', 'Custom server / ctx384k')).toBe(
+      'Extracting with Custom server / ctx384k',
+    );
+    expect(
+      refreshProgress('analysis', [1, 1], [0, 0], [2, 5], 'OpenAI API key / m')
+        .stageLabel,
+    ).toBe('Extracting with OpenAI API key / m');
     expect(refreshStageLabel('complete')).toBe('Complete');
     expect(refreshStageLabel('stopped')).toBe('Stopped');
     expect(refreshStageLabel('recovery_required')).toBe(
