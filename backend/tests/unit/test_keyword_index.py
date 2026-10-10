@@ -16,13 +16,15 @@ def test_keyword_index_empty_conditional_get_is_read_only(tmp_path: Path) -> Non
         assert first.json()["run_id"] is None
         assert first.json()["total_postings"] == 0
         assert len(first.json()["revision"]) == 64
-        assert first.headers["cache-control"] == "no-store"
+        # The handler's revalidation policy is no longer overwritten.
+        assert first.headers["cache-control"] == "private, no-cache"
         second = client.get(
             "/api/keyword-index", headers={"If-None-Match": first.headers["etag"]}
         )
         assert second.status_code == 304
         assert second.content == b""
         assert second.headers["etag"] == first.headers["etag"]
+        assert second.headers["cache-control"] == "private, no-cache"
     connection = open_database(path)
     try:
         for table in (

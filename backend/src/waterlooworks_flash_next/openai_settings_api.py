@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from waterlooworks_flash_next.api_models import RefreshRequest
@@ -77,7 +77,12 @@ def install_openai_settings(
         response_model=RevealedKey,
         operation_id="revealOpenAIKey",
     )
-    async def reveal(request: Request, body: RevealRequest) -> RevealedKey:
+    async def reveal(
+        request: Request, response: Response, body: RevealRequest
+    ) -> RevealedKey:
+        # Plaintext key: explicit no-store independent of the transport guard.
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
         cookie, expected_uid = request.cookies.get(COOKIE), request.state.identity.uid
         nonce = body.challenge.get_secret_value()
         await asyncio.to_thread(store.validate_challenge, cookie, expected_uid, nonce)

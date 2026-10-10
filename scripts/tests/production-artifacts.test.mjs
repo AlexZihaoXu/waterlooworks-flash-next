@@ -52,6 +52,18 @@ test('production Compose isolates API, storage, secrets and sandbox', () => {
   );
   assert.match(backend, /WW_AUTH_TRUSTED_PROXY: 172\.30\.87\.2/);
   assert.match(backend, /WW_BROWSER_PROFILE: \/app\/browser-profile/);
+  // First-admin bootstrap is pinned to an operator-chosen owner, never first come.
+  assert.match(
+    backend,
+    /WW_BOOTSTRAP_ADMIN_EMAIL: \$\{WW_BOOTSTRAP_ADMIN_EMAIL:\?[^}]+\}/,
+  );
+  assert.match(
+    backend,
+    /WW_BOOTSTRAP_ADMIN_UID: \$\{WW_BOOTSTRAP_ADMIN_UID:-\}/,
+  );
+  const example = read('deployment/production.env.example');
+  assert.match(example, /^WW_BOOTSTRAP_ADMIN_EMAIL=owner@example\.invalid$/m);
+  assert.match(example, /^WW_BOOTSTRAP_ADMIN_UID=$/m);
   assert.doesNotMatch(
     compose,
     /privileged:|SYS_ADMIN|unconfined|ipc: host|network_mode: host|VITE_.*KEY/,
@@ -121,9 +133,82 @@ test('nginx exact-host TLS boundary strips forwarding, disables SSE buffering an
     assert.match(nginx, new RegExp(`proxy_set_header ${header} ""`));
   assert.match(nginx, /proxy_buffering off/);
   assert.match(nginx, /proxy_cache off/);
-  assert.match(nginx, /location ~ \^\/\(api\|doc\)/);
+  assert.match(nginx, /location ~ \^\/api\(\/\|\$\)/);
+  assert.doesNotMatch(nginx, /location[^{]*doc/);
   assert.match(nginx, /try_files \$uri \$uri\/ \/index.html/);
   assert.match(nginx, /access_log off/);
+});
+
+test('nginx sends strict browser security headers on every response', () => {
+  const nginx = read('deployment/nginx.conf.template');
+  const server = nginx.split(/\n    server \{/)[1];
+  // Server-level only: a location-level add_header would drop these.
+  assert.doesNotMatch(
+    server
+      .split(/\n        location /)
+      .slice(1)
+      .join(''),
+    /add_header/,
+  );
+  const header = (name) => {
+    const match = server.match(
+      new RegExp(`add_header ${name} "([^"]+)" always;`),
+    );
+    assert.ok(match, name);
+    return match[1];
+  };
+  const csp = header('Content-Security-Policy');
+  const directives = Object.fromEntries(
+    csp
+      .split(';')
+      .map((part) => part.trim().split(/\s+/))
+      .filter((parts) => parts[0])
+      .map(([name, ...values]) => [name, values]),
+  );
+  assert.deepEqual(directives['default-src'], ["'self'"]);
+  assert.deepEqual(directives['script-src'], [
+    "'self'",
+    'https://apis.google.com',
+  ]);
+  assert.deepEqual(directives['connect-src'], [
+    "'self'",
+    'https://identitytoolkit.googleapis.com',
+    'https://securetoken.googleapis.com',
+  ]);
+  assert.deepEqual(directives['frame-src'], [
+    'https://alex-xu-central.firebaseapp.com',
+  ]);
+  assert.deepEqual(directives['frame-ancestors'], ["'none'"]);
+  assert.deepEqual(directives['object-src'], ["'none'"]);
+  assert.deepEqual(directives['base-uri'], ["'none'"]);
+  assert.ok(!csp.includes("'unsafe-eval'"));
+  assert.ok(!directives['script-src'].includes("'unsafe-inline'"));
+  assert.match(header('Strict-Transport-Security'), /^max-age=\d{8,}/);
+  assert.equal(header('X-Frame-Options'), 'DENY');
+  assert.equal(header('X-Content-Type-Options'), 'nosniff');
+  assert.equal(header('Referrer-Policy'), 'no-referrer');
+  assert.equal(
+    header('Cross-Origin-Opener-Policy'),
+    'same-origin-allow-popups',
+  );
+  assert.match(header('Permissions-Policy'), /camera=\(\)/);
+  assert.match(header('Permissions-Policy'), /geolocation=\(\)/);
+});
+
+test('nginx rate-limits the anonymous auth endpoints', () => {
+  const nginx = read('deployment/nginx.conf.template');
+  // Only /api/auth/ gets a non-empty key; empty keys are never limited.
+  assert.match(
+    nginx,
+    /map \$uri \$ww_auth_limit_key \{\s+~\^\/api\/auth\/ \$binary_remote_addr;\s+default "";\s+\}/,
+  );
+  assert.match(
+    nginx,
+    /limit_req_zone \$ww_auth_limit_key zone=ww_auth:\d+m rate=\d+r\/s;/,
+  );
+  assert.match(nginx, /limit_req_status 429;/);
+  const api = nginx.split(/location ~ \^\/\(?api/)[1].split('}')[0];
+  assert.match(api, /limit_req zone=ww_auth burst=\d+ nodelay;/);
 });
 
 test('build context excludes private input and secret-bearing files', () => {

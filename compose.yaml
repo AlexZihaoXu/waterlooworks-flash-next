@@ -50,6 +50,10 @@ services:
       WW_AUTH_ORIGINS: https://${WW_PUBLIC_HOST:?Set the exact public TLS host}
       WW_AUTH_TRUSTED_PROXY: 172.30.87.2
       WW_AUTH_ALLOW_LOOPBACK_HTTP: '0'
+      # Only this verified Google owner can become the first (sole) admin of an
+      # empty database. Ignored once an admin exists. UID optionally narrows it.
+      WW_BOOTSTRAP_ADMIN_EMAIL: ${WW_BOOTSTRAP_ADMIN_EMAIL:?Set the owner's verified Google email}
+      WW_BOOTSTRAP_ADMIN_UID: ${WW_BOOTSTRAP_ADMIN_UID:-}
       WW_DATABASE: /app/data/waterlooworks.sqlite3
       WW_BROWSER_PROFILE: /app/browser-profile
       WW_BROWSER_HEADLESS: '1'

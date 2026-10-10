@@ -8,7 +8,7 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
-from waterlooworks_flash_next.app_auth import AuthError, SessionStore
+from waterlooworks_flash_next.app_auth import AuthError, BootstrapOwner, SessionStore
 from waterlooworks_flash_next.credentials import CredentialError
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.openai_settings import OpenAIKey, OpenAISettingsStore
@@ -20,9 +20,9 @@ def setup_store(
     path = tmp_path / "empty.sqlite3"
     open_database(path).close()
     monkeypatch.setenv("WW_CREDENTIALS_KEY", Fernet.generate_key().decode())
-    sessions = SessionStore(path)
+    sessions = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
     cookie = sessions.prepare(None, now=100)
-    sessions.issue(cookie, "owner", 1000, now=100)
+    cookie = sessions.issue(cookie, "owner", 1000, auth_time=100, now=100).cookie
     store = OpenAISettingsStore(path)
     return path, sessions, cookie, store
 
@@ -71,7 +71,7 @@ def test_challenge_boundary_one_use_and_session_binding(
     with pytest.raises(AuthError):
         store.consume_reveal(cookie, "owner", challenge.challenge, 100, 1000, now=101)
     other = sessions.prepare(None, now=100)
-    sessions.issue(other, "owner", 1000, now=100)
+    other = sessions.issue(other, "owner", 1000, auth_time=100, now=100).cookie
     with pytest.raises(AuthError):
         store.consume_reveal(other, "owner", challenge.challenge, 101, 1000, now=102)
     assert (
@@ -107,7 +107,7 @@ def test_reveal_denials(
         store.prepare_reveal(cookie, "owner", now=101)
     elif denial == "member":
         cookie = sessions.prepare(None, now=100)
-        sessions.issue(cookie, "member", 1000, now=100)
+        cookie = sessions.issue(cookie, "member", 1000, auth_time=100, now=100).cookie
         uid = "member"
     with pytest.raises(AuthError):
         store.consume_reveal(
@@ -127,7 +127,7 @@ def test_prepare_checks_admin_and_bounds_challenges(
             == 1
         )
     member = sessions.prepare(None, now=100)
-    sessions.issue(member, "member", 1000, now=100)
+    member = sessions.issue(member, "member", 1000, auth_time=100, now=100).cookie
     with pytest.raises(AuthError):
         store.prepare_reveal(member, "member", now=102)
     sessions.logout(cookie)
@@ -209,7 +209,8 @@ def test_settings_api_admin_csrf_redaction_without_provider_calls(
         assert response.status_code == 401 and secret not in response.text
         sessions = SessionStore(path)
         member = sessions.prepare(None)
-        sessions.issue(member, "member", int(time.time()) + 300)
+        now = int(time.time())
+        member = sessions.issue(member, "member", now + 300, auth_time=now).cookie
         client.cookies.clear()
         client.cookies.set(COOKIE, member, domain="localhost.local", path="/api")
         assert client.get(endpoint).status_code == 403

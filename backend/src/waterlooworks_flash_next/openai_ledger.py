@@ -1,6 +1,5 @@
 """Durable per-dispatch metadata and conservative known-cost stop thresholds."""
 
-import os
 import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -16,10 +15,16 @@ from waterlooworks_flash_next.openai_usage import (
     price_usage,
     summarize_costs,
 )
+from waterlooworks_flash_next.runtime_secrets import runtime_value
 
 
 class BudgetStopped(Exception):
     """No new dispatch; prior usage may be unknown, never assumed free."""
+
+
+def _setting(name: str, default: str) -> str:
+    value = runtime_value(name)
+    return default if value is None else value
 
 
 class BudgetLimits(BaseModel):
@@ -33,9 +38,9 @@ class BudgetLimits(BaseModel):
     def from_environment(cls) -> "BudgetLimits":
         try:
             return cls(
-                request_limit=int(os.environ.get("WW_OPENAI_REQUEST_LIMIT", "20")),
+                request_limit=int(_setting("WW_OPENAI_REQUEST_LIMIT", "20")),
                 known_cost_stop_usd=Decimal(
-                    os.environ.get("WW_OPENAI_KNOWN_COST_STOP_USD", "1")
+                    _setting("WW_OPENAI_KNOWN_COST_STOP_USD", "1")
                 ),
             )
         except Exception:

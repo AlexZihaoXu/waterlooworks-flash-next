@@ -2,7 +2,7 @@
 
 Schema10 adds a separate, read-only `country_inference` contract to workspace postings and posting detail. Existing country source facts/nulls and pay/keyword authority are unchanged. The explicit local country CLI, source-current selection, SVG flag UI, and deployment/pilot safeguards are documented in [inferred work country](country-inference.md). No model calls run on API GET/startup/SSE.
 
-The API requires **server-verified Google login** for every saved-data, FX, refresh/status/log and SSE endpoint. Any Google account may browse; the first successful app login becomes the sole admin, and only admin may mutate. Keep one Uvicorn worker. Complete [Firebase configuration, owner-first bootstrap, schema11 migration and safe transport](firebase-auth.md) before starting it. No containers are required.
+The API requires **server-verified Google login** for every saved-data, FX, refresh/status/log and SSE endpoint. Any Google account may browse once an admin exists; only the owner pinned by `WW_BOOTSTRAP_ADMIN_EMAIL`/`WW_BOOTSTRAP_ADMIN_UID` can become the sole admin of an empty database, and only admin may mutate. Keep one Uvicorn worker. Complete [Firebase configuration, pinned owner bootstrap, schema11 migration and safe transport](firebase-auth.md) before starting it. No containers are required.
 
 ## Start explicitly
 
@@ -20,12 +20,12 @@ WW_ENABLE_REFRESH=1 uv run --project backend --locked uvicorn waterlooworks_flas
 
 Run only one of these commands. Do not enable reload while a collection is active. Chromium must already be installed through Playwright. `WW_DATABASE` optionally selects a database path; `WW_PROJECT_ROOT` selects the repository containing the backend-only `.env` and private browser profile. Defaults assume the repository root working directory.
 
-- **Human documentation:** <http://127.0.0.1:8787/doc> (Swagger UI).
-- **Machine schema:** <http://127.0.0.1:8787/doc/openapi.json>.
+- **Human documentation:** <http://127.0.0.1:8787/doc> (Swagger UI), **only when the process environment sets `WW_API_DOCS=1`** (for example `WW_API_DOCS=1 uv run ... uvicorn ...`). It is off by default and must stay off in production.
+- **Machine schema:** <http://127.0.0.1:8787/doc/openapi.json>, under the same flag.
 - **Tracked schema:** [`openapi.json`](openapi.json), generated from the same FastAPI models.
 - **Generated frontend types:** `frontend/src/lib/api.generated.ts`.
 
-Swagger UI's Execute button is a real API call. Protected operations require the app cookie; mutations additionally require an allowed Origin, JSON and `X-WW-Request: 1`. Executing the refresh operation starts collection only when enabled; it obeys exactly the same lock/cooldown as the frontend. Swagger UI assets currently use FastAPI's default CDN.
+Swagger UI's Execute button is a real API call. Protected operations require the app cookie; mutations additionally require an allowed Origin, JSON and `X-WW-Request: 1`. Executing the refresh operation starts collection only when enabled; it obeys exactly the same lock/cooldown as the frontend. Swagger UI assets use FastAPI's default third-party CDN and run on the app origin, which is why the docs are opt-in and never proxied by production nginx.
 
 ## Routes
 
@@ -146,7 +146,7 @@ The modal uses documented HeroUI v3 Modal/Form/TextField/Input/Button compositio
 
    This application-runtime command reads the selected environment privately, appends an independently generated key without printing it, and preserves unrelated settings. It never creates/migrates a database, replaces any existing key (even empty/malformed), or generates a key over stored ciphertext. An inherited `WW_CREDENTIALS_KEY`, malformed environment, symlink, hard-linked file, an existing env file that is group/other-accessible or owned by another user, or an initialization lock also refuses provisioning (the file is opened without following symlinks and validated on the open descriptor; permissions are never silently changed, so `chmod 600` an existing file first). A stale `<env-file>.credentials-key.lock` sidecar left by an interrupted run produces a distinct error naming that file: after confirming no other provisioning run is active, delete the sidecar and retry. Stop other `.env` editors first. New files are created mode0600 where supported; explicitly restrict Windows ACLs. Never inspect/print the key with agent tools. If a key already exists, retain it and skip this command; correct mismatches by restoring the matching operator-managed key, not overwriting ciphertext.
 
-4. Restart the backend with its root `.env` loaded at runtime (or an explicit runtime `WW_CREDENTIALS_KEY`, never a `VITE_` variable). Keep exact configured origins and HTTPS, or the explicit loopback-only development exception. Disable request-body logging, tracing and sensitive diagnostics in reverse proxies/APM/browser tooling. Production artifacts now provide read-only runtime file secrets and private DB/profile volumes; see [encoding, mount permissions and parent deployment gates](deployment.md).
+4. Restart the backend with its root `.env` read at startup into a private lookup (never exported to the process or browser environment; restart after edits) (or an explicit runtime `WW_CREDENTIALS_KEY`, never a `VITE_` variable). Keep exact configured origins and HTTPS, or the explicit loopback-only development exception. Disable request-body logging, tracing and sensitive diagnostics in reverse proxies/APM/browser tooling. Production artifacts now provide read-only runtime file secrets and private DB/profile volumes; see [encoding, mount permissions and parent deployment gates](deployment.md).
 5. The existing app admin signs in and manually enters both WaterlooWorks fields via their account button. Save does not verify WaterlooWorks credentials or start work. Owner-approved real login/refresh and visual acceptance are separate gates. The obsolete root `.credentials.json` is not migrated or read; delete it unread after review while retaining ignore/exclusion protections.
 
 Routine tests use only random secret primitives and empty temporary databases. They do not initialize the real `.env`, read private SQLite, authenticate, claim an actual admin or contact WaterlooWorks.

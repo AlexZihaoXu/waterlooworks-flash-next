@@ -10,12 +10,12 @@ import time
 from pathlib import Path
 from typing import Any, BinaryIO, Literal
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from waterlooworks_flash_next.openai_ledger import BudgetLimits, BudgetStopped
 from waterlooworks_flash_next.openai_provider import ProviderError, ResponsesProvider
 from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
+from waterlooworks_flash_next.runtime_secrets import load_local_environment
 
 MAX_LINE_BYTES = 2 * 1024 * 1024
 MAX_LIFETIME_SECONDS = 24 * 60 * 60
@@ -75,8 +75,9 @@ class Bridge:
             connection.close()
         if message.load_environment:
             # Explicit operator CLI work only, never import/status/tests. Node does
-            # not parse backend secret files or receive their values.
-            load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
+            # not parse backend secret files or receive their values. Values stay
+            # in the private lookup and are never exported to os.environ.
+            load_local_environment(Path(__file__).resolve().parents[3] / ".env")
         self.provider = ResponsesProvider(path)
         self.provider.require_ready()
         BudgetLimits.from_environment()

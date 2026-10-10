@@ -92,6 +92,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     )
     service = RefreshService(path, root if enabled else None, detail_limit=detail_limit)
 
+    # Interactive docs load third-party CDN script on the app origin and expose
+    # the API surface unauthenticated, so they are opt-in for local work only.
+    docs = os.environ.get("WW_API_DOCS") == "1"
     verifier = FirebaseVerifier(root if database_path is None else path.parent)
     sessions = SessionStore(path)
     workspace_cache = SnapshotCache[bytes](path)
@@ -117,7 +120,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             "Google-authenticated shared listings API. Admin-only refresh with "
             "a 300-second post-run cooldown and sequential detail content "
             "after the full listing save. "
-            "Configure safe HTTPS and owner-first bootstrap before opening access."
+            "Configure safe HTTPS and the pinned owner bootstrap before opening access."
         ),
         responses={
             401: {"model": ErrorResponse},
@@ -126,8 +129,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             422: {"model": ErrorResponse},
             500: {"model": ErrorResponse},
         },
-        docs_url="/doc",
-        openapi_url="/doc/openapi.json",
+        docs_url="/doc" if docs else None,
+        openapi_url="/doc/openapi.json" if docs else None,
         redoc_url=None,
         lifespan=lifespan,
     )

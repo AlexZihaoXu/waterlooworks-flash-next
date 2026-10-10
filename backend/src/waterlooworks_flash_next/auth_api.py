@@ -1,6 +1,8 @@
 """Authentication transport and bounded public session endpoints."""
 
 import asyncio
+import secrets
+import sqlite3
 import threading
 import time
 from typing import Annotated, cast
@@ -16,6 +18,7 @@ from waterlooworks_flash_next.app_auth import (
     MAX_TTL,
     AuthError,
     AuthTransport,
+    BootstrapRefused,
     FirebaseVerifier,
     SessionIdentity,
     SessionStore,
@@ -23,6 +26,14 @@ from waterlooworks_flash_next.app_auth import (
     require_firebase_ready,
     require_session,
 )
+from waterlooworks_flash_next.logging import stage_logger
+
+
+class AuthBusy(Exception):
+    """True overload: storage contention or saturated verification slots."""
+
+
+BUSY_RETRY_AFTER_SECONDS = "2"
 
 
 def install_auth(
@@ -30,6 +41,7 @@ def install_auth(
 ) -> None:
     app.state.firebase = verifier
     app.state.sessions = sessions
+    log = stage_logger("api")
     verification_slots = threading.BoundedSemaphore(4)
     profile_slots = threading.BoundedSemaphore(4)
 
@@ -78,9 +90,37 @@ def install_auth(
             request._body = b"".join(chunks)
         try:
             response = await call_next(request)
-        except Exception:
-            return refuse(500, "Request unavailable; diagnostics suppressed.")
-        response.headers["Cache-Control"] = "no-store"
+        except Exception as error:
+            # Fixed, secret-free incident line: random id, method, matched route
+            # template and exception type only. Never the message, arguments,
+            # traceback, raw path, query, headers, cookies or body.
+            incident = secrets.token_hex(4)
+            route = getattr(request.scope.get("route"), "path", "unmatched")
+            log.error(
+                "Unhandled request failure; incident %s; %s %s; %s",
+                incident,
+                request.method,
+                route,
+                type(error).__name__,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Request unavailable; diagnostics suppressed. "
+                    f"Incident {incident}.",
+                    "incident": incident,
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        if request.url.path.startswith("/api/admin/"):
+            # Admin settings, step-up reveal and Duo status: never cacheable,
+            # whatever a handler or error path set.
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
+        else:
+            # Default no-store, but respect an explicit handler policy (for
+            # example the keyword index's ETag revalidation).
+            response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
@@ -88,6 +128,27 @@ def install_auth(
     async def authentication_error(request: Request, error: AuthError) -> JSONResponse:
         return JSONResponse(
             status_code=401, content={"detail": "Authentication was not accepted."}
+        )
+
+    @app.exception_handler(AuthBusy)
+    async def authentication_busy(request: Request, error: AuthBusy) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Authentication is busy. Try again shortly."},
+            headers={
+                "Retry-After": BUSY_RETRY_AFTER_SECONDS,
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.exception_handler(BootstrapRefused)
+    async def bootstrap_refused(
+        request: Request, error: BootstrapRefused
+    ) -> JSONResponse:
+        # Fixed text; never echo the attempted identity or the configured pin.
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "First administrator must be the configured owner."},
         )
 
     def set_cookie(request: Request, response: Response, cookie: str, ttl: int) -> None:
@@ -110,7 +171,10 @@ def install_auth(
     def prepare(
         request: Request, response: Response, body: RefreshRequest
     ) -> dict[str, bool]:
-        cookie = sessions.prepare(request.cookies.get(COOKIE))
+        try:
+            cookie = sessions.prepare(request.cookies.get(COOKIE))
+        except sqlite3.OperationalError:
+            raise AuthBusy from None  # e.g. database locked past its timeout.
         set_cookie(request, response, cookie, MAX_TTL)
         return {"ready": True}
 
@@ -127,16 +191,28 @@ def install_auth(
         if not cookie or not sessions.prepared(cookie):
             raise HTTPException(401, "Prepare sign-in first.")
         if not verification_slots.acquire(blocking=False):
-            raise HTTPException(429, "Authentication is busy. Try again later.")
+            raise AuthBusy
         try:
-            uid, expires = verifier.verify(body.id_token)
-            identity = sessions.issue(cookie, uid, expires)
+            verified = verifier.verify(body.id_token)
+            issued = sessions.issue(
+                cookie,
+                verified.uid,
+                verified.expires,
+                auth_time=verified.auth_time,
+                email=verified.email,
+            )
+        except sqlite3.OperationalError:
+            raise AuthBusy from None
         finally:
             verification_slots.release()
+        # Always a freshly minted value: login and renewal both rotate.
         set_cookie(
-            request, response, cookie, max(0, identity.expires_at - int(time.time()))
+            request,
+            response,
+            issued.cookie,
+            max(0, issued.identity.expires_at - int(time.time())),
         )
-        return identity
+        return issued.identity
 
     @app.get(
         "/api/auth/session",

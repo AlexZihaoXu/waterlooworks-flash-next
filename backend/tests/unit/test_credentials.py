@@ -1,5 +1,6 @@
 """Random secret primitives and empty databases only; no browser/provider I/O."""
 
+import os
 import secrets
 import sqlite3
 import time
@@ -181,7 +182,8 @@ def test_admin_settings_and_secret_validation(
         assert client.post(endpoint, content="").status_code == 415
         store = SessionStore(path)
         cookie = store.prepare(None)
-        store.issue(cookie, "member", int(time.time()) + 300)
+        now = int(time.time())
+        cookie = store.issue(cookie, "member", now + 300, auth_time=now).cookie
         client.cookies.clear()
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get(endpoint).status_code == 403
@@ -190,7 +192,7 @@ def test_admin_settings_and_secret_validation(
         assert client.get(endpoint).status_code == 401
         assert client.post(endpoint, json=body).status_code == 401
         expired = store.prepare(None, now=100)
-        store.issue(expired, "member", 200, now=100)
+        expired = store.issue(expired, "member", 200, auth_time=100, now=100).cookie
         client.cookies.clear()
         client.cookies.set(COOKIE, expired, domain="localhost.local", path="/api")
         assert client.get(endpoint).status_code == 401
@@ -229,7 +231,7 @@ def test_explicit_key_initialization_never_overwrites(
 def test_schema12_additive_preserves_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from waterlooworks_flash_next.app_auth import SessionStore
+    from waterlooworks_flash_next.app_auth import BootstrapOwner, SessionStore
 
     path = tmp_path / "db.sqlite3"
     from waterlooworks_flash_next import database
@@ -237,9 +239,11 @@ def test_schema12_additive_preserves_auth(
     with monkeypatch.context() as legacy:
         legacy.setattr(database, "SCHEMA_VERSION", 13)
         open_database(path).close()
-    store = SessionStore(path)
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
     cookie = store.prepare(None)
-    identity = store.issue(cookie, "owner", int(time.time()) + 300)
+    now = int(time.time())
+    issued = store.issue(cookie, "owner", now + 300, auth_time=now)
+    cookie, identity = issued.cookie, issued.identity
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TABLE openai_reauth_challenges")
         connection.execute("DROP TABLE openai_credentials")
@@ -370,6 +374,7 @@ def test_runtime_environment_debug_guard_runs_before_login(
     (tmp_path / ".env").write_text("PWDEBUG=1\n")
     with pytest.raises(LoginFlowError, match="Disable DEBUG and PWDEBUG"):
         start_login(tmp_path / "absent.sqlite3", project_root=tmp_path)
+    assert "PWDEBUG" not in os.environ
     assert not (tmp_path / "absent.sqlite3").exists()
     assert not (tmp_path / ".experiment").exists()
 
