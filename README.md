@@ -36,7 +36,7 @@ Salary text uses the highest known rate across a posting's tiers, normalized to 
 
 ## Reload performance
 
-The local API keeps one in-memory serialized workspace and one keyword-index snapshot. Persistent read-only SQLite observers invalidate them on any database commit (and file replacement); a commit during assembly prevents caching that result. Loads are serialized per snapshot to avoid duplicate work. Responses remain private, and GETs still do no collection/inference. Gzip compresses large responses without compressing or buffering SSE. The browser defers startup one microtask to avoid sending a doomed request during React development-mode effect cleanup. Initial server reads and first worker preparation still take longer than subsequent reloads.
+The local API keeps one in-memory serialized workspace and one keyword-index snapshot. Persistent read-only SQLite observers invalidate them when the trigger-maintained `data_generation` counter moves (any insert/update/delete on a saved-data table, from any process) or the file is replaced; sign-ins, logouts, credential/usage writes and run heartbeats do not invalidate them. If the trigger set is incomplete, the observers fall back to invalidating on any commit. A write during assembly prevents caching that result. Loads are serialized per snapshot to avoid duplicate work. Responses remain private, and GETs still do no collection/inference. Gzip compresses large responses without compressing or buffering SSE. The browser defers startup one microtask to avoid sending a doomed request during React development-mode effect cleanup. Initial server reads and first worker preparation still take longer than subsequent reloads.
 
 ## Local model benchmark
 
