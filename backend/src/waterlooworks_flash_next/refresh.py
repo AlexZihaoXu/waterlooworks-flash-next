@@ -12,13 +12,19 @@ import math
 import sqlite3
 import sys
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from waterlooworks_flash_next.api_models import RefreshLog, RefreshSnapshot
+from waterlooworks_flash_next.api_models import (
+    AdminRefreshStatus,
+    RefreshLog,
+    RefreshPacingStatus,
+    RefreshSnapshot,
+)
 from waterlooworks_flash_next.auth_challenge import AuthChallenge, AuthChallengeStatus
 from waterlooworks_flash_next.credentials import CredentialStore
 from waterlooworks_flash_next.database import (
@@ -43,20 +49,38 @@ from waterlooworks_flash_next.jobs import open_all_jobs
 from waterlooworks_flash_next.listing_fields import LISTING_FIELDS as EXPORT_FIELDS
 from waterlooworks_flash_next.listings import (
     CollectionInterrupted,
-    FailureCategory,
     ListingCollection,
     ListingFetchError,
 )
 from waterlooworks_flash_next.logging import stage_logger
 from waterlooworks_flash_next.login import AuthDeadline, LoginSession, start_login
 from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
+from waterlooworks_flash_next.refresh_budget import (
+    describe_delay,
+    pacing_status,
+    record_pacing_stop,
+    record_ww_request,
+    refusal_message,
+    rolling_requests,
+)
 from waterlooworks_flash_next.refresh_logging import (
     PAGE_FORMAT,
     safe_eta_seconds,
     safe_message,
 )
+from waterlooworks_flash_next.ww_pacing import (
+    BROWSER_REQUESTS,
+    PacingConfig,
+    RequestBudgetExhausted,
+    RequestGate,
+    WaitKind,
+    block_seconds,
+)
 
-COOLDOWN_SECONDS = 300
+# Browser loads before credential entry (sign-in landing page and the
+# post-sign-in dashboard); the remaining BROWSER_REQUESTS are counted once the
+# job board and its captured page-1 listing have loaded.
+LOGIN_BROWSER_REQUESTS = 2
 # Lifespan shutdown waits this long for the worker to reach a stop checkpoint;
 # below compose stop_grace_period (190 s) so finalization precedes SIGKILL.
 SHUTDOWN_JOIN_SECONDS = 150.0
@@ -145,16 +169,26 @@ def select_detail_queue(
     *,
     full_refetch: bool = False,
 ) -> tuple[list[StoredListing], dict[str, int]]:
-    """Listing-ordered detail queue and counts of postings skipped per reason."""
+    """Detail queue and counts of postings skipped per reason.
+
+    Postings without any saved detail content come first (listing order within
+    each group), so a run stopped by a request cap still makes progress on new
+    postings and the next refresh continues where it stopped.
+    """
     from waterlooworks_flash_next.content_storage import EXTRACTOR_VERSION
 
     queue: list[StoredListing] = []
+    saved_ids: set[str] = set()
     skipped: dict[str, int] = {}
     for listing in listings:
         current = connection.execute(
             "SELECT content_hash FROM postings WHERE posting_id=?", (listing.id,)
         ).fetchone()
         reason = None
+        if connection.execute(
+            "SELECT 1 FROM posting_contents WHERE posting_id=?", (listing.id,)
+        ).fetchone():
+            saved_ids.add(listing.id)
         if current is not None and not full_refetch:
             latest = connection.execute(_LATEST_ATTEMPT, (listing.id,)).fetchone()
             success = connection.execute(_LATEST_SUCCESS, (listing.id,)).fetchone()
@@ -173,7 +207,16 @@ def select_detail_queue(
             queue.append(listing)
         else:
             skipped[reason] = skipped.get(reason, 0) + 1
-    return queue, skipped
+    return prefer_unsaved(queue, saved_ids), skipped
+
+
+def prefer_unsaved(
+    queue: list[StoredListing], saved_ids: set[str]
+) -> list[StoredListing]:
+    """Stable order: postings without saved detail content first."""
+    return [item for item in queue if item.id not in saved_ids] + [
+        item for item in queue if item.id in saved_ids
+    ]
 
 
 def analysis_batches(ids: list[str]) -> list[list[str]]:
@@ -196,22 +239,30 @@ def configured_full_refetch(value: str | None) -> bool:
 
 
 class RefreshConflict(Exception):
-    def __init__(self, status_code: int, retry_after: int = 0) -> None:
+    def __init__(
+        self, status_code: int, retry_after: int = 0, message: str | None = None
+    ) -> None:
         self.status_code = status_code
         self.retry_after = retry_after
         super().__init__(
-            "Refresh already running."
-            if status_code == 409
-            else "Refresh cooldown is active."
+            message
+            or (
+                "Refresh already running."
+                if status_code == 409
+                else "Refresh cooldown is active."
+            )
         )
 
 
-def claim_refresh(path: Path) -> str:
+def claim_refresh(path: Path, pacing: PacingConfig | None = None) -> str:
     """SQLite transaction prevents concurrent claims, including across API processes.
 
-    Stale running rows are NOT automatically cleared after a crash; the explicit
-    offline ``recover`` command finalizes them.
+    Refused (429 with the remaining seconds) while a stored block, the rolling
+    24-hour request budget or the cooldown since the previous run's finish is
+    active; the longest wait wins. Stale running rows are NOT automatically
+    cleared after a crash; the explicit offline ``recover`` command finalizes them.
     """
+    pacing = pacing or PacingConfig()
     connection = open_database(path)
     try:
         with connection:
@@ -220,29 +271,11 @@ def claim_refresh(path: Path) -> str:
                 "SELECT 1 FROM collection_runs WHERE status='running' LIMIT 1"
             ).fetchone():
                 raise RefreshConflict(409)
-            blocked = connection.execute(
-                "SELECT max(blocked_until) FROM collection_runs"
-            ).fetchone()[0]
-            if blocked:
-                delay = math.ceil(
-                    (
-                        datetime.fromisoformat(blocked) - datetime.now(UTC)
-                    ).total_seconds()
-                )
-                if delay > 0:
-                    raise RefreshConflict(429, delay)
-            latest = connection.execute(
-                "SELECT finished_at FROM collection_runs WHERE finished_at IS NOT NULL "
-                "ORDER BY finished_at DESC LIMIT 1"
-            ).fetchone()
             now = datetime.now(UTC)
-            if latest:
-                remaining = (
-                    COOLDOWN_SECONDS
-                    - (now - datetime.fromisoformat(latest[0])).total_seconds()
-                )
-                if remaining > 0:
-                    raise RefreshConflict(429, math.ceil(remaining))
+            refusal = pacing_status(connection, pacing, now).refusal(now)
+            if refusal is not None:
+                reason, delay = refusal
+                raise RefreshConflict(429, delay, refusal_message(reason, delay))
             run_id = str(uuid4())
             connection.execute(
                 "INSERT INTO collection_runs (id, started_at) VALUES (?, ?)",
@@ -331,8 +364,10 @@ class RefreshService:
         *,
         detail_limit: int | None = None,
         full_refetch: bool = False,
+        pacing: PacingConfig | None = None,
     ) -> None:
         self.path = path
+        self.pacing = pacing or PacingConfig()
         self.project_root = project_root
         self.detail_limit = detail_limit
         self.full_refetch = full_refetch
@@ -360,15 +395,15 @@ class RefreshService:
 
     def restore(self) -> None:
         """Restore cooldown/unfinished state without automatically restarting."""
-        from datetime import timedelta
-
         connection = open_database(self.path)
         try:
             row = connection.execute(
                 "SELECT id, status, pages_completed, records_received, "
                 "unique_postings, duplicates, finished_at,details_completed,"
-                "details_total,detail_requests,detail_retries,detail_limited "
-                "FROM collection_runs "
+                "details_total,detail_requests,detail_retries,detail_limited,"
+                "coalesce(p.ww_requests,0),p.pacing_stop,error_category "
+                "FROM collection_runs LEFT JOIN collection_run_pacing p "
+                "ON p.run_id=collection_runs.id "
                 "ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
             if row:
@@ -391,20 +426,13 @@ class RefreshService:
                         "details_total": row[8],
                         "detail_requests": row[9],
                         "detail_retries": row[10],
-                        "detail_bursts": row[9] // 10,
                         "detail_limited": bool(row[11]),
+                        "ww_requests": row[12],
+                        "pacing_stop": row[13],
+                        "error_category": row[14],
                     }
                 )
-                if row[6]:
-                    self.cooldown_until = datetime.fromisoformat(row[6]) + timedelta(
-                        seconds=COOLDOWN_SECONDS
-                    )
-            blocked = connection.execute(
-                "SELECT max(blocked_until) FROM collection_runs"
-            ).fetchone()[0]
-            if blocked:
-                until = datetime.fromisoformat(blocked)
-                self.cooldown_until = max(self.cooldown_until or until, until)
+            self.cooldown_until = pacing_status(connection, self.pacing).next_allowed_at
             if (
                 row
                 and connection.execute(
@@ -439,6 +467,45 @@ class RefreshService:
             return self.auth_challenge.snapshot(
                 self.state.run_id if self.state.status == "running" else None
             )
+
+    def pacing_status(self) -> RefreshPacingStatus:
+        """Configured pacing and rolling 24-hour usage, read from SQLite."""
+        from waterlooworks_flash_next import ww_pacing
+
+        connection = open_database(self.path)
+        try:
+            status = pacing_status(connection, self.pacing)
+            last = connection.execute(
+                "SELECT p.pacing_stop,r.error_category FROM collection_runs r "
+                "LEFT JOIN collection_run_pacing p ON p.run_id=r.id "
+                "WHERE r.status<>'running' ORDER BY r.finished_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            connection.close()
+        next_allowed = status.next_allowed_at
+        return RefreshPacingStatus(
+            request_cap=self.pacing.request_cap,
+            daily_request_cap=self.pacing.daily_request_cap,
+            min_interval_minutes=self.pacing.min_interval_minutes,
+            min_gap_seconds=ww_pacing.MIN_GAP_SECONDS,
+            max_gap_seconds=ww_pacing.MAX_GAP_SECONDS,
+            rest_every_min=ww_pacing.REST_EVERY_MIN,
+            rest_every_max=ww_pacing.REST_EVERY_MAX,
+            rest_min_seconds=ww_pacing.REST_MIN_SECONDS,
+            rest_max_seconds=ww_pacing.REST_MAX_SECONDS,
+            used_24h=status.used,
+            remaining_24h=status.remaining,
+            next_allowed_at=next_allowed.isoformat() if next_allowed else None,
+            blocked_until=status.blocked_until.isoformat()
+            if status.blocked_until
+            else None,
+            last_pacing_stop=last[0] if last else None,
+            last_error_category=last[1] if last else None,
+        )
+
+    def admin_status(self) -> AdminRefreshStatus:
+        challenge = self.challenge_status()
+        return AdminRefreshStatus(**challenge.model_dump(), pacing=self.pacing_status())
 
     def emit(self, message: str, level: str = "info") -> None:
         with self.lock:
@@ -476,7 +543,7 @@ class RefreshService:
             except ProviderBusy:
                 raise RefreshConflict(409) from None
             try:
-                run_id = claim_refresh(self.path)
+                run_id = claim_refresh(self.path, self.pacing)
             except Exception:
                 lease.close()
                 raise
@@ -504,18 +571,19 @@ class RefreshService:
             return run_id
 
     def persist_listing_block(self, run_id: str, error: ListingFetchError) -> None:
-        """Persist a listing-phase 429 Retry-After exactly like the detail phase."""
-        if error.category != FailureCategory.RATE_LIMIT or error.retry_after is None:
+        """Persist a listing-phase ban-risk block exactly like the detail phase."""
+        blocked = block_seconds(error)
+        if blocked is None:
             return
         try:
             connection = open_database(self.path)
             try:
-                record_blocked_until(connection, run_id, error.retry_after)
+                record_blocked_until(connection, run_id, blocked)
             finally:
                 connection.close()
         except Exception:
             self.emit(
-                "Could not persist the server Retry-After; diagnostics suppressed.",
+                "Could not persist the refresh block; diagnostics suppressed.",
                 "warning",
             )
 
@@ -527,8 +595,6 @@ class RefreshService:
         *,
         interrupted: bool = False,
     ) -> None:
-        from datetime import timedelta
-
         status: Literal["completed", "failed", "interrupted"] = (
             "completed" if success else "interrupted" if interrupted else "failed"
         )
@@ -551,9 +617,8 @@ class RefreshService:
                         run_id,
                     ),
                 )
-            blocked = connection.execute(
-                "SELECT blocked_until FROM collection_runs WHERE id=?", (run_id,)
-            ).fetchone()[0]
+                record_pacing_stop(connection, run_id, self.state.pacing_stop)
+            next_allowed = pacing_status(connection, self.pacing, now).next_allowed_at
         finally:
             connection.close()
         with self.lock:
@@ -561,14 +626,15 @@ class RefreshService:
             self.state.stage = "complete" if success else "stopped"
             self.state.eta_seconds = None
             self.state.detail_wait_seconds = 0
-            self.cooldown_until = now + timedelta(seconds=COOLDOWN_SECONDS)
-            if blocked:
-                self.cooldown_until = max(
-                    self.cooldown_until, datetime.fromisoformat(blocked)
-                )
+            self.state.error_category = category
+            self.cooldown_until = next_allowed
         self.emit(
             (
-                "Refresh completed with the server detail cap; "
+                "Refresh finished partially at a WaterlooWorks request cap; "
+                "saved progress is kept and the remaining postings wait for "
+                "the next refresh."
+                if self.state.pacing_stop in ("request_cap", "daily_cap")
+                else "Refresh completed with the server detail cap; "
                 "remaining details were not requested."
                 if self.state.detail_limited
                 else "Collection and AI extraction completed."
@@ -810,7 +876,7 @@ class RefreshService:
             self.state.details_total = progress.total
             self.state.detail_requests = progress.requests
             self.state.detail_retries = progress.retries
-            self.state.detail_bursts = progress.bursts
+            self.state.detail_bursts = progress.rests
             self.state.detail_wait_seconds = round(progress.wait_seconds, 3)
             self.state.eta_seconds = (
                 None  # No borrowed listing ETA or invented throughput.
@@ -821,14 +887,78 @@ class RefreshService:
                 "warning",
             )
         elif progress.stage == "detail_rest":
-            self.emit(f"Detail burst rest; waiting {progress.wait_seconds:.1f}s.")
+            self.emit(_rest_message(progress.wait_seconds))
         else:
             self.emit(
                 f"Detail progress: {progress.completed}/{progress.total} saved; "
                 f"{progress.failed} failed validation; "
                 f"{progress.requests} requests; {progress.retries} retries; "
-                f"{progress.bursts} bursts."
+                f"{progress.rests} rest breaks."
             )
+
+    def _listing_wait(self, kind: WaitKind | None, seconds: float) -> None:
+        with self.lock:
+            self.state.stage = "listings" if kind is None else f"listing_{kind}"
+            self.state.detail_wait_seconds = round(seconds, 3)
+            if kind is not None:
+                self.state.eta_seconds = None
+        if kind == "rest":
+            self.emit(_rest_message(seconds))
+        elif kind == "retry":
+            self.emit(f"Listing retry scheduled; waiting {seconds:.1f}s.", "warning")
+
+    def _record_request(self, connection: sqlite3.Connection, run_id: str) -> None:
+        """Durably count one WaterlooWorks request before it is sent."""
+        record_ww_request(connection, run_id)
+        with self.lock:
+            self.state.ww_requests += 1
+
+    def _sleep(self, seconds: float) -> None:
+        # Wakes early on a shutdown request; the gate then stops before sending.
+        self.stop_event.wait(seconds)
+
+    def _new_gate(self, connection: sqlite3.Connection, run_id: str) -> RequestGate:
+        used = rolling_requests(connection, datetime.now(UTC), exclude_run=run_id)
+        gate = RequestGate(
+            self.pacing,
+            daily_remaining=self.pacing.daily_request_cap - used,
+            record_request=lambda: self._record_request(connection, run_id),
+            report_wait=self._listing_wait,
+            sleep=self._sleep,
+            should_stop=self.stop_requested,
+        )
+        with self.lock:
+            self.state.ww_request_budget = gate.budget
+        return gate
+
+    def _pacing_stopped(self, stop: RequestBudgetExhausted, left: str) -> None:
+        with self.lock:
+            self.state.pacing_stop = stop.reason
+        self.emit(
+            (
+                "Per-run WaterlooWorks request cap reached"
+                if stop.reason == "request_cap"
+                else "Rolling 24-hour WaterlooWorks request budget reached"
+            )
+            + f"; stopped cleanly. {left} left for the next refresh; saved "
+            "progress is kept.",
+            "warning",
+        )
+
+    def _ban_risk(self, error: ListingFetchError) -> None:
+        blocked = block_seconds(error)
+        if blocked is None:
+            return
+        with self.lock:
+            self.state.pacing_stop = "ban_risk"
+        self.emit(
+            f"BAN RISK: WaterlooWorks returned a warning sign ({error.category.value}; "
+            f"HTTP {error.status if error.status is not None else 'unavailable'}). "
+            f"The run stopped at once without retrying; refreshes are blocked for "
+            f"{describe_delay(blocked)}. Check the account in a browser before "
+            "clearing the block with the rate_limit clear command.",
+            "critical",
+        )
 
     def _run(self, run_id: str) -> None:
         session: LoginSession | None = None
@@ -839,10 +969,16 @@ class RefreshService:
         scopes = [stage_logger(scope) for scope in ("login", "duo", "jobs", "listings")]
         for logger in scopes:
             logger.addHandler(handler)
+        # Dedicated connection: request accounting commits outside phase writes.
+        accounting: sqlite3.Connection | None = None
         try:
             assert self.project_root is not None
+            accounting = open_database(self.path)
+            gate = self._new_gate(accounting, run_id)
             deadline = AuthDeadline()
             self.auth_challenge.begin(run_id, deadline)
+            # Exactly one sign-in attempt per run: a failure ends the run.
+            gate.note_external(time.monotonic(), LOGIN_BROWSER_REQUESTS)
             session = start_login(
                 self.path,
                 project_root=self.project_root,
@@ -860,6 +996,10 @@ class RefreshService:
             source = open_all_jobs(session.page)
             if source is None:
                 raise RuntimeError("No fresh listing source.")
+            gate.note_external(
+                source.finished_at, BROWSER_REQUESTS - LOGIN_BROWSER_REQUESTS
+            )
+            source.gate = gate
             # Suppress browser background egress while direct listings run.
             install_capture_guard(session.page, "")
             with self.lock:
@@ -869,11 +1009,19 @@ class RefreshService:
                 )
             collection = ListingCollection(source, should_stop=self.stop_requested)
             try:
-                collection.run()  # Captured page 1 reused; 2/4/8-second policy.
+                collection.run()  # Captured page 1 reused; shared paced gate.
             except (ListingFetchError, CollectionInterrupted):
                 # Upsert-only and never infers deletion: partial pages are safe.
                 self._save_partial_listings(run_id, collection)
                 raise
+            except RequestBudgetExhausted as stop:
+                # Clean partial finish: pages so far are saved, no details run.
+                self._save_partial_listings(run_id, collection)
+                self._pacing_stopped(
+                    stop, "Remaining listing pages and all detail requests are"
+                )
+                success, category = True, None
+                return
             with self.lock:
                 self.state.stage = "saving"
                 self.state.eta_seconds = None
@@ -973,8 +1121,17 @@ class RefreshService:
                     self._detail_progress,
                     bootstrap=bootstrap,
                     should_stop=self.stop_requested,
+                    gate=gate,
                 )
-                details.run()
+                try:
+                    details.run()
+                except RequestBudgetExhausted as stop:
+                    # Clean partial finish; saved details and analysis continue.
+                    self._pacing_stopped(
+                        stop,
+                        f"{len(queue) - details.completed - details.failed} "
+                        "postings are",
+                    )
                 if details.failed:
                     self.emit(
                         f"{details.failed} postings failed detail-content "
@@ -1004,6 +1161,7 @@ class RefreshService:
                 f"HTTP {error.status if error.status is not None else 'unavailable'}.",
                 "error",
             )
+            self._ban_risk(error)
         except (Exception, SystemExit):
             # Safe terminal failure; never relogin or repeat an MFA push.
             category = "internal"
@@ -1019,6 +1177,8 @@ class RefreshService:
                     )
             for logger in scopes:
                 logger.removeHandler(handler)
+            if accounting is not None:
+                accounting.close()
             try:
                 self._finish(run_id, success, category, interrupted=interrupted)
             except Exception:
@@ -1033,6 +1193,13 @@ class RefreshService:
                 if self.provider_lease is not None:
                     self.provider_lease.close()
                     self.provider_lease = None
+
+
+def _rest_message(seconds: float) -> str:
+    return (
+        f"Resting {seconds:.0f}s to stay polite to WaterlooWorks; "
+        "this pause is scheduled, not an error."
+    )
 
 
 def _stored_listings(collection: ListingCollection) -> list[StoredListing]:
@@ -1078,8 +1245,7 @@ class SafeRefreshHandler(logging.Handler):
                     self.service.state.duplicates = numbers[5]
                     self.service.state.eta_seconds = safe_eta_seconds(record.args[6])
         elif record.name == "listings" and record.msg in {
-            "Retrying the same page after %.0fs from failure completion.",
-            "Page %d attempt %d/%d failed | category=%s | HTTP=%s | retry=%s",
+            "Page %d failed | category=%s | HTTP=%s",
         }:
             with self.service.lock:
                 self.service.state.eta_seconds = None

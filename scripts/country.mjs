@@ -73,7 +73,7 @@ Resume never reissues terminal results or lost in-flight calls; start a new expl
   const db = new DatabaseSync(dbPath, { readOnly: action === 'status' });
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
   if (
-    ![10, 11, 12, 13, 14, 15].includes(
+    ![10, 11, 12, 13, 14, 15, 16].includes(
       db.prepare('PRAGMA user_version').get().user_version,
     )
   ) {

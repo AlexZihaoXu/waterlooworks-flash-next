@@ -250,7 +250,7 @@ def initialize_key(env_path: Path, database_path: Path) -> None:
             database_path.resolve().as_uri() + "?mode=ro", uri=True
         )
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (12, 13, 14, 15):
+        if version not in (12, 13, 14, 15, 16):
             raise ValueError
         if connection.execute("SELECT 1 FROM waterlooworks_credentials").fetchone():
             raise ValueError
@@ -260,7 +260,7 @@ def initialize_key(env_path: Path, database_path: Path) -> None:
         ):
             raise ValueError
         if (
-            version >= 15
+            version >= 16
             and connection.execute("SELECT 1 FROM ai_credentials").fetchone()
         ):
             raise ValueError
@@ -311,7 +311,7 @@ def initialize_key(env_path: Path, database_path: Path) -> None:
         raise
     except Exception:
         raise CredentialError(
-            "Key initialization refused; require schema12 through schema15, no "
+            "Key initialization refused; require schema12 through schema16, no "
             "stored credentials, and no existing key or malformed environment. "
             "No key replacement is supported."
         ) from None

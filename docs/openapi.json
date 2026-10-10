@@ -1952,7 +1952,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuthChallengeStatus"
+                  "$ref": "#/components/schemas/AdminRefreshStatus"
                 }
               }
             }
@@ -3461,6 +3461,49 @@
         "required": ["configured", "status", "updated_at", "username"],
         "title": "AdminCredentialStatus"
       },
+      "AdminRefreshStatus": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "approval_required": {
+            "type": "boolean",
+            "title": "Approval Required",
+            "default": false
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "expires_in_seconds": {
+            "type": "number",
+            "title": "Expires In Seconds",
+            "default": 0
+          },
+          "pacing": {
+            "$ref": "#/components/schemas/RefreshPacingStatus"
+          }
+        },
+        "type": "object",
+        "required": ["pacing"],
+        "title": "AdminRefreshStatus",
+        "description": "Current Duo challenge plus the WaterlooWorks pacing status (admin only)."
+      },
       "AnalysisEvidence": {
         "properties": {
           "source_kind": {
@@ -3587,44 +3630,6 @@
         "type": "object",
         "required": ["url", "classification", "source_field", "evidence_text"],
         "title": "ApplicationLink"
-      },
-      "AuthChallengeStatus": {
-        "properties": {
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "approval_required": {
-            "type": "boolean",
-            "title": "Approval Required",
-            "default": false
-          },
-          "code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Code"
-          },
-          "expires_in_seconds": {
-            "type": "number",
-            "title": "Expires In Seconds",
-            "default": 0
-          }
-        },
-        "type": "object",
-        "title": "AuthChallengeStatus"
       },
       "CallbackPaste": {
         "properties": {
@@ -5710,6 +5715,139 @@
         "required": ["sequence", "at", "level", "message"],
         "title": "RefreshLog"
       },
+      "RefreshPacingStatus": {
+        "properties": {
+          "request_cap": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Request Cap",
+            "description": "WW_REFRESH_REQUEST_CAP per run."
+          },
+          "daily_request_cap": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Daily Request Cap",
+            "description": "WW_REFRESH_DAILY_REQUEST_CAP per rolling 24 hours."
+          },
+          "min_interval_minutes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Min Interval Minutes",
+            "description": "WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes."
+          },
+          "min_gap_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Min Gap Seconds"
+          },
+          "max_gap_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Max Gap Seconds"
+          },
+          "rest_every_min": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Rest Every Min"
+          },
+          "rest_every_max": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Rest Every Max"
+          },
+          "rest_min_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Rest Min Seconds"
+          },
+          "rest_max_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Rest Max Seconds"
+          },
+          "used_24h": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Used 24H",
+            "description": "Requests counted in the last 24 hours."
+          },
+          "remaining_24h": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Remaining 24H"
+          },
+          "next_allowed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Allowed At",
+            "description": "UTC ISO time a refresh may start; null when allowed now."
+          },
+          "blocked_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Until",
+            "description": "Active ban-risk/rate-limit block end (UTC ISO), if any."
+          },
+          "last_pacing_stop": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["request_cap", "daily_cap", "ban_risk"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pacing Stop",
+            "description": "Why the most recent finished run stopped early, if it did."
+          },
+          "last_error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Category",
+            "description": "Fixed failure category of the most recent finished run."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_cap",
+          "daily_request_cap",
+          "min_interval_minutes",
+          "min_gap_seconds",
+          "max_gap_seconds",
+          "rest_every_min",
+          "rest_every_max",
+          "rest_min_seconds",
+          "rest_max_seconds",
+          "used_24h",
+          "remaining_24h",
+          "next_allowed_at",
+          "blocked_until",
+          "last_pacing_stop",
+          "last_error_category"
+        ],
+        "title": "RefreshPacingStatus",
+        "description": "Server pacing policy and rolling usage; no credentials or source data."
+      },
       "RefreshRequest": {
         "properties": {},
         "additionalProperties": false,
@@ -5811,18 +5949,65 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Detail Bursts",
+            "description": "Polite rest breaks the shared WaterlooWorks pacing gate took.",
             "default": 0
           },
           "detail_wait_seconds": {
             "type": "number",
             "minimum": 0.0,
             "title": "Detail Wait Seconds",
+            "description": "Current scheduled rest/retry wait in seconds.",
             "default": 0
           },
           "detail_limited": {
             "type": "boolean",
             "title": "Detail Limited",
             "default": false
+          },
+          "ww_requests": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Ww Requests",
+            "description": "WaterlooWorks requests counted for this run: paced requests, retries and counted browser page loads.",
+            "default": 0
+          },
+          "ww_request_budget": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ww Request Budget",
+            "description": "This run's allowance: min(per-run cap, rolling remaining)."
+          },
+          "pacing_stop": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["request_cap", "daily_cap", "ban_risk"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pacing Stop",
+            "description": "Why the run stopped early: a request cap (finished partial, remaining postings wait for the next refresh) or a ban-risk signal from WaterlooWorks (failed; refreshes blocked)."
+          },
+          "error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Category",
+            "description": "Fixed failure category of a failed run."
           },
           "analysis_job_id": {
             "anyOf": [
@@ -5931,6 +6116,10 @@
           "detail_bursts",
           "detail_wait_seconds",
           "detail_limited",
+          "ww_requests",
+          "ww_request_budget",
+          "pacing_stop",
+          "error_category",
           "analysis_job_id",
           "analysis_total",
           "analysis_completed",

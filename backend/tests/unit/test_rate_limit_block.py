@@ -108,8 +108,7 @@ def test_refresh_service_persists_listing_phase_rate_limit(tmp_path: Path) -> No
     service = RefreshService(path, None)
     other = ListingFetchError("x", FailureCategory.HTTP, status=500)
     other.retry_after = 99
-    for error in (other, ListingFetchError("x", FailureCategory.RATE_LIMIT)):
-        service.persist_listing_block(run, error)
+    service.persist_listing_block(run, other)
     with sqlite3.connect(path) as raw:
         assert raw.execute("SELECT blocked_until FROM collection_runs").fetchone() == (
             None,
@@ -120,7 +119,16 @@ def test_refresh_service_persists_listing_phase_rate_limit(tmp_path: Path) -> No
     with sqlite3.connect(path) as raw:
         blocked = raw.execute("SELECT blocked_until FROM collection_runs").fetchone()[0]
     remaining = (datetime.fromisoformat(blocked) - datetime.now(UTC)).total_seconds()
-    assert 1_790 <= remaining <= 1_800
+    # A shorter Retry-After never blocks for less than one hour.
+    assert 3_590 <= remaining <= 3_600
+    # A challenge page (rate-limit category without 429) blocks for six hours.
+    service.persist_listing_block(
+        run, ListingFetchError("x", FailureCategory.RATE_LIMIT)
+    )
+    with sqlite3.connect(path) as raw:
+        blocked = raw.execute("SELECT blocked_until FROM collection_runs").fetchone()[0]
+    remaining = (datetime.fromisoformat(blocked) - datetime.now(UTC)).total_seconds()
+    assert 6 * 3600 - 10 <= remaining <= 6 * 3600
 
 
 def test_operator_can_clear_a_stale_block(
@@ -147,7 +155,7 @@ def test_operator_can_clear_a_stale_block(
     try:
         claim_refresh(path)
     except RefreshConflict as conflict:
-        assert conflict.retry_after <= 300
+        assert conflict.retry_after <= 30 * 60
     main(["clear", "--database", str(path)])
     assert "Cleared 0" in capsys.readouterr().out
 

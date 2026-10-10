@@ -1,13 +1,12 @@
-"""Sequential runtime-only detail transport, bounded bursts, and checkpoints."""
+"""Sequential runtime-only detail transport through the shared gate; checkpoints."""
 
 import errno
 import json
-import random
 import socket
 import sqlite3
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from ssl import SSLError
@@ -23,6 +22,7 @@ from waterlooworks_flash_next.content import (
 from waterlooworks_flash_next.content_storage import (
     complete_content_attempt,
     fail_content_attempt,
+    interrupt_content_attempt,
     record_content_request,
     start_content_attempt,
 )
@@ -35,9 +35,17 @@ from waterlooworks_flash_next.listings import (
     ListingFetchError,
     build_direct_opener,
     decode_response_text,
+    http_failure,
+    unexpected_body_failure,
 )
 from waterlooworks_flash_next.listings import (
     retry_after_seconds as retry_after_seconds,  # re-exported for existing importers
+)
+from waterlooworks_flash_next.ww_pacing import (
+    RequestBudgetExhausted,
+    RequestGate,
+    WaitKind,
+    block_seconds,
 )
 
 MAX_DETAIL_BYTES = 5 * 1024 * 1024
@@ -46,41 +54,6 @@ MAX_DETAIL_BYTES = 5 * 1024 * 1024
 ITEM_FAILURE_CATEGORIES = frozenset(
     {FailureCategory.SCHEMA, FailureCategory.SIZE, FailureCategory.ENCODING}
 )
-
-
-def retry_delay(retry: int) -> int:
-    if retry not in (1, 2, 3):
-        raise ValueError("Only three retries are allowed.")
-    return 5 * retry
-
-
-@dataclass
-class BurstPacer:
-    """Deadlines are measured from response completion, not request start.
-
-    Sleep only before another attempt. Retry and burst deadlines both apply;
-    overlapping waits use their maximum, never shorten either obligation.
-    """
-
-    jitter: Callable[[float, float], float] = field(default=random.uniform, repr=False)
-    attempts: int = 0
-    not_before: float = 0.0
-
-    @property
-    def bursts(self) -> int:
-        return self.attempts // 10
-
-    def finished(self, now: float) -> None:
-        self.attempts += 1
-        pause = 0.0
-        if self.attempts % 10 == 0:
-            pause = self.jitter(0.6, 1.0)
-            if self.bursts % 5 == 0:
-                pause += self.jitter(1.0, 2.0)
-        self.not_before = now + pause
-
-    def wait_seconds(self, now: float, *, retry_not_before: float = 0.0) -> float:
-        return max(0.0, self.not_before - now, retry_not_before - now)
 
 
 class DetailFetchError(ListingFetchError):
@@ -104,9 +77,10 @@ class DetailFetchError(ListingFetchError):
 def record_blocked_until(
     connection: sqlite3.Connection, run_id: str, retry_after: int
 ) -> None:
-    """Durably block manual refreshes until now + the clamped server Retry-After.
+    """Durably block manual refreshes until now + the clamped block duration.
 
-    Shared by listing and detail phases. Clear a stale block with
+    Shared by listing and detail phases (``ww_pacing.block_seconds`` decides the
+    duration). Clear a stale block with
     `python -m waterlooworks_flash_next.rate_limit clear`.
     """
     until = datetime.now(UTC) + timedelta(
@@ -152,41 +126,6 @@ def transport_failure(error: BaseException) -> DetailFetchError:
     return DetailFetchError(FailureCategory.NETWORK)
 
 
-def paced_request[T](
-    operation: Callable[[], T],
-    pacer: BurstPacer,
-    *,
-    before_request: Callable[[bool], None],
-    report_wait: Callable[[bool, float], None],
-    after_request: Callable[[], None],
-    clock: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
-) -> T:
-    """Shared real request controller, tested with primitive operations/clocks."""
-    retry_not_before = 0.0
-    for attempt in range(4):
-        wait = pacer.wait_seconds(clock(), retry_not_before=retry_not_before)
-        if wait:
-            report_wait(attempt > 0, wait)
-            sleep(wait)
-        before_request(attempt > 0)
-        error: DetailFetchError | None = None
-        try:
-            value = operation()
-        except DetailFetchError as caught:
-            error = caught
-        finally:
-            finished = clock()
-            pacer.finished(finished)
-            after_request()
-        if error is None:
-            return value
-        if not error.retryable or attempt == 3:
-            raise error
-        retry_not_before = finished + retry_delay(attempt + 1)
-    raise AssertionError("Unreachable retry state")
-
-
 @dataclass(frozen=True)
 class DetailProgress:
     stage: str
@@ -194,7 +133,7 @@ class DetailProgress:
     total: int
     requests: int
     retries: int
-    bursts: int
+    rests: int
     wait_seconds: float = 0.0
     failed: int = 0
 
@@ -236,26 +175,20 @@ class DetailSource:
                     raise DetailFetchError(FailureCategory.SIZE)
                 return decode_response_text(raw, response.headers.get_content_charset())
         except HTTPError as error:
-            status = error.code
-            delay = retry_after_seconds(
-                error.headers.get("Retry-After") if error.headers else None,
-                now=time.time(),
+            headers = error.headers
+            failure = http_failure(
+                error.code,
+                retry_after_seconds(
+                    headers.get("Retry-After") if headers else None, now=time.time()
+                ),
+                headers.get("Location") if headers else None,
             )
             error.close()
-            category = (
-                FailureCategory.AUTH
-                if status in (401, 403)
-                else FailureCategory.RATE_LIMIT
-                if status == 429
-                else FailureCategory.REDIRECT
-                if 300 <= status < 400
-                else FailureCategory.HTTP
-            )
             raise DetailFetchError(
-                category,
-                status=status,
-                retry_after=delay,
-                retryable=status in (408, 500, 502, 503, 504),
+                failure.category,
+                status=failure.status,
+                retry_after=failure.retry_after,
+                retryable=failure.retryable,
             ) from None
         except DetailFetchError:
             raise
@@ -267,15 +200,25 @@ class DetailSource:
             raise DetailFetchError(FailureCategory.INTERNAL) from None
 
 
+def unexpected_detail_body(text: str) -> DetailFetchError | None:
+    """A detail response that failed validation and looks like a block/sign-in."""
+    failure = unexpected_body_failure(text)
+    return None if failure is None else DetailFetchError(failure.category)
+
+
 class DetailCollection:
     """One explicit list-derived queue. Each success is a durable checkpoint.
 
-    A posting whose own response fails validation is recorded as a failed attempt
-    and skipped; session-level failures, a failed bootstrap, or a run of
-    consecutive item failures (suggesting a broken session) stop the pass.
+    Every request goes through the run's shared ``RequestGate``. A posting whose
+    own response fails validation is recorded as a failed attempt and skipped;
+    session-level failures, a failed bootstrap, or a run of consecutive item
+    failures (suggesting a broken session) stop the pass. A pacing cap or a
+    shutdown stops cleanly before the network and leaves the rest queued.
     """
 
     MAX_CONSECUTIVE_ITEM_FAILURES = 10
+    # Title-click bootstrap: one metadata read plus one markup read.
+    BOOTSTRAP_REQUESTS = 2
 
     def __init__(
         self,
@@ -289,6 +232,8 @@ class DetailCollection:
         ]
         | None = None,
         should_stop: Callable[[], bool] | None = None,
+        *,
+        gate: RequestGate,
     ) -> None:
         self.source = source
         self.should_stop = should_stop
@@ -297,9 +242,11 @@ class DetailCollection:
         self.run_id = run_id
         self.postings = postings
         self.progress = progress
-        self.pacer = BurstPacer()
+        self.gate = gate
+        gate.report_wait = self._wait
         self.completed = 0
         self.failed = 0
+        self.requests = 0
         self.retries = 0
 
     def _progress(
@@ -310,29 +257,39 @@ class DetailCollection:
                 stage,
                 self.completed,
                 len(self.postings),
-                self.pacer.attempts + int(starting),
+                self.requests,
                 self.retries,
-                self.pacer.bursts,
+                self.gate.rests,
                 wait,
                 self.failed,
             )
         )
 
-    def _operation(self, attempt_id: str, operation: Callable[[], str]) -> str:
+    def _wait(self, kind: WaitKind | None, seconds: float) -> None:
+        if kind is None:
+            self._progress()
+        else:
+            self._progress(f"detail_{kind}", seconds)
+
+    def _operation(
+        self,
+        attempt_id: str,
+        operation: Callable[[], str],
+        *,
+        allow_rest: bool = True,
+    ) -> str:
         def before(retry: bool) -> None:
             record_content_request(self.connection, attempt_id, retry=retry)
+            self.requests += 1
             self.retries += int(retry)
             self._progress(starting=True)
 
-        return paced_request(
-            operation,
-            self.pacer,
-            before_request=before,
-            report_wait=lambda retry, delay: self._progress(
-                "detail_retry" if retry else "detail_rest", delay
-            ),
-            after_request=self._progress,
-        )
+        try:
+            return self.gate.request(
+                operation, allow_rest=allow_rest, before_request=before
+            )
+        finally:
+            self._progress()
 
     def _request(self, attempt_id: str, template: int, posting_id: str) -> str:
         assert self.source is not None
@@ -341,12 +298,28 @@ class DetailCollection:
             attempt_id, lambda: source.fetch_once(template, posting_id)
         )
 
+    def _needed(self) -> int:
+        """Requests the next posting may need, so a cap never splits a bootstrap."""
+        if self.source is None:
+            return self.BOOTSTRAP_REQUESTS
+        if self.source.first_content is not None:
+            return 0
+        if self.source.markup_index is not None:
+            return 1
+        return max(1, len(self.source.templates))
+
     def _content(self, attempt_id: str, posting: StoredListing) -> StoredPostingContent:
         if self.source is None:
             if self.bootstrap is None:
                 raise DetailFetchError(FailureCategory.SCHEMA)
+            # No rest inside the bootstrap: the page waits on its own idle window,
+            # so a due rest is taken before the title click.
+            self.gate.rest_if_due()
             self.source = self.bootstrap(
-                posting, lambda operation: self._operation(attempt_id, operation)
+                posting,
+                lambda operation: self._operation(
+                    attempt_id, operation, allow_rest=False
+                ),
             )
             self.source.confirm_capture()
             self.source.used = True
@@ -389,7 +362,9 @@ class DetailCollection:
                     secrets=self.source.secrets,
                 )
             except ContentError:
-                raise DetailFetchError(FailureCategory.SCHEMA) from None
+                raise unexpected_detail_body(text) or DetailFetchError(
+                    FailureCategory.SCHEMA
+                ) from None
             self.source.markup_index = index
             return content
         raise DetailFetchError(FailureCategory.SCHEMA)
@@ -405,24 +380,27 @@ class DetailCollection:
         for posting in self.postings:
             if self.should_stop is not None and self.should_stop():
                 raise CollectionInterrupted
+            if self.gate.remaining < self._needed():
+                raise RequestBudgetExhausted(self.gate.stop_reason)
             established = self.source is not None
             attempt_id = start_content_attempt(self.connection, self.run_id, posting.id)
             try:
                 content = self._content(attempt_id, posting)
                 complete_content_attempt(self.connection, attempt_id, content)
+            except (RequestBudgetExhausted, CollectionInterrupted):
+                # Clean stop before the network: not a posting failure.
+                interrupt_content_attempt(self.connection, attempt_id)
+                raise
             except Exception as caught:
                 error = (
                     caught
                     if isinstance(caught, DetailFetchError)
                     else DetailFetchError(FailureCategory.INTERNAL)
                 )
-                if (
-                    error.category == FailureCategory.RATE_LIMIT
-                    and error.retry_after is not None
-                ):
-                    record_blocked_until(
-                        self.connection, self.run_id, error.retry_after
-                    )
+                blocked = block_seconds(error)
+                if blocked is not None:
+                    error.block_seconds = blocked
+                    record_blocked_until(self.connection, self.run_id, blocked)
                 fail_content_attempt(
                     self.connection,
                     attempt_id,
@@ -431,7 +409,8 @@ class DetailCollection:
                 )
                 consecutive += 1
                 if (
-                    not established
+                    blocked is not None
+                    or not established
                     or error.category not in ITEM_FAILURE_CATEGORIES
                     or consecutive >= self.MAX_CONSECUTIVE_ITEM_FAILURES
                 ):

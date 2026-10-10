@@ -1,4 +1,4 @@
-"""Schema15: Pi AI settings, encrypted provider credentials and relaxed job CHECKs.
+"""Schema16: Pi AI settings, encrypted provider credentials and relaxed job CHECKs.
 
 Existing inference jobs, cache rows and results stay readable: the rebuilt
 `inference_jobs` table keeps every historical (model, endpoint) pair and is
@@ -40,7 +40,7 @@ def _rebuild_inference_jobs(connection: sqlite3.Connection) -> None:
     # A table renamed by the schema14 rebuild is stored with a quoted name.
     sql, renamed = re.subn(
         r'^CREATE TABLE "?inference_jobs"? \(',
-        "CREATE TABLE inference_jobs_v15 (",
+        "CREATE TABLE inference_jobs_v16 (",
         sql,
         count=1,
     )
@@ -63,20 +63,20 @@ def _rebuild_inference_jobs(connection: sqlite3.Connection) -> None:
             raise ValueError("Unsupported inference schema definition.")
         sql = sql.replace(old, new)
     connection.execute(sql)
-    connection.execute("INSERT INTO inference_jobs_v15 SELECT * FROM inference_jobs")
+    connection.execute("INSERT INTO inference_jobs_v16 SELECT * FROM inference_jobs")
     if (
         connection.execute(
-            "SELECT * FROM inference_jobs EXCEPT SELECT * FROM inference_jobs_v15"
+            "SELECT * FROM inference_jobs EXCEPT SELECT * FROM inference_jobs_v16"
         ).fetchone()
         or connection.execute(
-            "SELECT * FROM inference_jobs_v15 EXCEPT SELECT * FROM inference_jobs"
+            "SELECT * FROM inference_jobs_v16 EXCEPT SELECT * FROM inference_jobs"
         ).fetchone()
         or connection.execute("SELECT count(*) FROM inference_jobs").fetchone()
-        != connection.execute("SELECT count(*) FROM inference_jobs_v15").fetchone()
+        != connection.execute("SELECT count(*) FROM inference_jobs_v16").fetchone()
     ):
         raise ValueError("Inference migration row mismatch.")
     connection.execute("DROP TABLE inference_jobs")
-    connection.execute("ALTER TABLE inference_jobs_v15 RENAME TO inference_jobs")
+    connection.execute("ALTER TABLE inference_jobs_v16 RENAME TO inference_jobs")
     index = next(
         sql for _, name, _, sql in objects if name == "idx_inference_jobs_status"
     )

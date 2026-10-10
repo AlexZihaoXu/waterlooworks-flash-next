@@ -1,4 +1,4 @@
-# Pi inference (schema 15)
+# Pi inference (schema 16)
 
 All AI inference — posting extraction (base pay and skills) and work-country
 predictions — runs on the Pi harness: pinned `@earendil-works/pi-ai` and
@@ -158,7 +158,7 @@ Jobs record `model_id=pi:<mode>:<model>`, `endpoint=<provider base URL>` and
 endpoint, model, reasoning effort, turn/tool/output caps and custom reasoning
 metadata. The same identity is part of every input hash and cache key, so
 results from different setups never collide. Historical Responses and Qwen rows
-remain readable; schema15 rebuilds `inference_jobs` only to admit the `pi:`
+remain readable; schema16 (applied after the schema15 pacing migration) rebuilds `inference_jobs` only to admit the `pi:`
 identities, up to 8 streams and larger output caps, with row-equality
 verification and dependency checks (rolls back otherwise). A job resumes only
 under the identical active configuration.

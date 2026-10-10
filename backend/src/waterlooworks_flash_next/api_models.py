@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import StoredListing
 
@@ -313,9 +314,41 @@ class RefreshSnapshot(Contract):
     details_total: int = Field(default=0, ge=0)
     detail_requests: int = Field(default=0, ge=0)
     detail_retries: int = Field(default=0, ge=0)
-    detail_bursts: int = Field(default=0, ge=0)
-    detail_wait_seconds: float = Field(default=0, ge=0)
+    detail_bursts: int = Field(
+        default=0,
+        ge=0,
+        description="Polite rest breaks the shared WaterlooWorks pacing gate took.",
+    )
+    detail_wait_seconds: float = Field(
+        default=0,
+        ge=0,
+        description="Current scheduled rest/retry wait in seconds.",
+    )
     detail_limited: bool = False
+    ww_requests: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "WaterlooWorks requests counted for this run: paced requests, retries "
+            "and counted browser page loads."
+        ),
+    )
+    ww_request_budget: int | None = Field(
+        default=None,
+        ge=0,
+        description="This run's allowance: min(per-run cap, rolling remaining).",
+    )
+    pacing_stop: Literal["request_cap", "daily_cap", "ban_risk"] | None = Field(
+        default=None,
+        description=(
+            "Why the run stopped early: a request cap (finished partial, remaining "
+            "postings wait for the next refresh) or a ban-risk signal from "
+            "WaterlooWorks (failed; refreshes blocked)."
+        ),
+    )
+    error_category: str | None = Field(
+        default=None, description="Fixed failure category of a failed run."
+    )
     analysis_job_id: str | None = None
     analysis_total: int = Field(default=0, ge=0)
     analysis_completed: int = Field(default=0, ge=0)
@@ -339,6 +372,44 @@ class RefreshSnapshot(Contract):
     logs: list[RefreshLog] = Field(
         default_factory=list, description="Bounded to the latest 200 sanitized events."
     )
+
+
+class RefreshPacingStatus(Contract):
+    """Server pacing policy and rolling usage; no credentials or source data."""
+
+    request_cap: int = Field(ge=1, description="WW_REFRESH_REQUEST_CAP per run.")
+    daily_request_cap: int = Field(
+        ge=1, description="WW_REFRESH_DAILY_REQUEST_CAP per rolling 24 hours."
+    )
+    min_interval_minutes: int = Field(
+        ge=0, description="WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes."
+    )
+    min_gap_seconds: float = Field(ge=0)
+    max_gap_seconds: float = Field(ge=0)
+    rest_every_min: int = Field(ge=1)
+    rest_every_max: int = Field(ge=1)
+    rest_min_seconds: float = Field(ge=0)
+    rest_max_seconds: float = Field(ge=0)
+    used_24h: int = Field(ge=0, description="Requests counted in the last 24 hours.")
+    remaining_24h: int = Field(ge=0)
+    next_allowed_at: str | None = Field(
+        description="UTC ISO time a refresh may start; null when allowed now."
+    )
+    blocked_until: str | None = Field(
+        description="Active ban-risk/rate-limit block end (UTC ISO), if any."
+    )
+    last_pacing_stop: Literal["request_cap", "daily_cap", "ban_risk"] | None = Field(
+        description="Why the most recent finished run stopped early, if it did."
+    )
+    last_error_category: str | None = Field(
+        description="Fixed failure category of the most recent finished run."
+    )
+
+
+class AdminRefreshStatus(AuthChallengeStatus):
+    """Current Duo challenge plus the WaterlooWorks pacing status (admin only)."""
+
+    pacing: RefreshPacingStatus
 
 
 class RefreshAccepted(Contract):

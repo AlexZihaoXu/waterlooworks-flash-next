@@ -80,7 +80,7 @@ Checkpointed source index/pay candidates are separate from authoritative UI anal
   const db = new DatabaseSync(dbPath, { readOnly: action === 'status' });
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
   if (
-    ![9, 10, 11, 12, 13, 14, 15].includes(
+    ![9, 10, 11, 12, 13, 14, 15, 16].includes(
       db.prepare('PRAGMA user_version').get().user_version,
     )
   ) {

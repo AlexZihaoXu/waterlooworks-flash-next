@@ -59,6 +59,14 @@ def test_failed_or_interrupted_listing_pass_is_saved_before_reraising() -> None:
     body = [ast.unparse(stmt) for stmt in handler.handlers[0].body]
     assert "_save_partial_listings" in body[0]
     assert body[-1] == "raise"
+    # A request cap is a clean partial finish: saved, never re-raised as failure.
+    capped = handler.handlers[1]
+    assert capped.type is not None
+    assert ast.unparse(capped.type) == "RequestBudgetExhausted"
+    capped_body = [ast.unparse(stmt) for stmt in capped.body]
+    assert "_save_partial_listings" in capped_body[0]
+    assert "success, category = (True, None)" in capped_body
+    assert "raise" not in capped_body
 
 
 def test_partial_save_reports_what_was_saved(tmp_path: Path) -> None:

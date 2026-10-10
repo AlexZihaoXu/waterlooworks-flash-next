@@ -20,6 +20,7 @@ import {
   Form,
   Input,
   Label,
+  Meter,
   Skeleton,
   Tabs,
   TextField,
@@ -28,7 +29,11 @@ import {
 import { useAdminCredentials } from '../lib/useAdminCredentials';
 import { useOpenAISettings } from '../lib/useOpenAISettings';
 import { useAISettings } from '../lib/useAISettings';
-import { useAdminRefreshStatus } from '../lib/useAdminRefreshStatus';
+import {
+  useAdminRefreshStatus,
+  type RefreshPacing,
+} from '../lib/useAdminRefreshStatus';
+import { refreshStopLabel } from '../lib/refreshProgress';
 import { SECRET_MASK } from '../lib/openaiRevealState';
 import { googlePhotoUrl, type AccountProfile } from '../lib/accountProfile';
 import { useAccountProfile } from '../lib/useAccountProfile';
@@ -37,6 +42,104 @@ import { useAppAuth } from '../lib/useAppAuth';
 import { App } from './App';
 import { AdminSettingsDialog } from './AdminSettingsDialog';
 import { AISettingsPanel } from './AISettingsPanel';
+
+function localTime(value: string | null): string | null {
+  return value === null ? null : new Date(value).toLocaleString();
+}
+
+// Documented HeroUI Card/Meter/Alert composition; read-only pacing status.
+export function RefreshPacingCard({
+  pacing,
+}: {
+  pacing: RefreshPacing | null;
+}) {
+  if (!pacing)
+    return (
+      <Card variant="secondary">
+        <Card.Header>
+          <Card.Title>WaterlooWorks pacing</Card.Title>
+          <Card.Description>Pacing status is loading.</Card.Description>
+        </Card.Header>
+      </Card>
+    );
+  const blocked = localTime(pacing.blocked_until);
+  const next = localTime(pacing.next_allowed_at);
+  const stop = refreshStopLabel(pacing.last_pacing_stop);
+  return (
+    <Card variant="secondary">
+      <Card.Header>
+        <Card.Title>WaterlooWorks pacing</Card.Title>
+        <Card.Description>
+          Every refresh request waits {pacing.min_gap_seconds}–
+          {pacing.max_gap_seconds} s after the previous one, rests{' '}
+          {pacing.rest_min_seconds}–{pacing.rest_max_seconds} s every{' '}
+          {pacing.rest_every_min}–{pacing.rest_every_max} requests, and never
+          runs in parallel. Refreshes are manual only.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <div className="grid gap-3">
+          {pacing.last_pacing_stop === 'ban_risk' && (
+            <Alert status="danger">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>Ban-risk warning from WaterlooWorks</Alert.Title>
+                <Alert.Description>
+                  The last refresh stopped at once (
+                  {pacing.last_error_category ?? 'unknown'}). Check the account
+                  in a browser before the operator clears the block.
+                </Alert.Description>
+              </Alert.Content>
+            </Alert>
+          )}
+          {blocked && (
+            <Alert status="warning">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>Refresh blocked until {blocked}</Alert.Title>
+                <Alert.Description>
+                  Set after a rate-limit or sign-in warning. Only the operator
+                  rate_limit clear command removes it early.
+                </Alert.Description>
+              </Alert.Content>
+            </Alert>
+          )}
+          {stop && pacing.last_pacing_stop !== 'ban_risk' && (
+            <Alert status="accent">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>{stop}</Alert.Title>
+                <Alert.Description>
+                  Saved progress is kept; the next refresh continues with
+                  postings not yet fetched.
+                </Alert.Description>
+              </Alert.Content>
+            </Alert>
+          )}
+          <Meter
+            value={pacing.used_24h}
+            maxValue={pacing.daily_request_cap}
+            color={pacing.remaining_24h === 0 ? 'danger' : 'accent'}
+            valueLabel={`${pacing.used_24h} / ${pacing.daily_request_cap}`}
+          >
+            <Label>WaterlooWorks requests in the last 24 hours</Label>
+            <Meter.Output />
+            <Meter.Track>
+              <Meter.Fill />
+            </Meter.Track>
+          </Meter>
+          <p>
+            {pacing.remaining_24h} requests remaining · {pacing.request_cap} per
+            refresh · {pacing.min_interval_minutes} min between refreshes
+          </p>
+          <p role="status">
+            {next ? `Next refresh allowed at ${next}.` : 'Refresh allowed now.'}
+          </p>
+        </div>
+      </Card.Content>
+    </Card>
+  );
+}
 
 // Documented HeroUI Card/Button/Alert composition; no custom visual widget.
 export function AuthGate({
@@ -716,35 +819,38 @@ function AdminAccountMenu({
               </div>
             </Tabs.Panel>
             <Tabs.Panel id="refresh">
-              <Card variant="secondary">
-                <Card.Header>
-                  <Card.Title>Current Duo approval</Card.Title>
-                  <Card.Description>
-                    {refresh.challenge?.approval_required
-                      ? 'Approve only the refresh you requested, in Duo Mobile. No additional push will be sent.'
-                      : 'No current approval code. Start an explicit Refresh from the workspace when ready; status reads never sign in.'}
-                  </Card.Description>
-                </Card.Header>
-                <Card.Content>
-                  <p>
-                    One Refresh collects jobs, then automatically extracts saved
-                    details. Duo approval may be required. Limits or unknown
-                    usage can leave analysis incomplete.
-                  </p>
-                  {refresh.challenge?.code && (
-                    <TextField isReadOnly value={refresh.challenge.code}>
-                      <Label>Current Duo verification code</Label>
-                      <Input autoComplete="off" spellCheck={false} />
-                    </TextField>
-                  )}
-                  <Description>
-                    Authentication expires within 3 minutes overall. The code
-                    clears on expiry, close, sign-out, account change or hiding
-                    this browser tab.
-                  </Description>
-                  <p role="status">{refresh.message}</p>
-                </Card.Content>
-              </Card>
+              <div className="grid gap-4">
+                <Card variant="secondary">
+                  <Card.Header>
+                    <Card.Title>Current Duo approval</Card.Title>
+                    <Card.Description>
+                      {refresh.challenge?.approval_required
+                        ? 'Approve only the refresh you requested, in Duo Mobile. No additional push will be sent.'
+                        : 'No current approval code. Start an explicit Refresh from the workspace when ready; status reads never sign in.'}
+                    </Card.Description>
+                  </Card.Header>
+                  <Card.Content>
+                    <p>
+                      One Refresh collects jobs, then automatically extracts
+                      saved details. Duo approval may be required. Limits or
+                      unknown usage can leave analysis incomplete.
+                    </p>
+                    {refresh.challenge?.code && (
+                      <TextField isReadOnly value={refresh.challenge.code}>
+                        <Label>Current Duo verification code</Label>
+                        <Input autoComplete="off" spellCheck={false} />
+                      </TextField>
+                    )}
+                    <Description>
+                      Authentication expires within 3 minutes overall. The code
+                      clears on expiry, close, sign-out, account change or
+                      hiding this browser tab.
+                    </Description>
+                    <p role="status">{refresh.message}</p>
+                  </Card.Content>
+                </Card>
+                <RefreshPacingCard pacing={refresh.pacing} />
+              </div>
             </Tabs.Panel>
           </Tabs>
         </AdminSettingsDialog>

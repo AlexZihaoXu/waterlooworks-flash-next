@@ -22,6 +22,7 @@ from waterlooworks_flash_next.analysis_read import (
     read_history,
 )
 from waterlooworks_flash_next.api_models import (
+    AdminRefreshStatus,
     CountryInference,
     ErrorResponse,
     ExchangeRateResponse,
@@ -46,7 +47,6 @@ from waterlooworks_flash_next.app_auth import (
     require_session,
 )
 from waterlooworks_flash_next.auth_api import install_auth
-from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.country_inference import read_country_inferences
@@ -82,6 +82,7 @@ from waterlooworks_flash_next.shutdown import ShutdownNotice
 from waterlooworks_flash_next.snapshot_cache import SnapshotCache
 from waterlooworks_flash_next.targeted_disciplines import read_targeted_disciplines
 from waterlooworks_flash_next.work_arrangement import read_work_arrangements
+from waterlooworks_flash_next.ww_pacing import PacingConfig
 
 
 def create_app(database_path: Path | None = None) -> FastAPI:
@@ -102,11 +103,16 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if database_path is None
         else False
     )
+    # Fails closed at startup with a fixed message on an invalid value.
+    pacing = (
+        PacingConfig.from_environment() if database_path is None else PacingConfig()
+    )
     service = RefreshService(
         path,
         root if enabled else None,
         detail_limit=detail_limit,
         full_refetch=full_refetch,
+        pacing=pacing,
     )
 
     # Interactive docs load third-party CDN script on the app origin and expose
@@ -185,10 +191,10 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     @app.get(
         "/api/admin/refresh-auth",
         dependencies=[Depends(require_admin)],
-        response_model=AuthChallengeStatus,
+        response_model=AdminRefreshStatus,
         operation_id="getRefreshAuth",
     )
-    def refresh_auth(request: Request, response: Response) -> AuthChallengeStatus:
+    def refresh_auth(request: Request, response: Response) -> AdminRefreshStatus:
         response.headers["Cache-Control"] = "no-store"
         # Recheck the actual current cookie/admin after dependency admission.
         identity = sessions.lookup(request.cookies.get(COOKIE))
@@ -196,7 +202,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             raise HTTPException(401, "Sign in to continue.")
         if identity.role != "admin" or identity.uid != request.state.identity.uid:
             raise HTTPException(403, "Administrator access required.")
-        return service.challenge_status()
+        return service.admin_status()
 
     credential_store = CredentialStore(path)
 

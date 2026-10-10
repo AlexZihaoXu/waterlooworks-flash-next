@@ -10,7 +10,11 @@ import {
 import { LuTerminal } from 'react-icons/lu';
 import { RefreshLogEntry } from './RefreshLogEntry';
 import { RefreshPanel } from './RefreshPanel';
-import { refreshProgress, refreshStageLabel } from '../lib/refreshProgress';
+import {
+  refreshProgress,
+  refreshStageLabel,
+  refreshStopLabel,
+} from '../lib/refreshProgress';
 import { refreshRunning } from '../lib/refreshState';
 import { displayNumber, type RefreshSnapshot } from '../lib/workspace';
 import { useLogFollow } from '../lib/useLogFollow';
@@ -210,7 +214,7 @@ export function RefreshActivity({
                 {displayNumber(refresh.details_total)} detail contents ·{' '}
                 {displayNumber(refresh.detail_requests)} requests ·{' '}
                 {displayNumber(refresh.detail_retries)} retries ·{' '}
-                {displayNumber(refresh.detail_bursts)} bursts
+                {displayNumber(refresh.detail_bursts)} rest breaks
                 {refresh.detail_wait_seconds > 0 &&
                   ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
                 {refresh.detail_limited && ' · Server verification cap'}
@@ -222,8 +226,16 @@ export function RefreshActivity({
                 {displayNumber(refresh.unique_postings)} postings ·{' '}
                 {displayNumber(refresh.records_received)} records ·{' '}
                 {displayNumber(refresh.duplicates)} duplicates
+                {refresh.detail_wait_seconds > 0 &&
+                  ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
               </>
             )}
+            {!analysisPhase &&
+              ` · ${displayNumber(refresh.ww_requests ?? 0)}${
+                refresh.ww_request_budget != null
+                  ? ` / ${displayNumber(refresh.ww_request_budget)}`
+                  : ''
+              } WaterlooWorks requests`}
           </Typography>
         </div>
       </RefreshPanel>
@@ -231,7 +243,13 @@ export function RefreshActivity({
         <RefreshConsole
           key={runId}
           entries={entries}
-          status={`${refresh.status} · ${refreshStageLabel(refresh.stage, refresh.analysis_provider)}`}
+          status={[
+            refresh.status,
+            refreshStageLabel(refresh.stage, refresh.analysis_provider),
+            refreshStopLabel(refresh.pacing_stop),
+          ]
+            .filter(Boolean)
+            .join(' · ')}
           revision={`${runId}:${refresh.logs.at(-1)?.sequence ?? 0}`}
         />
       </RefreshPanel>
