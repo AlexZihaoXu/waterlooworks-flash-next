@@ -82,9 +82,28 @@ def address_allowed(address: str) -> bool:
         ip = ipaddress.ip_address(address)
     except ValueError:
         return False
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return not any(ip in network for network in _BLOCKED_NETWORKS)
+    embedded = _embedded_ipv4(ip) if isinstance(ip, ipaddress.IPv6Address) else None
+    candidates = [ip] if embedded is None else [ip, embedded]
+    return not any(
+        candidate in network
+        for candidate in candidates
+        for network in _BLOCKED_NETWORKS
+    )
+
+
+_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """IPv4 reachable through an IPv6 form: mapped, compatible, NAT64 or 6to4."""
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip.sixtofour is not None:
+        return ip.sixtofour
+    if ip in _NAT64 or (ip in _IPV4_COMPATIBLE and int(ip) > 1):
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return None
 
 
 def validate_base_url(

@@ -37,6 +37,13 @@ def resolver(*answers: str):  # type: ignore[no-untyped-def]
         "172.30.87.3",
         "::ffff:169.254.169.254",
         "::ffff:127.0.0.1",
+        "::169.254.169.254",  # IPv4-compatible
+        "::127.0.0.1",
+        "::ac1e:5703",  # IPv4-compatible 172.30.87.3
+        "64:ff9b::a9fe:a9fe",  # NAT64 169.254.169.254
+        "64:ff9b::7f00:1",  # NAT64 127.0.0.1
+        "2002:a9fe:a9fe::1",  # 6to4 169.254.169.254
+        "2002:7f00:1::1",  # 6to4 127.0.0.1
     ],
 )
 def test_blocked_addresses(address: str) -> None:
@@ -258,3 +265,9 @@ def test_requests_are_pinned_unredirected_and_never_leak_bodies() -> None:
         "http://metadata.example/", None, resolver=resolver("169.254.169.254")
     )
     assert blocked.error_category == "blocked_address"
+
+
+def test_translated_ipv6_of_allowed_ipv4_stays_allowed() -> None:
+    assert address_allowed("64:ff9b::808:808")
+    assert address_allowed("2002:a00:5::1")
+    assert address_allowed("2001:4860:4860::8888")
