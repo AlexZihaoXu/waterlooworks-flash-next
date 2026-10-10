@@ -36,7 +36,7 @@ describe('AuthGate', () => {
         screen.getByRole('button', { name: 'Sign in with Google' }),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole('tablist', { name: 'Color theme' }),
+        screen.getByRole('radiogroup', { name: 'Color theme' }),
       ).toBeInTheDocument();
       expect(
         screen.getByRole('searchbox', {

@@ -178,29 +178,31 @@ describe('App', () => {
   it('toggles and restores only the theme preference', () => {
     const first = render(<App state={{ status: 'disconnected' }} />);
     expect(document.documentElement).toHaveAttribute('data-theme', 'light');
-    expect(screen.getByRole('tab', { name: 'System' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    for (const name of ['System', 'Light', 'Dark'])
-      expect(
-        screen.getByRole('tab', { name }).querySelector('svg'),
-      ).not.toBeNull();
-    fireEvent.click(screen.getByRole('tab', { name: 'Dark' }));
+    // A single-select toggle group, not a tablist whose tabs control no panel.
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    const group = screen.getByRole('radiogroup', { name: 'Color theme' });
+    expect(within(group).getByRole('radio', { name: 'System' })).toBeChecked();
+    for (const name of ['System', 'Light', 'Dark']) {
+      const button = within(group).getByRole('radio', { name });
+      expect(button.querySelector('svg')).not.toBeNull();
+      expect(button).not.toHaveTextContent(name);
+    }
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }));
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+    expect(localStorage.getItem('heroui-theme')).toBe('dark');
+    // Selecting the current choice again keeps one option selected.
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }));
+    expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
     expect(localStorage.getItem('heroui-theme')).toBe('dark');
     first.unmount();
     render(<App state={{ status: 'disconnected' }} />);
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
-    expect(screen.getByRole('tab', { name: 'Dark' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    fireEvent.click(screen.getByRole('tab', { name: 'Light' }));
+    expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Light' }));
     expect(document.documentElement).toHaveAttribute('data-theme', 'light');
     expect(document.documentElement).not.toHaveClass('dark');
     expect(localStorage.getItem('heroui-theme')).toBe('light');
-    fireEvent.click(screen.getByRole('tab', { name: 'System' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'System' }));
     expect(localStorage.getItem('heroui-theme')).toBe('system');
   });
 

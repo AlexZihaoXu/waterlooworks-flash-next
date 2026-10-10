@@ -46,8 +46,9 @@ import {
   Separator,
   Skeleton,
   Toast,
-  Tabs,
   toast,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useTheme,
 } from '@heroui/react';
@@ -568,39 +569,30 @@ const WorkspaceView = memo(function WorkspaceView({
         <div className="stack-small">
           <div className="inline-layout">
             {account}
-            <Tabs
-              selectedKey={theme}
-              onSelectionChange={(key) => {
+            <ToggleButtonGroup
+              aria-label="Color theme"
+              selectionMode="single"
+              disallowEmptySelection
+              size="sm"
+              selectedKeys={[theme]}
+              onSelectionChange={(keys) => {
+                const [key] = keys;
                 if (key === 'system' || key === 'light' || key === 'dark')
                   setTheme(key);
               }}
             >
-              <Tabs.ListContainer>
-                <Tabs.List aria-label="Color theme">
-                  <Tabs.Tab id="system">
-                    <span className="theme-choice">
-                      <LuMonitor aria-hidden="true" />
-                      System
-                    </span>
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="light">
-                    <span className="theme-choice">
-                      <LuSun aria-hidden="true" />
-                      Light
-                    </span>
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="dark">
-                    <span className="theme-choice">
-                      <LuMoon aria-hidden="true" />
-                      Dark
-                    </span>
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                </Tabs.List>
-              </Tabs.ListContainer>
-            </Tabs>
+              <ToggleButton isIconOnly aria-label="System" id="system">
+                <LuMonitor aria-hidden="true" />
+              </ToggleButton>
+              <ToggleButton isIconOnly aria-label="Light" id="light">
+                <ToggleButtonGroup.Separator />
+                <LuSun aria-hidden="true" />
+              </ToggleButton>
+              <ToggleButton isIconOnly aria-label="Dark" id="dark">
+                <ToggleButtonGroup.Separator />
+                <LuMoon aria-hidden="true" />
+              </ToggleButton>
+            </ToggleButtonGroup>
           </div>
           {connected &&
             state.status === 'ready' &&

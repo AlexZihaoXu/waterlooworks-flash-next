@@ -100,11 +100,6 @@ body {
   font-size: 0.75rem;
   font-weight: 400;
 }
-.theme-choice {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-}
 .workspace-header,
 .workspace-toolbar,
 .inline-layout {
