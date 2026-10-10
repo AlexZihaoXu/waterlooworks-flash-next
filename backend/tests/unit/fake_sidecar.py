@@ -54,7 +54,16 @@ def main() -> None:
     if set(os.environ) - ALLOWED_ENV or os.listdir(os.environ["HOME"]):
         send({"type": "fatal", "category": "env_leak"})
         sys.exit(1)
-    send({"type": "ready", "provider_id": "custom", "model_id": start["model_id"]})
+    providers = {
+        "openai_api_key": "openai",
+        "chatgpt_signin": "openai",
+        "codex_device": "openai-codex",
+        "custom": "custom",
+    }
+    provider = providers[str(start["mode"])]
+    if start["model_id"] == "wrong-provider":
+        provider = "openai" if provider != "openai" else "custom"
+    send({"type": "ready", "provider_id": provider, "model_id": start["model_id"]})
     while True:
         message = receive()
         if message is None or message.get("type") == "end":

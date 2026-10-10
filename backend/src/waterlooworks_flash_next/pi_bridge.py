@@ -513,7 +513,10 @@ class PiSession:
 
     def _dispatch(self, message: _Ready | _Rpc | _ItemResult | _Fatal | _Done) -> None:
         if isinstance(message, _Ready):
-            if message.model_id != self.config.model_id:
+            if (
+                message.model_id != self.config.model_id
+                or message.provider_id != self.config.provider_id
+            ):
                 self._fail_all("protocol")
                 return
             self._ready.set()

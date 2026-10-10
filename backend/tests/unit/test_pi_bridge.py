@@ -559,3 +559,9 @@ def test_backend_refuses_reservations_beyond_the_turn_cap(path: Path) -> None:
         .fetchone()[0]
     )
     assert count == 1
+
+
+def test_ready_with_another_provider_is_a_protocol_failure(path: Path) -> None:
+    with pytest.raises(SidecarError) as error:
+        _session(path, CUSTOM.model_copy(update={"model_id": "wrong-provider"}))
+    assert error.value.category == "protocol"
