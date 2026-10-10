@@ -106,3 +106,24 @@ def test_content_attempt_contract_rejects_missing_postings_and_terminal_ids(
         == 0
     )
     connection.close()
+
+
+def test_content_writes_require_their_own_transaction(tmp_path: Path) -> None:
+    connection = open_database(tmp_path / "db.sqlite3")
+    run = start_collection_run(connection)
+    connection.execute("BEGIN")
+    with pytest.raises(DatabaseError, match="Content persistence requires its own"):
+        start_content_attempt(connection, run, "")
+    with pytest.raises(DatabaseError, match="Content persistence requires its own"):
+        fail_content_attempt(connection, "", "network")
+    assert connection.in_transaction
+    connection.rollback()
+    connection.close()
+
+
+def test_unused_metadata_detail_storage_and_export_modules_are_removed() -> None:
+    from importlib.util import find_spec
+
+    # The v3 tables stay for migration compatibility; their dead APIs do not.
+    for module in ("details", "detail_storage", "export"):
+        assert find_spec(f"waterlooworks_flash_next.{module}") is None

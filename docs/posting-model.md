@@ -18,20 +18,22 @@ erDiagram
     posting_detail_revisions o|--o{ posting_fetch_attempts : successful_observation
 ```
 
-| Table                      | Purpose                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------- |
-| `collection_runs`          | Existing collection status, timestamps, listing counts, and safe failure category   |
-| `postings`                 | Stable identity, latest listing, listing hash, first/last-seen provenance           |
-| `posting_revisions`        | Append-only listing events referencing verified compact payloads                    |
-| `posting_details`          | Latest validated detail snapshot and independent hash; absent until first success   |
-| `posting_detail_revisions` | Append-only detail snapshots, hash/schema/extractor versions, run and timestamp     |
-| `posting_fetch_attempts`   | Every explicitly started detail attempt, including unchanged successes and failures |
+| Table                      | Purpose                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `collection_runs`          | Existing collection status, timestamps, listing counts, and safe failure category |
+| `postings`                 | Stable identity, latest listing, listing hash, first/last-seen provenance         |
+| `posting_revisions`        | Append-only listing events referencing verified compact payloads                  |
+| `posting_details`          | **Legacy, unused:** metadata-only detail snapshot; always empty                   |
+| `posting_detail_revisions` | **Legacy, unused:** metadata-only detail history; always empty                    |
+| `posting_fetch_attempts`   | **Legacy, unused:** metadata-only detail attempts; always empty                   |
+
+> **Legacy v3 tables.** `posting_details`, `posting_detail_revisions` and `posting_fetch_attempts` are kept only so existing databases keep migrating; no runtime path writes them (the authorized backup held zero rows). Their storage APIs (`details.py`, `detail_storage.py`) were removed. Detail content is stored by the v4 `posting_contents` model below. The detail contract, hashing and attempt lifecycle sections describe that historical design, not current behavior.
 
 No posting or detail row is created just because a request fails. A listing must already exist before its detail attempt starts. Missing results never imply deletion or inactivity.
 
-## Typed detail contract
+## Legacy typed detail contract (removed)
 
-`details.py` provides strict, extra-field-forbidding Pydantic models:
+The removed `details.py` provided strict, extra-field-forbidding Pydantic models:
 
 ```text
 StoredDetail
@@ -63,7 +65,7 @@ Content fields are **reserved and null-only in both Pydantic and SQLite**. The s
 
 Raw HTML, cookies, actions, headers, application controls/state, `applicationData`, and unvalidated nested `geoData`/`tags`/`defaultLocations` are not accepted. Salary normalization and keyword analysis remain a separate future model, not fabricated source fields.
 
-## Hashing and revisions
+## Legacy detail hashing and revisions
 
 - Detail payloads are fully materialized with default null content fields before hashing. Thus omitted optional content defaults and explicit nulls are equivalent in this contract.
 - `sha256-json-v1` uses sorted keys and compact UTF-8 JSON, preserving string contents and JSON types. Timestamps, run/attempt IDs, and extractor versions are outside the hash.
@@ -76,7 +78,7 @@ Raw HTML, cookies, actions, headers, application controls/state, `applicationDat
 
 Hashes support change detection, not encryption or tamper-proof auditing. All writes should use the storage API, not ad hoc SQL.
 
-## Attempt lifecycle
+## Legacy attempt lifecycle (removed)
 
 ```text
 running → succeeded (HTTP 200, revision reference, extractor version)
@@ -84,7 +86,7 @@ running → succeeded (HTTP 200, revision reference, extractor version)
         → interrupted (safe category, optional HTTP status)
 ```
 
-`detail_storage.py` exposes:
+The removed `detail_storage.py` exposed:
 
 1. `start_detail_attempt(connection, run_id, posting_id) -> attempt_id`: requires an existing posting and a running collection; records start time before network work.
 2. `complete_detail_attempt(connection, attempt_id, detail, extractor_version=..., http_status=200) -> revision_id`: validates matching identity, persists the snapshot/history, and finalizes success atomically.
@@ -110,7 +112,7 @@ In v6, `posting_revisions.listing_json` and `posting_content_revisions.content_j
 
 Compressed deltas are selected only when smaller than compressed checkpoints. At most 32 deltas are reconstructed; snapshots above 1 MiB always checkpoint. Decoding rejects malformed/noncanonical JSON, excessive nesting, bad hashes/patches, invalid dependencies, truncated or trailing zlib streams, and oversized payloads (64 MiB snapshot/encoded-chain, 4 MiB patch limits). The verified reader has a 16 MiB cache budget. It performs no collection or mutation.
 
-Internal callers use `compact_history.revision_snapshot(connection, kind, revision_id)` or a shared `HistoryReader`. `observation_series` (behind `/api/postings/{id}/history`) still exposes reconstructed listing snapshots; the workspace payload no longer embeds listing revision history; current-state APIs still read full latest snapshots. Metadata-only `posting_detail_revisions` and their storage module remain unchanged: the authorized backup contained zero such rows. Tests deliberately update internal schema expectations rather than preserving redundant JSON for old SQL callers.
+Internal callers use `compact_history.revision_snapshot(connection, kind, revision_id)` or a shared `HistoryReader`. `observation_series` (behind `/api/postings/{id}/history`) still exposes reconstructed listing snapshots; the workspace payload no longer embeds listing revision history; current-state APIs still read full latest snapshots. Metadata-only `posting_detail_revisions` remain as an empty legacy table (the authorized backup contained zero such rows); their storage module was removed. Tests deliberately update internal schema expectations rather than preserving redundant JSON for old SQL callers.
 
 Migration from v5 is transactional, verifies every source payload before replacing its column, preserves every revision event and incoming FK, and rolls back on corruption or unknown schema dependencies. v1–v4 upgrades chain through their original migrations first. Private actual-backup-copy acceptance checks every historical listing/content reconstruction and every delta in reverse, unchanged/reversion saves, observations/current states, FK/integrity, and real in-process GET response contracts. Default tracked tests use only generic primitives and empty schema contracts. Compaction leaves reusable free/partially filled pages; physical shrinkage requires separately authorized offline `VACUUM`, never automatic migration or GET work. Production migration and live transport verification remain separate gates.
 
