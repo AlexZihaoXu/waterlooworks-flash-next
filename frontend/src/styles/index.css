@@ -495,16 +495,38 @@ body {
   }
   /* The page itself scrolls on phones (no nested results box). Safe areas
      apply with viewport-fit=cover; 0.75rem is the floor. */
+  html {
+    scroll-padding-top: var(--app-bar-height, 0px);
+  }
   .workspace {
     --workspace-gap: 0.75rem;
+    --gutter-left: max(0.75rem, env(safe-area-inset-left));
+    --gutter-right: max(0.75rem, env(safe-area-inset-right));
     height: auto;
     min-height: 100dvh;
     overflow: visible;
     overflow-x: clip;
-    padding: max(0.75rem, env(safe-area-inset-top))
-      max(0.75rem, env(safe-area-inset-right))
-      max(0.75rem, env(safe-area-inset-bottom))
-      max(0.75rem, env(safe-area-inset-left));
+    padding: 0 var(--gutter-right) max(0.75rem, env(safe-area-inset-bottom))
+      var(--gutter-left);
+  }
+  /* Opaque sticky top bar (own wrapper): header, refresh status and the
+     controls row stay put; only the postings scroll beneath it. */
+  .app-bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: var(--workspace-gap);
+    margin-inline: calc(-1 * var(--gutter-left)) calc(-1 * var(--gutter-right));
+    padding: max(0.75rem, env(safe-area-inset-top)) var(--gutter-right) 0.5rem
+      var(--gutter-left);
+    background-color: var(--background);
+    border-bottom: 1px solid transparent;
+    transition: border-color 150ms ease;
+  }
+  .app-bar[data-scrolled='true'] {
+    border-bottom-color: var(--separator);
   }
   /* One header row: logo and short name, then icon actions. */
   .workspace-header {
@@ -519,8 +541,8 @@ body {
     flex: none;
     gap: 0.5rem;
     min-height: 0;
-    grid-template-areas: 'search' 'results';
-    grid-template-rows: auto auto;
+    grid-template-areas: 'results';
+    grid-template-rows: auto;
   }
   .browse-search {
     gap: 0.5rem;

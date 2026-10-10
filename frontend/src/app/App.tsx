@@ -97,6 +97,7 @@ import { useJobDetail } from '../lib/useJobDetail';
 import { useSimilarJobs } from '../lib/useSimilarJobs';
 import { useLiveReducedMotion } from '../lib/useLiveReducedMotion';
 import { COMPACT_MAX_WIDTH, useCompactLayout } from '../lib/useCompactLayout';
+import { useWindowScrolled } from '../lib/useWindowScrolled';
 import { isThemeChoice } from '../lib/themeControl';
 import { themeMenuSection } from './themeMenu';
 import { JobDetailContent } from './JobDetail';
@@ -290,6 +291,23 @@ const WorkspaceView = memo(function WorkspaceView({
     return () => window.removeEventListener('popstate', restore);
   }, []);
   const compact = useCompactLayout();
+  const scrolled = useWindowScrolled(compact);
+  const appBar = useRef<HTMLDivElement>(null);
+  // Page scrolling (focus, anchors) keeps targets clear of the sticky bar.
+  useLayoutEffect(() => {
+    const node = appBar.current;
+    if (!compact || !node) return;
+    const root = document.documentElement;
+    const update = () =>
+      root.style.setProperty('--app-bar-height', `${node.offsetHeight}px`);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--app-bar-height');
+    };
+  }, [compact]);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const update = () => setNow(Date.now());
@@ -1236,6 +1254,247 @@ const WorkspaceView = memo(function WorkspaceView({
     </div>
   );
 
+  const header = (
+    <header className="workspace-header">
+      {compact ? (
+        // Phones: logo mark and a short visible name (the heading keeps
+        // the full name), then icon-only theme and account actions.
+        <>
+          <div className="brand-heading">
+            <BrandMark active={refreshing || requesting} />
+            <Typography
+              type="h6"
+              role="heading"
+              aria-level={1}
+              aria-label="WaterlooWorks Flash Next"
+            >
+              Flash
+            </Typography>
+          </div>
+          <div className="inline-layout header-actions">
+            {/* One icon button opens the documented single-selection
+                  theme Dropdown, signed in or out. */}
+            <Dropdown>
+              <Button
+                isIconOnly
+                size="lg"
+                variant="ghost"
+                aria-label="Color theme"
+              >
+                {theme === 'dark' ? (
+                  <LuMoon aria-hidden="true" />
+                ) : theme === 'light' ? (
+                  <LuSun aria-hidden="true" />
+                ) : (
+                  <LuMonitor aria-hidden="true" />
+                )}
+              </Button>
+              <Dropdown.Popover placement="bottom end">
+                <Dropdown.Menu aria-label="Color theme">
+                  {themeMenuSection({ theme, setTheme })}
+                </Dropdown.Menu>
+              </Dropdown.Popover>
+            </Dropdown>
+            {account}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="stack-small">
+            <div className="brand-heading">
+              <BrandMark active={refreshing || requesting} />
+              <Typography type="h4" role="heading" aria-level={1}>
+                WaterlooWorks Flash Next
+              </Typography>
+            </div>
+            <Typography type="body-xs" color="muted">
+              {lastObserved
+                ? `Updated ${displayTime(lastObserved)}`
+                : loading
+                  ? '\u00a0'
+                  : 'Find your next role.'}
+            </Typography>
+          </div>
+          <div className="stack-small">
+            <div className="inline-layout header-actions">
+              {account}
+              <ToggleButtonGroup
+                aria-label="Color theme"
+                selectionMode="single"
+                disallowEmptySelection
+                size="sm"
+                selectedKeys={[theme]}
+                onSelectionChange={(keys) => {
+                  const [key] = keys;
+                  if (isThemeChoice(key)) setTheme(key);
+                }}
+              >
+                <ToggleButton isIconOnly aria-label="System" id="system">
+                  <LuMonitor aria-hidden="true" />
+                </ToggleButton>
+                <ToggleButton isIconOnly aria-label="Light" id="light">
+                  <ToggleButtonGroup.Separator />
+                  <LuSun aria-hidden="true" />
+                </ToggleButton>
+                <ToggleButton isIconOnly aria-label="Dark" id="dark">
+                  <ToggleButtonGroup.Separator />
+                  <LuMoon aria-hidden="true" />
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </div>
+            {refreshUnavailableNote}
+          </div>
+        </>
+      )}
+    </header>
+  );
+  const notices = (
+    <>
+      {(state.status === 'disconnected' || state.status === 'error') && (
+        <Alert status="danger">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>{notice[state.status][0]}</Alert.Title>
+            <Alert.Description>{notice[state.status][1]}</Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {actionError && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Refresh notice</Alert.Title>
+            <Alert.Description>{actionError}</Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {connected && streamInterrupted && live && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Live connection interrupted</Alert.Title>
+            <Alert.Description>
+              Reconnecting to progress updates. Refresh is disabled until the
+              connection returns.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {interruption && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Previous refresh was interrupted</Alert.Title>
+            <Alert.Description>
+              {interruption === 'recovery_required'
+                ? 'It stopped before finishing, so saved postings may be incomplete. Manual recovery is required before another refresh can start; see the operator recovery steps.'
+                : 'It stopped before finishing, so saved postings may be incomplete. A new refresh can be started.'}
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {authenticating && onOpenAdminSettings && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Duo approval may be required</Alert.Title>
+            <Alert.Description>
+              The refresh is signing in to WaterlooWorks. Authentication expires
+              within 3 minutes; open Admin settings to see the verification code
+              and approve only the refresh you requested.
+            </Alert.Description>
+          </Alert.Content>
+          <Button size="sm" variant="secondary" onPress={onOpenAdminSettings}>
+            Open Admin settings
+          </Button>
+        </Alert>
+      )}
+    </>
+  );
+  const compactSearchRow = (
+    <div className="search-row">
+      <SearchField
+        aria-label="Search titles, companies, locations, and posting IDs"
+        value={query}
+        onChange={(value) => {
+          setQuery(value);
+          setPagination({ page: 1, query: value });
+        }}
+        isDisabled={!connected}
+      >
+        <SearchField.Group>
+          <SearchField.SearchIcon />
+          <SearchField.Input placeholder="Search postings…" />
+          <SearchField.ClearButton />
+        </SearchField.Group>
+      </SearchField>
+      {/* Phones: one 44px icon trigger with a count Badge opens the
+                  same filters and options in a documented Drawer. */}
+      <Drawer>
+        <Badge.Anchor>
+          <Tooltip delay={300}>
+            <Button
+              isIconOnly
+              size="lg"
+              variant={activeFilterCount ? 'secondary' : 'tertiary'}
+              aria-label={
+                activeFilterCount ? `Filters (${activeFilterCount})` : 'Filters'
+              }
+              aria-haspopup="dialog"
+              isDisabled={!connected}
+            >
+              <LuFilter aria-hidden="true" />
+            </Button>
+            <Tooltip.Content>Filters</Tooltip.Content>
+          </Tooltip>
+          {activeFilterCount > 0 && (
+            <Badge color="accent" size="sm">
+              {activeFilterCount}
+            </Badge>
+          )}
+        </Badge.Anchor>
+        <Drawer.Backdrop>
+          <Drawer.Content placement="bottom">
+            <Drawer.Dialog>
+              <Drawer.Handle />
+              <Drawer.CloseTrigger />
+              <Drawer.Header>
+                <Drawer.Heading>Filters</Drawer.Heading>
+              </Drawer.Header>
+              <Drawer.Body>{sidebarContent}</Drawer.Body>
+              <Drawer.Footer>
+                <Button slot="close">Done</Button>
+              </Drawer.Footer>
+            </Drawer.Dialog>
+          </Drawer.Content>
+        </Drawer.Backdrop>
+      </Drawer>
+      {compactSort}
+      {showCompactRefresh && (
+        <Tooltip delay={300}>
+          <Button
+            isIconOnly
+            size="lg"
+            variant={refreshing || requesting ? 'secondary' : 'tertiary'}
+            aria-label="Refresh postings"
+            isDisabled={!canRefresh}
+            isPending={requesting}
+            onPress={requestRefresh}
+          >
+            {refreshing || requesting ? (
+              <Spinner size="sm" color="current" />
+            ) : (
+              <LuRefreshCw aria-hidden="true" />
+            )}
+          </Button>
+          <Tooltip.Content>
+            {refreshing ? 'Refreshing…' : 'Refresh postings'}
+          </Tooltip.Content>
+        </Tooltip>
+      )}
+    </div>
+  );
+
   return (
     <main className="workspace">
       <Toast.Provider placement="top" maxVisibleToasts={1} />
@@ -1309,159 +1568,27 @@ const WorkspaceView = memo(function WorkspaceView({
         </Modal.Container>
       </Modal.Backdrop>
 
-      <header className="workspace-header">
-        {compact ? (
-          // Phones: logo mark and a short visible name (the heading keeps
-          // the full name), then icon-only theme and account actions.
-          <>
-            <div className="brand-heading">
-              <BrandMark active={refreshing || requesting} />
-              <Typography
-                type="h6"
-                role="heading"
-                aria-level={1}
-                aria-label="WaterlooWorks Flash Next"
-              >
-                Flash
-              </Typography>
-            </div>
-            <div className="inline-layout header-actions">
-              {/* One icon button opens the documented single-selection
-                  theme Dropdown, signed in or out. */}
-              <Dropdown>
-                <Button
-                  isIconOnly
-                  size="lg"
-                  variant="ghost"
-                  aria-label="Color theme"
-                >
-                  {theme === 'dark' ? (
-                    <LuMoon aria-hidden="true" />
-                  ) : theme === 'light' ? (
-                    <LuSun aria-hidden="true" />
-                  ) : (
-                    <LuMonitor aria-hidden="true" />
-                  )}
-                </Button>
-                <Dropdown.Popover placement="bottom end">
-                  <Dropdown.Menu aria-label="Color theme">
-                    {themeMenuSection({ theme, setTheme })}
-                  </Dropdown.Menu>
-                </Dropdown.Popover>
-              </Dropdown>
-              {account}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="stack-small">
-              <div className="brand-heading">
-                <BrandMark active={refreshing || requesting} />
-                <Typography type="h4" role="heading" aria-level={1}>
-                  WaterlooWorks Flash Next
-                </Typography>
-              </div>
-              <Typography type="body-xs" color="muted">
-                {lastObserved
-                  ? `Updated ${displayTime(lastObserved)}`
-                  : loading
-                    ? '\u00a0'
-                    : 'Find your next role.'}
-              </Typography>
-            </div>
-            <div className="stack-small">
-              <div className="inline-layout header-actions">
-                {account}
-                <ToggleButtonGroup
-                  aria-label="Color theme"
-                  selectionMode="single"
-                  disallowEmptySelection
-                  size="sm"
-                  selectedKeys={[theme]}
-                  onSelectionChange={(keys) => {
-                    const [key] = keys;
-                    if (isThemeChoice(key)) setTheme(key);
-                  }}
-                >
-                  <ToggleButton isIconOnly aria-label="System" id="system">
-                    <LuMonitor aria-hidden="true" />
-                  </ToggleButton>
-                  <ToggleButton isIconOnly aria-label="Light" id="light">
-                    <ToggleButtonGroup.Separator />
-                    <LuSun aria-hidden="true" />
-                  </ToggleButton>
-                  <ToggleButton isIconOnly aria-label="Dark" id="dark">
-                    <ToggleButtonGroup.Separator />
-                    <LuMoon aria-hidden="true" />
-                  </ToggleButton>
-                </ToggleButtonGroup>
-              </div>
-              {refreshUnavailableNote}
-            </div>
-          </>
-        )}
-      </header>
-
-      {(state.status === 'disconnected' || state.status === 'error') && (
-        <Alert status="danger">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>{notice[state.status][0]}</Alert.Title>
-            <Alert.Description>{notice[state.status][1]}</Alert.Description>
-          </Alert.Content>
-        </Alert>
+      {compact ? (
+        <>
+          {/* Phones: one opaque sticky bar; only the postings scroll. */}
+          <div
+            ref={appBar}
+            className="app-bar"
+            data-scrolled={scrolled ? 'true' : 'false'}
+          >
+            {header}
+            <LiveRefreshActivity />
+            {!signedOut && !detailOpen && compactSearchRow}
+          </div>
+          {notices}
+        </>
+      ) : (
+        <>
+          {header}
+          {notices}
+          <LiveRefreshActivity />
+        </>
       )}
-      {actionError && (
-        <Alert status="warning">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Refresh notice</Alert.Title>
-            <Alert.Description>{actionError}</Alert.Description>
-          </Alert.Content>
-        </Alert>
-      )}
-      {connected && streamInterrupted && live && (
-        <Alert status="warning">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Live connection interrupted</Alert.Title>
-            <Alert.Description>
-              Reconnecting to progress updates. Refresh is disabled until the
-              connection returns.
-            </Alert.Description>
-          </Alert.Content>
-        </Alert>
-      )}
-      {interruption && (
-        <Alert status="warning">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Previous refresh was interrupted</Alert.Title>
-            <Alert.Description>
-              {interruption === 'recovery_required'
-                ? 'It stopped before finishing, so saved postings may be incomplete. Manual recovery is required before another refresh can start; see the operator recovery steps.'
-                : 'It stopped before finishing, so saved postings may be incomplete. A new refresh can be started.'}
-            </Alert.Description>
-          </Alert.Content>
-        </Alert>
-      )}
-      {authenticating && onOpenAdminSettings && (
-        <Alert status="warning">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Duo approval may be required</Alert.Title>
-            <Alert.Description>
-              The refresh is signing in to WaterlooWorks. Authentication expires
-              within 3 minutes; open Admin settings to see the verification code
-              and approve only the refresh you requested.
-            </Alert.Description>
-          </Alert.Content>
-          <Button size="sm" variant="secondary" onPress={onOpenAdminSettings}>
-            Open Admin settings
-          </Button>
-        </Alert>
-      )}
-      <LiveRefreshActivity />
 
       <motion.div
         className="browser-layout"
@@ -1477,7 +1604,8 @@ const WorkspaceView = memo(function WorkspaceView({
         transition={transition}
       >
         {/* Signed-out phones show only the sign-in content. */}
-        {!(compact && signedOut) && (
+        {/* Phones render search in the top app bar instead. */}
+        {!compact && (
           <motion.div
             className="browse-search stack"
             initial={false}
@@ -1515,93 +1643,7 @@ const WorkspaceView = memo(function WorkspaceView({
                 </Button>
               </div>
             )}
-            {compact ? (
-              <div className="search-row">
-                <SearchField
-                  aria-label="Search titles, companies, locations, and posting IDs"
-                  value={query}
-                  onChange={(value) => {
-                    setQuery(value);
-                    setPagination({ page: 1, query: value });
-                  }}
-                  isDisabled={!connected}
-                >
-                  <SearchField.Group>
-                    <SearchField.SearchIcon />
-                    <SearchField.Input placeholder="Search postings…" />
-                    <SearchField.ClearButton />
-                  </SearchField.Group>
-                </SearchField>
-                {/* Phones: one 44px icon trigger with a count Badge opens the
-                  same filters and options in a documented Drawer. */}
-                <Drawer>
-                  <Badge.Anchor>
-                    <Tooltip delay={300}>
-                      <Button
-                        isIconOnly
-                        size="lg"
-                        variant={activeFilterCount ? 'secondary' : 'tertiary'}
-                        aria-label={
-                          activeFilterCount
-                            ? `Filters (${activeFilterCount})`
-                            : 'Filters'
-                        }
-                        aria-haspopup="dialog"
-                        isDisabled={!connected}
-                      >
-                        <LuFilter aria-hidden="true" />
-                      </Button>
-                      <Tooltip.Content>Filters</Tooltip.Content>
-                    </Tooltip>
-                    {activeFilterCount > 0 && (
-                      <Badge color="accent" size="sm">
-                        {activeFilterCount}
-                      </Badge>
-                    )}
-                  </Badge.Anchor>
-                  <Drawer.Backdrop>
-                    <Drawer.Content placement="bottom">
-                      <Drawer.Dialog>
-                        <Drawer.Handle />
-                        <Drawer.CloseTrigger />
-                        <Drawer.Header>
-                          <Drawer.Heading>Filters</Drawer.Heading>
-                        </Drawer.Header>
-                        <Drawer.Body>{sidebarContent}</Drawer.Body>
-                        <Drawer.Footer>
-                          <Button slot="close">Done</Button>
-                        </Drawer.Footer>
-                      </Drawer.Dialog>
-                    </Drawer.Content>
-                  </Drawer.Backdrop>
-                </Drawer>
-                {compactSort}
-                {showCompactRefresh && (
-                  <Tooltip delay={300}>
-                    <Button
-                      isIconOnly
-                      size="lg"
-                      variant={
-                        refreshing || requesting ? 'secondary' : 'tertiary'
-                      }
-                      aria-label="Refresh postings"
-                      isDisabled={!canRefresh}
-                      isPending={requesting}
-                      onPress={requestRefresh}
-                    >
-                      {refreshing || requesting ? (
-                        <Spinner size="sm" color="current" />
-                      ) : (
-                        <LuRefreshCw aria-hidden="true" />
-                      )}
-                    </Button>
-                    <Tooltip.Content>
-                      {refreshing ? 'Refreshing…' : 'Refresh postings'}
-                    </Tooltip.Content>
-                  </Tooltip>
-                )}
-              </div>
-            ) : (
+            {!compact && (
               <SearchField
                 aria-label="Search titles, companies, locations, and posting IDs"
                 value={query}

@@ -50,12 +50,12 @@ it.each([1440, 320])(
       width > 896 ? '16rem minmax(0, 1fr)' : 'minmax(0, 1fr)',
     );
     expect(layout.style.columnGap).toBe('1.5rem');
-    // Phones open filters from the search row, so no sidebar is mounted.
+    // Phones put search and filters in the top app bar: no sidebar here.
     expect(container.querySelector('.filter-sidebar') === null).toBe(
       width <= 640,
     );
     for (const selector of [
-      '.browse-search',
+      ...(width > 640 ? ['.browse-search'] : []),
       ...(width > 640 ? ['.filter-sidebar'] : []),
       '.posting-results',
     ]) {
@@ -102,7 +102,7 @@ it.each([1440, 320])(
     );
     expect(layout.style.columnGap).toBe('0rem');
     for (const selector of [
-      '.browse-search',
+      ...(width > 640 ? ['.browse-search'] : []),
       ...(width > 640 ? ['.filter-sidebar'] : []),
       '.posting-results',
     ]) {
