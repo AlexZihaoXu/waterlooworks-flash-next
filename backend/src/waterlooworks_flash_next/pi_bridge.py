@@ -688,6 +688,9 @@ class PiSession:
             if method == "ledger.reserve":
                 reserve = _ReserveParams.model_validate(params)
                 item = self._item(reserve.item_id)
+                # Authoritative per-posting cap, independent of the sidecar.
+                if reserve.turn > self.config.max_turns:
+                    raise _Refused("turn_limit")
                 return {"attempt": self._reserve(item, reserve.turn)}
             if method == "ledger.finalize":
                 self._finalize(_FinalizeParams.model_validate(params))

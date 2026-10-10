@@ -538,3 +538,24 @@ def test_commit_locked_retries_a_locked_database(
     assert len(calls) == 2
     stored = store.load_slot("codex_device")
     assert stored is not None and stored["refresh"] == "rotated"
+
+
+def test_backend_refuses_reservations_beyond_the_turn_cap(path: Path) -> None:
+    config = CUSTOM.model_copy(update={"max_turns": 2})
+    session, run_id = _session(path, config)
+
+    def reserve(turn: int) -> dict[str, object]:
+        return {"method": "ledger.reserve", "params": {"item_id": "", "turn": turn}}
+
+    try:
+        answers = _answers(session.run_item(_item([reserve(2), reserve(3)])))
+    finally:
+        session.close()
+    assert answers[0]["ok"] is True
+    assert answers[1]["ok"] is False and answers[1]["error"] == "turn_limit"
+    count = (
+        sqlite3.connect(path)
+        .execute("SELECT count(*) FROM openai_attempts WHERE run_id=?", (run_id,))
+        .fetchone()[0]
+    )
+    assert count == 1
