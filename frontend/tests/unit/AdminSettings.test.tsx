@@ -571,6 +571,7 @@ describe('AdminSettings transient key presentation', () => {
         },
         usage: null,
         usageError: false,
+        pacing: null,
         message: '',
         clear: vi.fn(),
       });

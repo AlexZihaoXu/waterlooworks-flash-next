@@ -2,10 +2,13 @@ const stageLabels: Record<string, string> = {
   idle: 'Idle',
   authentication: 'Signing in to WaterlooWorks · Duo approval may be required',
   listings: 'Collecting listings',
+  listing_rest: 'Collecting listings (resting to stay polite to WaterlooWorks)',
+  listing_retry: 'Collecting listings (waiting to retry)',
   saving: 'Saving listings',
   details: 'Fetching posting details',
   detail_retry: 'Fetching posting details (waiting to retry)',
-  detail_rest: 'Fetching posting details (scheduled pause)',
+  detail_rest:
+    'Fetching posting details (resting to stay polite to WaterlooWorks)',
   normalizing: 'Normalizing saved postings',
   analysis: 'Extracting with OpenAI',
   complete: 'Complete',
@@ -48,4 +51,32 @@ export function refreshProgress(
     maxValue: Math.max(1, total ?? 1),
     isIndeterminate: !total,
   };
+}
+
+const stopLabels: Record<string, string> = {
+  request_cap: 'Finished partially: per-run WaterlooWorks request cap reached',
+  daily_cap:
+    'Finished partially: rolling 24-hour WaterlooWorks request budget reached',
+  ban_risk: 'Stopped: WaterlooWorks ban-risk warning; refreshes are blocked',
+};
+
+/** Readable copy for why a run stopped early, or null when it did not. */
+export function refreshStopLabel(
+  stop: string | null | undefined,
+): string | null {
+  if (!stop) return null;
+  return Object.hasOwn(stopLabels, stop) ? stopLabels[stop] : null;
+}
+
+/** Coarse, honest wait text ("about 12 min", "about 3 h 5 min"). */
+export function refreshWaitText(seconds: number): string {
+  if (seconds < 3600)
+    return `about ${Math.max(1, Math.ceil(seconds / 60))} min`;
+  let hours = Math.floor(seconds / 3600);
+  let minutes = Math.ceil((seconds % 3600) / 60);
+  if (minutes === 60) {
+    hours += 1;
+    minutes = 0;
+  }
+  return minutes ? `about ${hours} h ${minutes} min` : `about ${hours} h`;
 }

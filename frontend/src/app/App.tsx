@@ -73,6 +73,7 @@ import {
 } from '../lib/workspace';
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
+import { refreshWaitText } from '../lib/refreshProgress';
 import { refreshInterruption, refreshRunning } from '../lib/refreshState';
 import {
   compensationMetric,
@@ -142,6 +143,15 @@ export function App({
     latestManualRefresh.current = remote.manualRefresh;
   });
   const manualRefresh = useCallback(() => latestManualRefresh.current(), []);
+  // Stable reader so the memoized workspace never re-renders per snapshot.
+  const latestRefresh = useRef(refresh);
+  useLayoutEffect(() => {
+    latestRefresh.current = refresh;
+  });
+  const refreshRetryAfter = useCallback(
+    () => latestRefresh.current?.retry_after ?? 0,
+    [],
+  );
   return (
     <RefreshContext value={refresh}>
       <WorkspaceView
@@ -159,6 +169,7 @@ export function App({
         streamInterrupted={remote.streamInterrupted}
         actionError={remote.actionError}
         manualRefresh={manualRefresh}
+        refreshRetryAfter={refreshRetryAfter}
         signedOutContent={signedOutContent}
         account={account}
       />
@@ -178,6 +189,7 @@ const WorkspaceView = memo(function WorkspaceView({
   streamInterrupted,
   actionError,
   manualRefresh,
+  refreshRetryAfter,
   signedOutContent,
   account,
   onOpenAdminSettings,
@@ -193,6 +205,8 @@ const WorkspaceView = memo(function WorkspaceView({
   streamInterrupted: boolean;
   actionError: string | null;
   manualRefresh: ReturnType<typeof useWorkspace>['manualRefresh'];
+  /** Seconds until the server admits another refresh (cooldown/budget/block). */
+  refreshRetryAfter: () => number;
   signedOutContent?: ReactNode;
   account?: ReactNode;
   onOpenAdminSettings?: () => void;
@@ -924,7 +938,11 @@ const WorkspaceView = memo(function WorkspaceView({
                       description:
                         result === 'running'
                           ? 'Wait for the current refresh to finish.'
-                          : 'Please wait before refreshing again.',
+                          : refreshRetryAfter() > 0
+                            ? `Next refresh allowed in ${refreshWaitText(
+                                refreshRetryAfter(),
+                              )}. Pacing protects the WaterlooWorks account; see Admin settings › Refresh.`
+                            : 'Please wait before refreshing again.',
                     },
                   );
                 }

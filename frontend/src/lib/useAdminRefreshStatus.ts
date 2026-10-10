@@ -2,15 +2,80 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AuthGeneration, runAuthOperation } from './authLifecycle';
 import type { components } from './api.generated';
 
-type Challenge = components['schemas']['AuthChallengeStatus'];
+type Challenge = Omit<components['schemas']['AdminRefreshStatus'], 'pacing'>;
 type Usage = components['schemas']['OpenAIUsageStatus'];
+export type RefreshPacing = components['schemas']['RefreshPacingStatus'];
 
+const PACING_STOPS = ['request_cap', 'daily_cap', 'ban_risk'];
+
+/** Strict pacing status: counters, fixed stop labels and ISO timestamps only. */
+export function parseRefreshPacing(value: unknown): RefreshPacing {
+  if (!value || typeof value !== 'object')
+    throw new Error('Refresh status unavailable.');
+  const data = value as Record<string, unknown>;
+  const count = (key: string) =>
+    typeof data[key] === 'number' &&
+    Number.isSafeInteger(data[key]) &&
+    (data[key] as number) >= 0;
+  const seconds = (key: string) =>
+    typeof data[key] === 'number' &&
+    Number.isFinite(data[key]) &&
+    (data[key] as number) >= 0;
+  const time = (key: string) =>
+    data[key] === null ||
+    (typeof data[key] === 'string' &&
+      (data[key] as string).length <= 64 &&
+      !Number.isNaN(Date.parse(data[key] as string)));
+  if (
+    Object.keys(data).length !== 15 ||
+    ![
+      'request_cap',
+      'daily_request_cap',
+      'min_interval_minutes',
+      'rest_every_min',
+      'rest_every_max',
+      'used_24h',
+      'remaining_24h',
+    ].every(count) ||
+    ![
+      'min_gap_seconds',
+      'max_gap_seconds',
+      'rest_min_seconds',
+      'rest_max_seconds',
+    ].every(seconds) ||
+    !['next_allowed_at', 'blocked_until'].every(time) ||
+    !(
+      data.last_pacing_stop === null ||
+      PACING_STOPS.includes(String(data.last_pacing_stop))
+    ) ||
+    !(
+      data.last_error_category === null ||
+      (typeof data.last_error_category === 'string' &&
+        /^[a-z_]{1,40}$/.test(data.last_error_category))
+    )
+  )
+    throw new Error('Refresh status unavailable.');
+  return data as RefreshPacing;
+}
+
+function optionalPacing(value: unknown): RefreshPacing | null {
+  if (value === undefined) return null;
+  try {
+    return parseRefreshPacing(value);
+  } catch {
+    return null;
+  }
+}
+
+/** The Duo challenge part; an attached pacing object is validated separately. */
 export function parseRefreshAuth(value: unknown): Challenge {
   if (!value || typeof value !== 'object')
     throw new Error('Refresh status unavailable.');
   const data = value as Record<string, unknown>;
+  const keys = Object.keys(data).filter((key) => key !== 'pacing');
   if (
-    Object.keys(data).length !== 4 ||
+    keys.length !== 4 ||
+    Object.keys(data).length - keys.length > 1 ||
     !(
       data.run_id === null ||
       (typeof data.run_id === 'string' &&
@@ -31,7 +96,12 @@ export function parseRefreshAuth(value: unknown): Challenge {
         data.expires_in_seconds === 0))
   )
     throw new Error('Refresh status unavailable.');
-  return data as Challenge;
+  return {
+    run_id: data.run_id as Challenge['run_id'],
+    approval_required: data.approval_required as boolean,
+    code: data.code as Challenge['code'],
+    expires_in_seconds: data.expires_in_seconds as number,
+  };
 }
 
 export function parseOpenAIUsage(value: unknown): Usage {
@@ -104,6 +174,7 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
   const poll = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [pacing, setPacing] = useState<RefreshPacing | null>(null);
   // Distinguishes a failed usage read from one still loading (null usage).
   const [usageError, setUsageError] = useState(false);
   const [message, setMessage] = useState('');
@@ -115,6 +186,7 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
     poll.current = null;
     setChallenge(null);
     setUsage(null);
+    setPacing(null);
     setUsageError(false);
     setMessage('');
   }, []);
@@ -132,7 +204,13 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
         const started = performance.now();
         await Promise.allSettled([
           read('/api/admin/refresh-auth', lifecycle.current.signal)
-            .then(parseRefreshAuth)
+            .then((raw) => {
+              const value = parseRefreshAuth(raw);
+              const status = (raw as { pacing?: unknown }).pacing;
+              // Pacing is advisory display: a malformed object hides it only.
+              if (current()) setPacing(optionalPacing(status));
+              return value;
+            })
             .then((value) => {
               if (!current()) return;
               setMessage('');
@@ -150,6 +228,7 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
             .catch(() => {
               if (current()) {
                 setChallenge(null);
+                setPacing(null);
                 setMessage(
                   'Duo status unavailable. Check your session or reopen settings.',
                 );
@@ -186,5 +265,5 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
     };
   }, [isOpen, uid, clear]);
 
-  return { challenge, usage, usageError, message, clear };
+  return { challenge, usage, usageError, pacing, message, clear };
 }
