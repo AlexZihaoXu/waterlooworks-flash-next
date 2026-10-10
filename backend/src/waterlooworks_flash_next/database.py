@@ -31,10 +31,11 @@ from waterlooworks_flash_next.inference_schema import migrate_inference
 from waterlooworks_flash_next.normalized_schema import migrate_normalized_storage
 from waterlooworks_flash_next.observations import migrate_observations, utc_timestamp
 from waterlooworks_flash_next.openai_settings import migrate_openai_settings
+from waterlooworks_flash_next.refresh_pacing_schema import migrate_refresh_pacing
 from waterlooworks_flash_next.runtime_secrets import is_private_owned_file
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class DatabaseError(Exception):
@@ -467,6 +468,15 @@ def open_database(path: Path) -> sqlite3.Connection:
                         connection.execute("PRAGMA user_version = 14")
             finally:
                 connection.execute("PRAGMA foreign_keys = ON")
+        if (
+            SCHEMA_VERSION >= 15
+            and connection.execute("PRAGMA user_version").fetchone()[0] == 14
+        ):
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 14:
+                    migrate_refresh_pacing(connection)
+                    connection.execute("PRAGMA user_version = 15")
         # Idempotent cache-invalidation triggers, outside the versioned contract.
         ensure_data_generation(connection)
         connection.execute("PRAGMA journal_mode = WAL")

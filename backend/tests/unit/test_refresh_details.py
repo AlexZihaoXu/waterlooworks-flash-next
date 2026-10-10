@@ -26,6 +26,7 @@ from waterlooworks_flash_next.refresh import (
     claim_refresh,
     configured_detail_limit,
 )
+from waterlooworks_flash_next.ww_pacing import PacingConfig, RequestGate
 
 
 def test_refresh_saves_full_list_before_detail_collection() -> None:
@@ -75,8 +76,9 @@ def test_retry_after_blocks_manual_claim_after_standard_cooldown_and_survives_re
             "UPDATE collection_runs SET started_at=?,status='failed',finished_at=?,"
             "blocked_until=? WHERE id=?",
             (
-                (now - timedelta(minutes=20)).isoformat(),
-                (now - timedelta(minutes=10)).isoformat(),
+                (now - timedelta(minutes=50)).isoformat(),
+                # Past the default 30-minute cooldown: only the block remains.
+                (now - timedelta(minutes=40)).isoformat(),
                 (now + timedelta(seconds=60)).isoformat(),
                 run,
             ),
@@ -93,7 +95,7 @@ def test_retry_after_blocks_manual_claim_after_standard_cooldown_and_survives_re
     assert 55 <= service.snapshot().retry_after <= 60
 
 
-def test_bootstrap_and_remaining_operations_share_intent_and_burst_budget(
+def test_bootstrap_and_remaining_operations_share_intent_and_the_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from waterlooworks_flash_next import detail_fetch
@@ -104,10 +106,24 @@ def test_bootstrap_and_remaining_operations_share_intent_and_burst_budget(
         "record_content_request",
         lambda connection, attempt, retry: events.append(("intent", retry)),
     )
-    collection = detail_fetch.DetailCollection(
-        None, cast(sqlite3.Connection, None), "control", [], lambda p: None
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    gate = RequestGate(
+        PacingConfig(),
+        daily_remaining=100,
+        clock=lambda: now[0],
+        sleep=sleep,
+        jitter=lambda low, high: low,
+        threshold=lambda low, high: low,
     )
-    collection.pacer.jitter = lambda low, high: low
+    collection = detail_fetch.DetailCollection(
+        None, cast(sqlite3.Connection, None), "control", [], lambda p: None, gate=gate
+    )
 
     # Primitive operations only, not posting fixtures or HTTP responses.
     def operation() -> str:
@@ -115,12 +131,13 @@ def test_bootstrap_and_remaining_operations_share_intent_and_burst_budget(
         events.append(("network", False))
         return ""
 
-    for _ in range(10):
+    for _ in range(21):
         collection._operation("control", operation)
-    assert collection.pacer.attempts == 10
-    assert collection.pacer.bursts == 1
-    assert len(events) == 20
-    assert collection.pacer.wait_seconds(__import__("time").monotonic()) > 0
+    assert gate.requests == collection.requests == 21
+    assert len(events) == 42
+    # 3 s jittered gap between every request and one 45 s rest after 20.
+    assert sleeps.count(3.0) == 19 and sleeps.count(45.0) == 1
+    assert gate.rests == 1
 
 
 def test_first_content_reuse_never_calls_transport_or_counts_twice(
@@ -134,8 +151,9 @@ def test_first_content_reuse_never_calls_transport_or_counts_twice(
     sentinel = SimpleNamespace(id="control")
     source = detail_fetch.DetailSource((), {}, (), lambda: True)
     source.first_content = cast(StoredPostingContent, sentinel)
+    gate = RequestGate(PacingConfig(), daily_remaining=10)
     collection = detail_fetch.DetailCollection(
-        source, cast(sqlite3.Connection, None), "control", [], lambda p: None
+        source, cast(sqlite3.Connection, None), "control", [], lambda p: None, gate=gate
     )
     monkeypatch.setattr(
         collection, "_request", lambda *args: pytest.fail("duplicate HTTP")
@@ -144,7 +162,7 @@ def test_first_content_reuse_never_calls_transport_or_counts_twice(
         StoredPostingContent, sentinel
     )
     assert source.first_content is None
-    assert collection.pacer.attempts == 0
+    assert gate.requests == 0
 
 
 def test_bootstrap_failure_is_inside_attempt_and_browser_cleanup_boundary() -> None:

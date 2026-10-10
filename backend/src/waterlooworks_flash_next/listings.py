@@ -1,4 +1,4 @@
-"""Fresh-session listing collection with bounded retries; no detail requests."""
+"""Fresh-session listing collection through the shared pacing gate; no details."""
 
 import codecs
 import math
@@ -11,7 +11,7 @@ from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from http.client import HTTPException
 from ssl import SSLError
-from typing import IO
+from typing import IO, TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode
 from urllib.request import (
@@ -26,11 +26,13 @@ from playwright.sync_api import Page, Response
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from waterlooworks_flash_next.logging import stage_logger
+from waterlooworks_flash_next.ww_signals import login_redirect, unhappy_page
+
+if TYPE_CHECKING:
+    from waterlooworks_flash_next.ww_pacing import RequestGate
 
 LISTING_URL = "https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm"
-INTERVAL_SECONDS = 2.0
 BATCH_SIZE = 3
-MAX_ATTEMPTS = 3
 MAX_CAPTURE_AGE_SECONDS = 30.0
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60
@@ -75,6 +77,7 @@ class ListingFetchError(Exception):
         retryable: bool = False,
         status: int | None = None,
         retry_after: int | None = None,
+        block_seconds: int | None = None,
     ) -> None:
         super().__init__(message)
         self.category = category
@@ -82,6 +85,8 @@ class ListingFetchError(Exception):
         self.status = status
         # Validated, clamped server Retry-After seconds; persisted by the caller.
         self.retry_after = retry_after
+        # Refresh block decided by the pacing policy (ww_pacing.block_seconds).
+        self.block_seconds = block_seconds
 
 
 def retry_after_seconds(value: str | None, *, now: float) -> int | None:
@@ -113,9 +118,12 @@ class CollectionInterrupted(Exception):
         super().__init__("Collection stopped by a shutdown request.")
 
 
-def http_failure(status: int, retry_after: int | None = None) -> ListingFetchError:
+def http_failure(
+    status: int, retry_after: int | None = None, location: str | None = None
+) -> ListingFetchError:
+    """Classify a non-200 status; a redirect toward sign-in/SSO/Duo is AUTH."""
     category = FailureCategory.HTTP
-    if status in (401, 403):
+    if status in (401, 403) or (300 <= status < 400 and login_redirect(location)):
         category = FailureCategory.AUTH
     elif status == 429:
         category = FailureCategory.RATE_LIMIT
@@ -131,11 +139,35 @@ def http_failure(status: int, retry_after: int | None = None) -> ListingFetchErr
 
 
 def http_failure_from_error(error: HTTPError) -> ListingFetchError:
-    """Classify an HTTPError, keeping only a validated Retry-After on 429."""
+    """Classify an HTTPError, keeping only a validated Retry-After on 429.
+
+    The Location header is only matched against fixed sign-in markers.
+    """
     delay = retry_after_seconds(
         error.headers.get("Retry-After") if error.headers else None, now=time.time()
     )
-    return http_failure(error.code, delay)
+    return http_failure(
+        error.code, delay, error.headers.get("Location") if error.headers else None
+    )
+
+
+def unexpected_body_failure(text: str) -> ListingFetchError | None:
+    """A response that failed validation and looks like a block or sign-in page.
+
+    Only called after validation fails, so expected JSON/markup is never sniffed.
+    Both outcomes block refreshes (``ww_pacing.block_seconds``).
+    """
+    kind = unhappy_page(text)
+    if kind == "rate_limit":
+        return ListingFetchError(
+            "Response looked like a rate-limit or challenge page.",
+            FailureCategory.RATE_LIMIT,
+        )
+    if kind == "sign_in":
+        return ListingFetchError(
+            "Response looked like a sign-in page.", FailureCategory.AUTH
+        )
+    return None
 
 
 def build_direct_opener() -> OpenerDirector:
@@ -146,12 +178,6 @@ def build_direct_opener() -> OpenerDirector:
     OpenAI client's trust_env=False.
     """
     return build_opener(ProxyHandler({}), NoRedirect())
-
-
-def attempt_delay(attempt: int) -> float:
-    if not 1 <= attempt <= MAX_ATTEMPTS:
-        raise ValueError("Attempt must be between 1 and 3.")
-    return (2.0, 4.0, 8.0)[attempt - 1]
 
 
 def capture_fresh(finished_at: float, now: float) -> bool:
@@ -213,18 +239,13 @@ def batch_pages(start: int, total: int) -> tuple[int, ...]:
     return tuple(range(start, min(start + BATCH_SIZE, total + 1)))
 
 
-def remaining_delay(
-    finished_at: float, now: float, interval: float = INTERVAL_SECONDS
-) -> float:
-    return max(0.0, interval - (now - finished_at))
-
-
-def eta_text(remaining: int, average_request_seconds: float | None) -> str:
+def eta_text(remaining: int, seconds_per_page: float | None) -> str:
+    """Remaining pages times the paced wall time per page (request + gap + rest)."""
     if remaining <= 0:
         return "00:00:00"
-    if average_request_seconds is None:
+    if seconds_per_page is None:
         return "estimating"
-    seconds = math.ceil(remaining * (average_request_seconds + INTERVAL_SECONDS))
+    seconds = math.ceil(remaining * seconds_per_page)
     return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
 
 
@@ -265,6 +286,8 @@ class ListingSource:
     first_duration: float | None
     used: bool = False
     received_at: datetime | None = None
+    # The run's shared WaterlooWorks pacing gate; assigned before run().
+    gate: "RequestGate | None" = None
 
     @classmethod
     def capture(cls, page: Page, response: Response) -> "ListingSource":
@@ -329,34 +352,24 @@ class ListingSource:
             ) from None
 
     def fetch(self, page_number: int) -> tuple[ListingPage, float]:
-        """At most three attempts, waiting 2/4/8 seconds after the prior completion."""
-        log = stage_logger("listings")
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                return self._fetch_once(page_number, attempt_delay(attempt))
-            except ListingFetchError as error:
-                retry = error.retryable and attempt < MAX_ATTEMPTS
-                log.warning(
-                    "Page %d attempt %d/%d failed | category=%s | HTTP=%s | retry=%s",
-                    page_number,
-                    attempt,
-                    MAX_ATTEMPTS,
-                    error.category,
-                    error.status if error.status is not None else "n/a",
-                    retry,
-                )
-                if not retry:
-                    raise
-                log.info(
-                    "Retrying the same page after %.0fs from failure completion.",
-                    attempt_delay(attempt + 1),
-                )
-        raise AssertionError("Unreachable retry state")
+        """One page through the shared gate (gap, rests, caps, single retry)."""
+        if self.gate is None:
+            raise ListingFetchError(
+                "Listing fetch requires the shared pacing gate.",
+                FailureCategory.INTERNAL,
+            )
+        try:
+            return self.gate.request(lambda: self._fetch_once(page_number))
+        except ListingFetchError as error:
+            stage_logger("listings").warning(
+                "Page %d failed | category=%s | HTTP=%s",
+                page_number,
+                error.category,
+                error.status if error.status is not None else "n/a",
+            )
+            raise
 
-    def _fetch_once(
-        self, page_number: int, interval: float
-    ) -> tuple[ListingPage, float]:
-        time.sleep(remaining_delay(self.finished_at, time.monotonic(), interval))
+    def _fetch_once(self, page_number: int) -> tuple[ListingPage, float]:
         started = time.monotonic()
         try:
             body = urlencode(
@@ -378,9 +391,14 @@ class ListingSource:
                 raise ListingFetchError(
                     "Listing response exceeded the size limit.", FailureCategory.SIZE
                 )
-            payload = ListingPage.model_validate_json(
-                decode_response_text(raw, declared_charset)
-            )
+            text = decode_response_text(raw, declared_charset)
+            try:
+                payload = ListingPage.model_validate_json(text)
+            except ValidationError:
+                unhappy = unexpected_body_failure(text)
+                if unhappy is not None:
+                    raise unhappy from None
+                raise
             if payload.page != page_number or len(payload.data) > self.page_size:
                 raise ListingFetchError(
                     "Listing pagination response did not match request."
@@ -437,7 +455,7 @@ class ListingSource:
                 FailureCategory.INTERNAL,
             ) from None
         finally:
-            # Only the interval after this fully consumed/failed response counts.
+            # Diagnostic only; pacing deadlines live in the shared gate.
             self.finished_at = time.monotonic()
 
 
@@ -508,6 +526,11 @@ class ListingCollection:
                     self.duplicates += len(payload.data) - fresh
                     self.pages_completed += 1
                     average = sum(durations) / len(durations) if durations else None
+                    per_page = (
+                        self.source.gate.expected_seconds_per_request(average)
+                        if average is not None and self.source.gate is not None
+                        else None
+                    )
                     log.info(
                         "Fetch finished: page %d/%d | received %d | records %d | "
                         "unique %d | duplicates %d | ETA %s%s",
@@ -517,7 +540,7 @@ class ListingCollection:
                         self.records_received,
                         len(self.postings),
                         self.duplicates,
-                        eta_text(total_pages - number, average),
+                        eta_text(total_pages - number, per_page),
                         " (captured browser response, no replay)"
                         if number == 1
                         else "",

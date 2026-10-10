@@ -48,7 +48,7 @@ def test_schema14_preserves_legacy_rows_and_all_dependent_objects(
         tuple(row)
         for row in connection.execute("SELECT type,name,sql FROM sqlite_master")
     }
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

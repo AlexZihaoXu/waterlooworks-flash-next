@@ -359,6 +359,24 @@ def test_admin_refresh_challenge_empty_read_does_not_start_work(tmp_path: Path) 
             "approval_required": False,
             "code": None,
             "expires_in_seconds": 0,
+            # Default policy with no recorded usage on a real empty database.
+            "pacing": {
+                "request_cap": 400,
+                "daily_request_cap": 1200,
+                "min_interval_minutes": 30,
+                "min_gap_seconds": 3.0,
+                "max_gap_seconds": 6.0,
+                "rest_every_min": 20,
+                "rest_every_max": 30,
+                "rest_min_seconds": 45.0,
+                "rest_max_seconds": 120.0,
+                "used_24h": 0,
+                "remaining_24h": 1200,
+                "next_allowed_at": None,
+                "blocked_until": None,
+                "last_pacing_stop": None,
+                "last_error_category": None,
+            },
         }
         with sqlite3.connect(path) as connection:
             assert (
@@ -376,6 +394,7 @@ def test_current_challenge_is_admin_only_and_never_in_refresh_events(
     from waterlooworks_flash_next.api_models import RefreshSnapshot
     from waterlooworks_flash_next.login import AuthDeadline
     from waterlooworks_flash_next.refresh import RefreshService
+    from waterlooworks_flash_next.ww_pacing import PacingConfig
 
     services: list[RefreshService] = []
 
@@ -385,9 +404,14 @@ def test_current_challenge_is_admin_only_and_never_in_refresh_events(
         *,
         detail_limit: int | None = None,
         full_refetch: bool = False,
+        pacing: PacingConfig | None = None,
     ) -> RefreshService:
         service = RefreshService(
-            path, root, detail_limit=detail_limit, full_refetch=full_refetch
+            path,
+            root,
+            detail_limit=detail_limit,
+            full_refetch=full_refetch,
+            pacing=pacing,
         )
         services.append(service)
         return service

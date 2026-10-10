@@ -1,16 +1,21 @@
 """Pure scheduling/progress tests; no credentials, mock postings, or requests."""
 
+from typing import Any, cast
+
 import pytest
 
 from waterlooworks_flash_next.listings import (
     FailureCategory,
-    attempt_delay,
+    ListingFetchError,
+    ListingPage,
+    ListingSource,
     batch_pages,
     capture_fresh,
     eta_text,
     http_failure,
-    remaining_delay,
+    unexpected_body_failure,
 )
+from waterlooworks_flash_next.ww_pacing import PacingConfig, RequestGate
 
 
 def test_batches_are_at_most_three_sequential_pages() -> None:
@@ -20,31 +25,78 @@ def test_batches_are_at_most_three_sequential_pages() -> None:
     assert batch_pages(11, 10) == ()
 
 
-def test_delay_is_measured_from_previous_completion() -> None:
-    assert remaining_delay(10.0, 10.0) == 2.0
-    assert remaining_delay(10.0, 10.5) == 1.5
-    assert remaining_delay(10.0, 12.0) == 0
-    assert remaining_delay(10.0, 13.0) == 0
-
-
-def test_batch_boundary_does_not_change_request_delay() -> None:
-    assert batch_pages(5, 8)[0] == 5
-    assert remaining_delay(40.0, 40.2) == pytest.approx(1.8)
-
-
-def test_eta_includes_remaining_requests_and_intervals() -> None:
-    assert eta_text(4, 0.5) == "00:00:10"
+def test_eta_uses_the_paced_wall_time_per_page() -> None:
+    assert eta_text(4, 2.5) == "00:00:10"
     assert eta_text(0, None) == "00:00:00"
     assert eta_text(4, None) == "estimating"
-    assert eta_text(1440, 0.5) == "01:00:00"
+    assert eta_text(1440, 2.5) == "01:00:00"
+    gate = RequestGate(PacingConfig(), daily_remaining=10)
+    # 0.5 s request + 4.5 s mean gap + 82.5 s mean rest every 25 requests.
+    assert eta_text(10, gate.expected_seconds_per_request(0.5)) == "00:01:23"
 
 
-def test_two_retries_use_completion_based_exponential_delays() -> None:
-    assert [attempt_delay(i) for i in (1, 2, 3)] == [2, 4, 8]
-    assert remaining_delay(10, 11, attempt_delay(2)) == 3
-    assert remaining_delay(20, 21, attempt_delay(3)) == 7
-    with pytest.raises(ValueError):
-        attempt_delay(4)
+def source_with_gate(gate: RequestGate | None) -> ListingSource:
+    # Runtime-only template slots; no captured form, cookie or response data.
+    return ListingSource([], {}, cast(ListingPage, None), 1, 0.0, None, gate=gate)
+
+
+def test_listing_pages_go_through_the_shared_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    gate = RequestGate(
+        PacingConfig(),
+        daily_remaining=10,
+        clock=lambda: now[0],
+        sleep=sleep,
+        jitter=lambda low, high: high,
+        threshold=lambda low, high: low,
+    )
+    source = source_with_gate(gate)
+    sentinel = cast(Any, object())
+    monkeypatch.setattr(source, "_fetch_once", lambda page: (sentinel, 0.0))
+    assert source.fetch(2) == (sentinel, 0.0)
+    assert source.fetch(3) == (sentinel, 0.0)
+    assert sleeps == [6.0] and gate.requests == 2
+
+
+def test_listing_fetch_without_a_gate_never_reaches_the_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = source_with_gate(None)
+    monkeypatch.setattr(source, "_fetch_once", lambda page: pytest.fail("network"))
+    with pytest.raises(ListingFetchError) as error:
+        source.fetch(2)
+    assert error.value.category is FailureCategory.INTERNAL
+
+
+def test_redirect_to_sign_in_is_an_authentication_failure() -> None:
+    assert http_failure(
+        302, location="https://adfs.uwaterloo.ca/adfs/ls/"
+    ).category is (FailureCategory.AUTH)
+    assert http_failure(302, location="/notLoggedIn.htm").category is (
+        FailureCategory.AUTH
+    )
+    assert http_failure(302, location="/myAccount/x.htm").category is (
+        FailureCategory.REDIRECT
+    )
+    assert http_failure(302).category is FailureCategory.REDIRECT
+
+
+def test_unexpected_challenge_or_sign_in_body_is_classified() -> None:
+    challenge = unexpected_body_failure("<p>Unusual activity detected</p>")
+    assert challenge is not None
+    assert challenge.category is FailureCategory.RATE_LIMIT
+    assert str(challenge) == "Response looked like a rate-limit or challenge page."
+    sign_in = unexpected_body_failure("Your session has expired")
+    assert sign_in is not None and sign_in.category is FailureCategory.AUTH
+    assert unexpected_body_failure("{}") is None
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 302, 400])

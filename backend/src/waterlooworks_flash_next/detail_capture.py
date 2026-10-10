@@ -19,13 +19,17 @@ from waterlooworks_flash_next.detail_fetch import (
     DetailFetchError,
     DetailSource,
     retry_after_seconds,
+    unexpected_detail_body,
 )
 from waterlooworks_flash_next.listings import (
     LISTING_URL,
+    CollectionInterrupted,
     FailureCategory,
     ListingSource,
     decode_response_text,
+    http_failure,
 )
+from waterlooworks_flash_next.ww_pacing import RequestBudgetExhausted
 
 
 class CaptureStage(StrEnum):
@@ -88,8 +92,9 @@ class BlockDisposition(StrEnum):
 
 
 # Page-side idle window: how long the page may take to dispatch the next title
-# read. Time spent inside the paced request controller (30 s fetch timeout plus
-# 5/10/15 s retries) never consumes it; each settled request restarts it.
+# read. Time spent inside the shared pacing gate (3-6 s gap, 30 s fetch timeout,
+# one 30 s retry; no rest during bootstrap) never consumes it; each settled
+# request restarts it.
 CAPTURE_IDLE_SECONDS = 10.0
 
 DISCARDED_RESOURCES = frozenset(
@@ -159,6 +164,8 @@ class CaptureGate:
     complete: bool = False
     settled_at: float = 0.0
     error: DetailFetchError | None = None
+    # Clean pacing stop (cap or shutdown) raised inside the route handler.
+    stop: RequestBudgetExhausted | CollectionInterrupted | None = None
     report: Callable[["CaptureGate"], None] | None = field(default=None, repr=False)
 
     def reject(self, reason: CaptureReason) -> None:
@@ -291,22 +298,18 @@ def install_capture_guard(
                 try:
                     status = response.status
                     if status != 200:
-                        category = (
-                            FailureCategory.AUTH
-                            if status in (401, 403)
-                            else FailureCategory.RATE_LIMIT
-                            if status == 429
-                            else FailureCategory.REDIRECT
-                            if 300 <= status < 400
-                            else FailureCategory.HTTP
-                        )
-                        raise DetailFetchError(
-                            category,
-                            status=status,
-                            retryable=status in (408, 500, 502, 503, 504),
-                            retry_after=retry_after_seconds(
+                        failure = http_failure(
+                            status,
+                            retry_after_seconds(
                                 response.headers.get("retry-after"), now=time.time()
                             ),
+                            response.headers.get("location"),
+                        )
+                        raise DetailFetchError(
+                            failure.category,
+                            status=status,
+                            retryable=failure.retryable,
+                            retry_after=failure.retry_after,
                         )
                     if len(response.body()) > MAX_DETAIL_BYTES:
                         raise DetailFetchError(FailureCategory.SIZE)
@@ -315,7 +318,12 @@ def install_capture_guard(
                     text = decode_response_text(
                         response.body(), encoding.get_content_charset()
                     )
-                    consume(text, gate)
+                    try:
+                        consume(text, gate)
+                    except Exception:
+                        raise unexpected_detail_body(text) or DetailFetchError(
+                            FailureCategory.SCHEMA
+                        ) from None
                     if gate.invalid:
                         raise DetailFetchError(FailureCategory.SCHEMA)
                     forward_bootstrap_metadata(
@@ -329,6 +337,9 @@ def install_capture_guard(
             request(operation)
         except DetailFetchError as error:
             gate.error = error
+            gate.reject(CaptureReason.EXCEPTION)
+        except (RequestBudgetExhausted, CollectionInterrupted) as stop:
+            gate.stop = stop
             gate.reject(CaptureReason.EXCEPTION)
         except Exception:
             gate.reject(CaptureReason.INSPECTION)
@@ -498,6 +509,8 @@ def capture_detail_source(
         emit(stage)
         wait_for_capture(page, gate)
         templates = gate.templates
+        if gate.stop:
+            raise gate.stop
         if gate.error:
             raise gate.error
         if gate.invalid or not gate.complete:
@@ -525,10 +538,13 @@ def capture_detail_source(
         source.secrets = secrets
         source.capture_check = lambda: not gate.invalid
         return source
-    except DetailFetchError:
+    except (DetailFetchError, RequestBudgetExhausted, CollectionInterrupted):
         emit(stage)
         raise
     except Exception:
+        if gate and gate.stop:
+            emit(stage)
+            raise gate.stop from None
         if gate and gate.error:
             emit(stage)
             raise gate.error from None
