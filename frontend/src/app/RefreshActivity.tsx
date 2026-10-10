@@ -11,6 +11,7 @@ import { LuTerminal } from 'react-icons/lu';
 import { RefreshLogEntry } from './RefreshLogEntry';
 import { RefreshPanel } from './RefreshPanel';
 import { refreshProgress } from '../lib/refreshProgress';
+import { refreshRunning } from '../lib/refreshState';
 import { displayNumber, type RefreshSnapshot } from '../lib/workspace';
 import { useLogFollow } from '../lib/useLogFollow';
 import {
@@ -121,7 +122,7 @@ export function RefreshActivity({
 }: {
   refresh: RefreshSnapshot | null;
 }) {
-  const running = refresh?.status === 'running';
+  const running = refreshRunning(refresh);
   const runId = refresh?.run_id ?? null;
   const eta = useRefreshEta(
     runId,

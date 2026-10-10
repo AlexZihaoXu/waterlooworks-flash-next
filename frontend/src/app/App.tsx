@@ -68,6 +68,7 @@ import {
 } from '../lib/workspace';
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
+import { refreshInterruption, refreshRunning } from '../lib/refreshState';
 import {
   compensationMetric,
   sortLabels,
@@ -139,7 +140,8 @@ export function App({
         state={state}
         live={live}
         refreshKey={`${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`}
-        refreshing={refresh?.status === 'running'}
+        refreshing={refreshRunning(refresh)}
+        interruption={refreshInterruption(refresh)}
         requesting={remote.requesting}
         streamConnected={remote.streamConnected}
         streamInterrupted={remote.streamInterrupted}
@@ -157,6 +159,7 @@ const WorkspaceView = memo(function WorkspaceView({
   live,
   refreshKey,
   refreshing,
+  interruption,
   requesting,
   streamConnected,
   streamInterrupted,
@@ -169,6 +172,7 @@ const WorkspaceView = memo(function WorkspaceView({
   live: boolean;
   refreshKey: string;
   refreshing: boolean;
+  interruption: ReturnType<typeof refreshInterruption>;
   requesting: boolean;
   streamConnected: boolean;
   streamInterrupted: boolean;
@@ -470,7 +474,8 @@ const WorkspaceView = memo(function WorkspaceView({
     state.status === 'ready' &&
     state.manual_refresh_available &&
     streamConnected &&
-    !requesting;
+    !requesting &&
+    interruption !== 'recovery_required';
 
   return (
     <main className="workspace">
@@ -633,6 +638,19 @@ const WorkspaceView = memo(function WorkspaceView({
             <Alert.Description>
               Reconnecting to progress updates. Refresh is disabled until the
               connection returns.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {interruption && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Previous refresh was interrupted</Alert.Title>
+            <Alert.Description>
+              {interruption === 'recovery_required'
+                ? 'It stopped before finishing, so saved postings may be incomplete. Manual recovery is required before another refresh can start; see the operator recovery steps.'
+                : 'It stopped before finishing, so saved postings may be incomplete. A new refresh can be started.'}
             </Alert.Description>
           </Alert.Content>
         </Alert>
