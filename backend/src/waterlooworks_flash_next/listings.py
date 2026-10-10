@@ -6,13 +6,20 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import Message
+from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from http.client import HTTPException
 from ssl import SSLError
 from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import (
+    HTTPRedirectHandler,
+    OpenerDirector,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from playwright.sync_api import Page, Response
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
@@ -25,6 +32,7 @@ BATCH_SIZE = 3
 MAX_ATTEMPTS = 3
 MAX_CAPTURE_AGE_SECONDS = 30.0
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
+MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60
 FORM_KEYS = {
     "page",
     "sort",
@@ -65,14 +73,39 @@ class ListingFetchError(Exception):
         *,
         retryable: bool = False,
         status: int | None = None,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(message)
         self.category = category
         self.retryable = retryable
         self.status = status
+        # Validated, clamped server Retry-After seconds; persisted by the caller.
+        self.retry_after = retry_after
 
 
-def http_failure(status: int) -> ListingFetchError:
+def retry_after_seconds(value: str | None, *, now: float) -> int | None:
+    """Parse Retry-After (delta-seconds or HTTP-date), clamped to 24 hours.
+
+    Unparseable, negative or naive-date values are ignored (None). Any valid value
+    above the ceiling is honored only up to the ceiling so one odd header cannot
+    block manual refreshes for years.
+    """
+    if value is None:
+        return None
+    try:
+        if value.strip().isascii() and value.strip().isdigit():
+            seconds = int(value.strip())
+        else:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return None
+            seconds = max(0, math.ceil(date.timestamp() - now))
+        return min(seconds, MAX_RETRY_AFTER_SECONDS)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def http_failure(status: int, retry_after: int | None = None) -> ListingFetchError:
     category = FailureCategory.HTTP
     if status in (401, 403):
         category = FailureCategory.AUTH
@@ -85,7 +118,26 @@ def http_failure(status: int) -> ListingFetchError:
         category,
         retryable=status in (408, 500, 502, 503, 504),
         status=status,
+        retry_after=retry_after if status == 429 else None,
     )
+
+
+def http_failure_from_error(error: HTTPError) -> ListingFetchError:
+    """Classify an HTTPError, keeping only a validated Retry-After on 429."""
+    delay = retry_after_seconds(
+        error.headers.get("Retry-After") if error.headers else None, now=time.time()
+    )
+    return http_failure(error.code, delay)
+
+
+def build_direct_opener() -> OpenerDirector:
+    """One opener for authenticated replays: no redirects and never any proxy.
+
+    An explicit empty ProxyHandler stops *_proxy environment variables from routing
+    session-cookie-bearing WaterlooWorks requests through a third party, matching the
+    OpenAI client's trust_env=False.
+    """
+    return build_opener(ProxyHandler({}), NoRedirect())
 
 
 def attempt_delay(attempt: int) -> float:
@@ -308,7 +360,7 @@ class ListingSource:
             request = Request(
                 LISTING_URL, data=body, headers=self.headers, method="POST"
             )
-            with build_opener(NoRedirect()).open(request, timeout=30) as response:
+            with build_direct_opener().open(request, timeout=30) as response:
                 if response.status != 200:
                     raise http_failure(response.status)
                 declared_charset = response.headers.get_content_charset()
@@ -328,9 +380,9 @@ class ListingSource:
             self.received_at = received_at
             return payload, time.monotonic() - started
         except HTTPError as error:
-            status = error.code
+            failure = http_failure_from_error(error)
             error.close()
-            raise http_failure(status) from None
+            raise failure from None
         except ListingFetchError:
             raise
         except ValidationError as error:

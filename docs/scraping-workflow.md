@@ -10,7 +10,7 @@ Never view the obsolete credentials file, backend `.env`, private database, or s
 
 B2 preserves the observed DOM branches but replaces console codes/process exits with a bounded memory-only admin channel and safe exceptions. Production headless SSO has not been live-validated.
 
-- Credential entry is required again even with the saved browser profile.
+- Credential entry is required again even with the saved browser profile. Browser cookies are now cleared every time the login context closes (and the profile directory is forced to `0700`), so the retained profile no longer keeps a lingering session; a Duo device-trust cookie is discarded too and a later run may need a fresh Duo approval.
 - Sign in can lead to a Duo code challenge. The code may appear after the prompt; DOM-only polling successfully detected it and logged it once.
 - Duo can show **Request timed out / Push timed out**. A fresh-profile run verified automatic detection, ERROR, three-second wait, browser closure, and exit 1 without retry.
 - Entering a wrong code in Duo Mobile produced **Invalid verification code**, alongside **Try again** and **Other options**. The new handler was then verified on that same invalid-code page: ERROR, three-second wait, browser closure, and exit 1 without retry. It runs before code detection on every observer poll; the whole login was not repeated for this handler check.
@@ -200,6 +200,6 @@ The observer recorded one frontend refresh POST, listing-phase reload, real deta
 
 This bounded result does not establish sustained platform-approved request rates or verify a full uncapped detail crawl. Private verification evidence stays under ignored `.experiment/`; neither posting content nor authentication artifacts are committed.
 
-User-approved cadence: one request at a time; 10-attempt bursts; uniform 0.6–1.0-second pauses; extra uniform 1–2-second rests every five bursts; no final pointless sleep. Three transient retries use 5/10/15-second deadlines from failure completion, honoring both retry and burst deadlines. Fatal/auth/429/validation failures stop with checkpoints preserved. Retry-After is durable; there is no automatic login, resume, or background loop. This cadence is not a validated platform-safe rate.
+User-approved cadence: one request at a time; 10-attempt bursts; uniform 0.6–1.0-second pauses; extra uniform 1–2-second rests every five bursts; no final pointless sleep. Three transient retries use 5/10/15-second deadlines from failure completion, honoring both retry and burst deadlines. Fatal/auth/429/validation failures stop with checkpoints preserved. Retry-After is durable (clamped to 24 hours; operators clear a stale block with `python -m waterlooworks_flash_next.rate_limit clear`, see local-api.md); there is no automatic login, resume, or background loop. This cadence is not a validated platform-safe rate.
 
 Parent verification should run one explicit refresh with server `WW_DETAIL_LIMIT=12`: full listing first, then capped content, SSE/UI stage and counter transitions, one burst boundary, terminal status and SQLite checkpoints. It must not deliberately trigger live retries/rate limits or run the default 1,000+ detail queue for testing. The implementation worker performed no live refresh.

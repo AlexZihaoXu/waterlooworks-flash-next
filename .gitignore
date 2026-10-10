@@ -28,3 +28,20 @@ test-results/
 
 /privatekeys/
 *.env
+
+# Private runtime data, mirroring .dockerignore. Unanchored so a database or key
+# created under backend/ (CWD-relative defaults) is never committed.
+data/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+*service_account*.json
+*.base64
+browser-profile/
+browser-profiles/

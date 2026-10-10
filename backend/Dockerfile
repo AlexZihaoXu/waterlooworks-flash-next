@@ -1,6 +1,6 @@
-FROM ghcr.io/astral-sh/uv:0.9.22 AS uv
-FROM node:22.22.3-bookworm-slim AS node
-FROM mcr.microsoft.com/playwright/python:v1.62.0-noble AS build
+FROM ghcr.io/astral-sh/uv:0.9.22@sha256:2320e6c239737dc73cccce393a8bb89eba2383d17018ee91a59773df802c20e6 AS uv
+FROM node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752 AS node
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d AS build
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv UV_PYTHON_DOWNLOADS=never
@@ -8,7 +8,7 @@ COPY backend/pyproject.toml backend/uv.lock backend/.python-version ./backend/
 COPY backend/src ./backend/src
 RUN uv sync --locked --no-dev --no-editable --project backend --python /usr/bin/python3.12
 
-FROM mcr.microsoft.com/playwright/python:v1.62.0-noble AS prod
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d AS prod
 WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
