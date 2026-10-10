@@ -154,8 +154,12 @@ class Bridge:
         return text
 
     def close(self) -> None:
-        if self.lease is not None:
-            self.lease.close()
+        try:
+            if self.provider is not None:
+                self.provider.close()
+        finally:
+            if self.lease is not None:
+                self.lease.close()
 
 
 def main() -> None:

@@ -344,3 +344,32 @@ def test_dispatch_failure_survives_unrecordable_finalize(
     with pytest.raises(ProviderError, match="^connection$"):
         _empty_call(provider, run, "0")
     assert provider.ledger.summary(run).unpriced_attempts == 1
+
+
+def test_provider_reuses_one_bounded_client_and_closes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+    clients: list[httpx.AsyncClient] = []
+
+    async def rejected(
+        client: httpx.AsyncClient, *_args: object
+    ) -> tuple[int, dict[str, object]]:
+        clients.append(client)
+        return 429, {"error": {}}
+
+    monkeypatch.setattr(openai_provider, "_dispatch", rejected)
+    for operation in ("0", "1"):
+        with pytest.raises(ProviderError):
+            _empty_call(provider, run, operation)
+    assert len(clients) == 2 and clients[0] is clients[1]
+    client = clients[0]
+    assert client.trust_env is False
+    assert client.follow_redirects is False
+    assert client.timeout == httpx.Timeout(30)
+    assert not client.is_closed
+    provider.close()
+    assert client.is_closed
+    provider.close()

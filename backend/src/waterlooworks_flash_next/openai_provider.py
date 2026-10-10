@@ -1,6 +1,7 @@
 """Fixed Responses transport for explicit inference; never logs payloads."""
 
 import asyncio
+import concurrent.futures
 import json
 import re
 import threading
@@ -195,50 +196,44 @@ def _metadata(value: object) -> str | None:
     )
 
 
-async def _dispatch(body: bytes, key: str) -> tuple[int, dict[str, Any]]:
+async def _dispatch(
+    client: httpx.AsyncClient, body: bytes, key: str
+) -> tuple[int, dict[str, Any]]:
     try:
         async with asyncio.timeout(TIMEOUT_SECONDS):
-            async with httpx.AsyncClient(
-                trust_env=False, follow_redirects=False, timeout=30
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    ENDPOINT,
-                    content=body,
-                    headers={
-                        "Authorization": "Bearer " + key,
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                        "Accept-Encoding": "identity",
-                    },
-                ) as response:
-                    if (
-                        response.headers.get("Content-Encoding", "identity")
-                        != "identity"
-                    ):
-                        raise ProviderError("response_schema")
-                    declared = response.headers.get("Content-Length")
-                    if declared is not None and (
-                        not declared.isdigit() or int(declared) > MAX_RESPONSE_BYTES
-                    ):
+            async with client.stream(
+                "POST",
+                ENDPOINT,
+                content=body,
+                headers={
+                    "Authorization": "Bearer " + key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                },
+            ) as response:
+                if response.headers.get("Content-Encoding", "identity") != "identity":
+                    raise ProviderError("response_schema")
+                declared = response.headers.get("Content-Length")
+                if declared is not None and (
+                    not declared.isdigit() or int(declared) > MAX_RESPONSE_BYTES
+                ):
+                    raise ProviderError("response_size")
+                raw = bytearray()
+                async for chunk in response.aiter_raw(chunk_size=65536):
+                    raw.extend(chunk)
+                    if len(raw) > MAX_RESPONSE_BYTES:
                         raise ProviderError("response_size")
-                    raw = bytearray()
-                    async for chunk in response.aiter_raw(chunk_size=65536):
-                        raw.extend(chunk)
-                        if len(raw) > MAX_RESPONSE_BYTES:
-                            raise ProviderError("response_size")
-                    try:
-                        payload = json.loads(
-                            raw,
-                            parse_constant=lambda _: (_ for _ in ()).throw(
-                                ValueError()
-                            ),
-                        )
-                    except (ValueError, UnicodeError):
-                        raise ProviderError("response_schema") from None
-                    if not isinstance(payload, dict):
-                        raise ProviderError("response_schema")
-                    return response.status_code, payload
+                try:
+                    payload = json.loads(
+                        raw,
+                        parse_constant=lambda _: (_ for _ in ()).throw(ValueError()),
+                    )
+                except (ValueError, UnicodeError):
+                    raise ProviderError("response_schema") from None
+                if not isinstance(payload, dict):
+                    raise ProviderError("response_schema")
+                return response.status_code, payload
     except ProviderError:
         raise
     except (TimeoutError, httpx.TimeoutException):
@@ -247,10 +242,74 @@ async def _dispatch(body: bytes, key: str) -> tuple[int, dict[str, Any]]:
         raise ProviderError("connection") from None
 
 
+class _Transport:
+    """One event-loop thread owning one pooled AsyncClient for a provider.
+
+    Calls from worker threads share TCP/TLS connections while each dispatch keeps
+    its own 120-second total deadline. No proxies, redirects or retries.
+    """
+
+    def __init__(self) -> None:
+        self.client = httpx.AsyncClient(
+            trust_env=False,
+            follow_redirects=False,
+            timeout=30,
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
+        )
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(
+            target=self.loop.run_forever, name="openai-responses", daemon=True
+        )
+        self.thread.start()
+
+    def dispatch(self, body: bytes, key: str) -> tuple[int, dict[str, Any]]:
+        future = asyncio.run_coroutine_threadsafe(
+            _dispatch(self.client, body, key), self.loop
+        )
+        try:
+            return future.result(timeout=TIMEOUT_SECONDS + 5)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise ProviderError("timeout") from None
+
+    def close(self) -> None:
+        try:
+            asyncio.run_coroutine_threadsafe(self.client.aclose(), self.loop).result(
+                timeout=10
+            )
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join(timeout=10)
+            if not self.thread.is_alive():
+                self.loop.close()
+
+
 class ResponsesProvider:
+    """Reusable per job/bridge; call close() to release pooled connections."""
+
     def __init__(self, path: Path) -> None:
         self.path = path
         self.ledger = AttemptLedger(path)
+        self._transport: _Transport | None = None
+        self._transport_lock = threading.Lock()
+
+    def _shared_transport(self) -> _Transport:
+        with self._transport_lock:
+            if self._transport is None:
+                self._transport = _Transport()
+            return self._transport
+
+    def close(self) -> None:
+        with self._transport_lock:
+            transport, self._transport = self._transport, None
+        if transport is not None:
+            transport.close()
+
+    def __enter__(self) -> "ResponsesProvider":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     def require_ready(self) -> None:
         key = OpenAISettingsStore(self.path).load_for_inference()
@@ -281,6 +340,7 @@ class ResponsesProvider:
             raise ProviderError("configuration")
         key = OpenAISettingsStore(self.path).load_for_inference()
         self._validate_authorization(key.get_secret_value())
+        transport = self._shared_transport()
         with _slots:
             with _active_lock:
                 attempt = self.ledger.reserve(
@@ -289,9 +349,7 @@ class ResponsesProvider:
                 _active_attempts.add(attempt)
             try:
                 try:
-                    status, payload = asyncio.run(
-                        _dispatch(body, key.get_secret_value())
-                    )
+                    status, payload = transport.dispatch(body, key.get_secret_value())
                 except Exception:
                     try:
                         _record(

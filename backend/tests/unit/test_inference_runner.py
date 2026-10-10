@@ -6,6 +6,7 @@ are the empty validated extraction used by the existing acceptance tests.
 """
 
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,18 +14,21 @@ from pathlib import Path
 import pytest
 
 from waterlooworks_flash_next import inference as inference_module
+from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.inference import (
+    InferenceError,
     _complete,
     _Item,
     _ProviderError,
     _run_inference_job,
+    create_inference_job,
 )
 from waterlooworks_flash_next.model_validation import ValidatedExtraction
 from waterlooworks_flash_next.openai_ledger import migrate_openai_ledger
 from waterlooworks_flash_next.openai_provider import ProviderError, ResponsesProvider
 
 EMPTY = ValidatedExtraction(rates=(), skills=())
-Complete = Callable[[_Item, Path], ValidatedExtraction]
+Complete = Callable[[_Item, ResponsesProvider], ValidatedExtraction]
 
 
 def _queue(
@@ -108,7 +112,7 @@ def _job(connection: sqlite3.Connection) -> tuple[str, int, str | None]:
 def test_transient_known_zero_failure_does_not_halt_remaining_items(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def complete(item: _Item, _path: Path) -> ValidatedExtraction:
+    def complete(item: _Item, _provider: ResponsesProvider) -> ValidatedExtraction:
         if item.posting_id == "1":
             raise _ProviderError("http_client", retryable=True)
         return EMPTY
@@ -129,7 +133,7 @@ def test_consecutive_transient_failures_trip_the_halt(
 ) -> None:
     monkeypatch.setattr(inference_module, "TRANSIENT_HALT_THRESHOLD", 2)
 
-    def complete(_item: _Item, _path: Path) -> ValidatedExtraction:
+    def complete(_item: _Item, _provider: ResponsesProvider) -> ValidatedExtraction:
         raise _ProviderError("http_server", retryable=True)
 
     connection = _queue(tmp_path, monkeypatch, 4, complete, concurrency=1)
@@ -145,7 +149,7 @@ def test_consecutive_transient_failures_trip_the_halt(
 def test_unexpected_worker_exception_terminates_the_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def complete(_item: _Item, _path: Path) -> ValidatedExtraction:
+    def complete(_item: _Item, _provider: ResponsesProvider) -> ValidatedExtraction:
         raise sqlite3.OperationalError("disk I/O error")
 
     connection = _queue(tmp_path, monkeypatch, 2, complete, concurrency=1)
@@ -181,12 +185,100 @@ def test_provider_outcomes_map_to_item_policy(
         def complete(self, *_args: object, **_kwargs: object) -> str:
             raise raised
 
-    monkeypatch.setattr(inference_module, "ResponsesProvider", Provider)
     item = _Item(JOB, "1", "0" * 64, "0" * 64, {}, "", False, False, ())
     with pytest.raises(_ProviderError) as error:
-        _complete(item, tmp_path / "unused.sqlite3")
+        _complete(item, Provider(tmp_path / "unused.sqlite3"))
     assert (error.value.category, error.value.retryable, error.value.halt) == (
         category,
         retryable,
         halt,
     )
+
+
+def test_runner_keeps_a_rolling_window_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow call must not idle the other slot until the whole batch drains."""
+    third_started = threading.Event()
+    overlapped: list[bool] = []
+    providers: set[int] = set()
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def complete(item: _Item, provider: ResponsesProvider) -> ValidatedExtraction:
+        nonlocal in_flight, peak
+        with lock:
+            providers.add(id(provider))
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            if item.posting_id == "1":
+                overlapped.append(third_started.wait(timeout=5))
+            elif item.posting_id == "3":
+                third_started.set()
+            return EMPTY
+        finally:
+            with lock:
+                in_flight -= 1
+
+    connection = _queue(tmp_path, monkeypatch, 4, complete, concurrency=2)
+    _run_inference_job(connection, JOB)
+    assert overlapped == [True]
+    assert peak == 2
+    assert len(providers) == 1
+    assert {status for status, _ in _statuses(connection).values()} == {"accepted"}
+    assert _job(connection) == ("completed", 0, None)
+    connection.close()
+
+
+def test_stop_request_drains_in_flight_and_claims_nothing_new(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def complete(item: _Item, _provider: ResponsesProvider) -> ValidatedExtraction:
+        calls.append(item.posting_id)
+        if item.posting_id == "1":
+            stopper = sqlite3.connect(tmp_path / "queue.sqlite3", timeout=5)
+            with stopper:
+                stopper.execute("UPDATE inference_jobs SET stop_requested=1")
+            stopper.close()
+        return EMPTY
+
+    connection = _queue(tmp_path, monkeypatch, 4, complete, concurrency=1)
+    _run_inference_job(connection, JOB)
+    assert calls == ["1"]
+    statuses = _statuses(connection)
+    assert statuses["1"] == ("accepted", None)
+    assert statuses["2"] == statuses["3"] == ("interrupted", "stopped")
+    assert _job(connection)[0] == "interrupted"
+    connection.close()
+
+
+def test_job_selection_does_not_hold_the_write_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-posting selection work runs before BEGIN IMMEDIATE is taken."""
+    path = tmp_path / "inference.sqlite3"
+    connection = open_database(path)
+    writable: list[bool] = []
+
+    def probe(*_args: object) -> object:
+        other = sqlite3.connect(path, timeout=0)
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            other.rollback()
+            writable.append(True)
+        except sqlite3.OperationalError:
+            writable.append(False)
+        finally:
+            other.close()
+        raise InferenceError("Current normalized source is unavailable.")
+
+    monkeypatch.setattr(inference_module, "_source", probe)
+    with pytest.raises(InferenceError, match="source"):
+        create_inference_job(connection, ["1"])
+    assert writable == [True]
+    assert not connection.in_transaction
+    connection.close()

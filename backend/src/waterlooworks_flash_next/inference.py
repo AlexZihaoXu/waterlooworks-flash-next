@@ -143,14 +143,14 @@ def _database_path(connection: sqlite3.Connection) -> Path:
     return Path(connection.execute("PRAGMA database_list").fetchone()[2])
 
 
-def _complete(item: _Item, path: Path) -> ValidatedExtraction:
+def _complete(item: _Item, provider: ResponsesProvider) -> ValidatedExtraction:
     schema = ExtractionCandidate.model_json_schema()
     schema["$defs"]["EvidenceCandidate"]["properties"]["field"] = {
         "type": "string",
         "enum": sorted(item.fields),
     }
     try:
-        text = ResponsesProvider(path).complete(
+        text = provider.complete(
             item.job_id,
             hashlib.sha256(f"{item.posting_id}|{item.input_hash}".encode()).hexdigest(),
             [
@@ -287,6 +287,24 @@ def _source(
     )
 
 
+_Selection = tuple[
+    str,
+    tuple[int, int, str, str, StoredPostingContent, bool, bool, tuple[str, ...]],
+    str,
+]
+
+
+def _select(connection: sqlite3.Connection, posting_id: str) -> _Selection:
+    source = _source(connection, posting_id)
+    _, input_hash = build_responses_prompt(
+        source[4].fields,
+        request_compensation=source[5],
+        request_skills=source[6],
+        deterministic_skills=source[7],
+    )
+    return posting_id, source, input_hash
+
+
 def create_inference_job(
     connection: sqlite3.Connection,
     posting_ids: list[str],
@@ -313,18 +331,22 @@ def create_inference_job(
             raise InferenceError("Inference job identity is invalid.") from None
     job_id, created = job_id or str(uuid4()), _now()
     try:
+        # Expensive per-posting selection reads one WAL snapshot without the write
+        # lock, so sign-in/settings/ledger writers are not blocked meanwhile.
+        with connection:
+            connection.execute("BEGIN")
+            items = [_select(connection, posting_id) for posting_id in posting_ids]
         with connection:
             connection.execute("BEGIN IMMEDIATE")
-            items = []
-            for posting_id in posting_ids:
-                source = _source(connection, posting_id)
-                _, input_hash = build_responses_prompt(
-                    source[4].fields,
-                    request_compensation=source[5],
-                    request_skills=source[6],
-                    deterministic_skills=source[7],
-                )
-                items.append((posting_id, source, input_hash))
+            # Re-validate source identity under the write lock; re-select any
+            # posting whose saved revision changed after the snapshot.
+            items = [
+                item
+                if _current_source(connection, item[0], item[1][3])
+                == tuple(item[1][:4])
+                else _select(connection, item[0])
+                for item in items
+            ]
             has_work = any(source[5] or source[6] for _, source, _ in items)
             connection.execute(
                 """INSERT INTO inference_jobs
@@ -797,14 +819,13 @@ def _run_inference_job(
 ) -> None:
     """Run pending items; report progress only after durable checkpoints commit."""
     row = connection.execute(
-        "SELECT status,concurrency,max_attempts FROM inference_jobs WHERE job_id=?",
+        "SELECT status FROM inference_jobs WHERE job_id=?",
         (job_id,),
     ).fetchone()
     if row is None:
         raise InferenceError("Inference job does not exist.")
     if row[0] != "pending":
         raise InferenceError("Inference job requires explicit resume.")
-    concurrency, max_attempts = row[1], row[2]
     lease = (datetime.now(UTC) + timedelta(seconds=LEASE_SECONDS)).isoformat(
         timespec="microseconds"
     )
@@ -842,136 +863,191 @@ def _run_inference_job(
         if on_progress is not None:
             on_progress()
         return
+    provider = ResponsesProvider(path)
+    try:
+        _drive(connection, job_id, lease, provider, on_progress=on_progress)
+    finally:
+        provider.close()
+
+
+def _claim(
+    connection: sqlite3.Connection, job_id: str, lease: str, slots: int, batch: int
+) -> tuple[str, list[tuple[sqlite3.Row, _Item]], bool]:
+    """Claim up to `slots` uncached items in one short transaction.
+
+    Cache hits among the next `batch` pending rows are accepted inline. Returns the
+    renewed lease, the claimed calls and whether more pending work may remain.
+    """
+    with connection:
+        connection.execute("BEGIN IMMEDIATE")
+        lease = _renew_lease(connection, job_id, lease)
+        if connection.execute(
+            "SELECT stop_requested FROM inference_jobs WHERE job_id=?", (job_id,)
+        ).fetchone()[0]:
+            return lease, [], False
+        rows = connection.execute(
+            "SELECT * FROM inference_job_items WHERE job_id=? "
+            "AND status='pending' ORDER BY ordinal LIMIT ?",
+            (job_id, batch),
+        ).fetchall()
+        calls: list[tuple[sqlite3.Row, _Item]] = []
+        for item_row in rows:
+            cached = _cache(connection, item_row)
+            if cached is not None:
+                _accept(connection, item_row, None, cached)
+                continue
+            if len(calls) >= slots:
+                break
+            item = _prepare_item(connection, item_row)
+            connection.execute(
+                "UPDATE inference_job_items SET status='running',"
+                "attempt_count=attempt_count+1,"
+                "started_at=coalesce(started_at,?) "
+                "WHERE job_id=? AND posting_id=?",
+                (_now(), job_id, item.posting_id),
+            )
+            calls.append((item_row, item))
+        return lease, calls, bool(rows)
+
+
+def _drive(
+    connection: sqlite3.Connection,
+    job_id: str,
+    lease: str,
+    provider: ResponsesProvider,
+    *,
+    on_progress: Callable[[], None] | None,
+) -> None:
+    """Keep up to `concurrency` calls in flight, claiming as each one finishes."""
+    concurrency, max_attempts = connection.execute(
+        "SELECT concurrency,max_attempts FROM inference_jobs WHERE job_id=?",
+        (job_id,),
+    ).fetchone()
     transient_streak = 0
-    while True:
-        try:
-            with connection:
-                connection.execute("BEGIN IMMEDIATE")
-                lease = _renew_lease(connection, job_id, lease)
-                job = connection.execute(
-                    "SELECT stop_requested FROM inference_jobs WHERE job_id=?",
-                    (job_id,),
-                ).fetchone()
-                if job[0]:
-                    connection.execute(
-                        "UPDATE inference_job_items SET status='interrupted',"
-                        "error_category='stopped',finished_at=? WHERE job_id=? "
-                        "AND status='pending'",
-                        (_now(), job_id),
+    claiming = True
+    in_flight: dict[
+        concurrent.futures.Future[ValidatedExtraction], tuple[sqlite3.Row, _Item]
+    ] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        while True:
+            if claiming and len(in_flight) < concurrency:
+                try:
+                    lease, calls, claiming = _claim(
+                        connection,
+                        job_id,
+                        lease,
+                        concurrency - len(in_flight),
+                        concurrency,
                     )
-                    _finish(connection, job_id)
+                except _OwnershipLost:
                     return
-                rows = connection.execute(
-                    "SELECT * FROM inference_job_items WHERE job_id=? "
-                    "AND status='pending' ORDER BY ordinal LIMIT ?",
-                    (job_id, concurrency),
-                ).fetchall()
-                if not rows:
-                    _finish(connection, job_id)
-                    return
-                calls: list[tuple[sqlite3.Row, _Item]] = []
-                for item_row in rows:
-                    cached = _cache(connection, item_row)
-                    if cached is not None:
-                        _accept(connection, item_row, None, cached)
-                        continue
-                    item = _prepare_item(connection, item_row)
-                    connection.execute(
-                        "UPDATE inference_job_items SET status='running',"
-                        "attempt_count=attempt_count+1,"
-                        "started_at=coalesce(started_at,?) "
-                        "WHERE job_id=? AND posting_id=?",
-                        (_now(), job_id, item.posting_id),
+                for item_row, item in calls:
+                    in_flight[pool.submit(_complete, item, provider)] = (
+                        item_row,
+                        item,
                     )
-                    calls.append((item_row, item))
-        except _OwnershipLost:
-            return
-        if on_progress is not None:
-            on_progress()
-        if not calls:
-            continue
-        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {
-                pool.submit(_complete, item, path): (row, item) for row, item in calls
-            }
-            remaining = set(futures)
-            while remaining:
-                done, remaining = concurrent.futures.wait(
-                    remaining,
-                    timeout=LEASE_SECONDS / 3,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                if not done:
+                if on_progress is not None:
+                    on_progress()
+                if claiming and len(in_flight) < concurrency:
+                    continue
+            if not in_flight:
+                try:
+                    with connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        lease = _renew_lease(connection, job_id, lease)
+                        connection.execute(
+                            "UPDATE inference_job_items SET status='interrupted',"
+                            "error_category='stopped',finished_at=? WHERE job_id=? "
+                            "AND status='pending' AND (SELECT stop_requested FROM "
+                            "inference_jobs WHERE job_id=?)=1",
+                            (_now(), job_id, job_id),
+                        )
+                        _finish(connection, job_id)
+                except _OwnershipLost:
+                    pass
+                if on_progress is not None:
+                    on_progress()
+                return
+            done, _ = concurrent.futures.wait(
+                in_flight,
+                timeout=LEASE_SECONDS / 3,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            if not done:
+                try:
+                    with connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        lease = _renew_lease(connection, job_id, lease)
+                except _OwnershipLost:
+                    return
+                if on_progress is not None:
+                    on_progress()
+                continue
+            for future in done:
+                item_row, item = in_flight.pop(future)
+                try:
+                    try:
+                        result = future.result()
+                    except _ProviderError:
+                        raise
+                    except Exception:
+                        raise _ProviderError("internal", halt=True) from None
+                except _ProviderError as error:
+                    transient_streak = transient_streak + 1 if error.retryable else 0
+                    if transient_streak >= TRANSIENT_HALT_THRESHOLD:
+                        error.halt = True
                     try:
                         with connection:
                             connection.execute("BEGIN IMMEDIATE")
                             lease = _renew_lease(connection, job_id, lease)
+                            attempt = connection.execute(
+                                "SELECT attempt_count FROM inference_job_items "
+                                "WHERE job_id=? AND posting_id=?",
+                                (job_id, item.posting_id),
+                            ).fetchone()[0]
+                            retry = (
+                                error.retryable
+                                and not error.halt
+                                and attempt < max_attempts
+                            )
+                            if error.halt:
+                                connection.execute(
+                                    "UPDATE inference_jobs "
+                                    "SET stop_requested=1 WHERE job_id=?",
+                                    (job_id,),
+                                )
+                            connection.execute(
+                                "UPDATE inference_job_items SET status=?,"
+                                "error_category=?,finished_at=? "
+                                "WHERE job_id=? AND posting_id=?",
+                                (
+                                    "interrupted"
+                                    if error.halt
+                                    else "pending"
+                                    if retry
+                                    else "failed"
+                                    if error.retryable
+                                    else "rejected",
+                                    error.category,
+                                    None if retry else _now(),
+                                    job_id,
+                                    item.posting_id,
+                                ),
+                            )
                     except _OwnershipLost:
                         return
-                    if on_progress is not None:
-                        on_progress()
-                    continue
-                for future in done:
-                    item_row, item = futures[future]
+                    if retry:
+                        claiming = True
+                else:
+                    transient_streak = 0
                     try:
-                        try:
-                            result = future.result()
-                        except _ProviderError:
-                            raise
-                        except Exception:
-                            raise _ProviderError("internal", halt=True) from None
-                    except _ProviderError as error:
-                        transient_streak = (
-                            transient_streak + 1 if error.retryable else 0
+                        lease = _checkpoint_accept(
+                            connection, job_id, item_row, result, lease
                         )
-                        if transient_streak >= TRANSIENT_HALT_THRESHOLD:
-                            error.halt = True
-                        try:
-                            with connection:
-                                connection.execute("BEGIN IMMEDIATE")
-                                lease = _renew_lease(connection, job_id, lease)
-                                attempt = connection.execute(
-                                    "SELECT attempt_count FROM inference_job_items "
-                                    "WHERE job_id=? AND posting_id=?",
-                                    (job_id, item.posting_id),
-                                ).fetchone()[0]
-                                retry = error.retryable and attempt < max_attempts
-                                if error.halt:
-                                    connection.execute(
-                                        "UPDATE inference_jobs "
-                                        "SET stop_requested=1 WHERE job_id=?",
-                                        (job_id,),
-                                    )
-                                connection.execute(
-                                    "UPDATE inference_job_items SET status=?,"
-                                    "error_category=?,finished_at=? "
-                                    "WHERE job_id=? AND posting_id=?",
-                                    (
-                                        "interrupted"
-                                        if error.halt
-                                        else "pending"
-                                        if retry
-                                        else "failed"
-                                        if error.retryable
-                                        else "rejected",
-                                        error.category,
-                                        None if retry else _now(),
-                                        job_id,
-                                        item.posting_id,
-                                    ),
-                                )
-                        except _OwnershipLost:
-                            return
-                    else:
-                        transient_streak = 0
-                        try:
-                            lease = _checkpoint_accept(
-                                connection, job_id, item_row, result, lease
-                            )
-                        except _OwnershipLost:
-                            return
-                    if on_progress is not None:
-                        on_progress()
+                    except _OwnershipLost:
+                        return
+                if on_progress is not None:
+                    on_progress()
 
 
 def _recovered_item_status(
