@@ -10,6 +10,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -75,6 +76,11 @@ MODE_LABELS: dict[str, str] = {
     "codex_device": "Codex device login",
     "custom": "Custom server",
 }
+
+
+# Rotated-token commits: per-attempt SQLite busy wait and retry backoff.
+COMMIT_BUSY_TIMEOUT_SECONDS = 30.0
+COMMIT_RETRY_DELAYS: tuple[float, ...] = (0.5, 2.0)
 
 
 class AIConfig(BaseModel):
@@ -232,8 +238,12 @@ class AISettingsStore:
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def _connect(self, *, writable: bool = False) -> sqlite3.Connection:
+    def _connect(
+        self, *, writable: bool = False, timeout: float | None = None
+    ) -> sqlite3.Connection:
         connection = CredentialStore(self.path)._connect(writable=writable)
+        if timeout is not None:
+            connection.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
@@ -551,18 +561,29 @@ class AISettingsStore:
             raise CredentialError("Credential shape is invalid.")
         if slot == "codex_device" and credential.accountId is None:
             raise CredentialError("Credential shape is invalid.")
-        try:
-            connection = self._connect(writable=True)
+        # A rotated refresh token must not be lost to a briefly busy database
+        # (inference checkpoints hold BEGIN IMMEDIATE): wait longer and retry.
+        for delay in (*COMMIT_RETRY_DELAYS, None):
             try:
-                with connection:
-                    connection.execute("BEGIN IMMEDIATE")
-                    self._store_slot(
-                        connection,
-                        slot,
-                        credential.public(),
-                        {"expires_at": int(credential.expires)},
-                    )
-            finally:
-                connection.close()
-        except Exception:
-            raise CredentialError("AI credentials unavailable.") from None
+                connection = self._connect(
+                    writable=True, timeout=COMMIT_BUSY_TIMEOUT_SECONDS
+                )
+                try:
+                    with connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        self._store_slot(
+                            connection,
+                            slot,
+                            credential.public(),
+                            {"expires_at": int(credential.expires)},
+                        )
+                finally:
+                    connection.close()
+                return
+            except sqlite3.OperationalError:
+                if delay is None:
+                    break
+                time.sleep(delay)
+            except Exception:
+                break
+        raise CredentialError("AI credentials unavailable.")

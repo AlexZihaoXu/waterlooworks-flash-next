@@ -13,6 +13,7 @@ import sys
 import time
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -27,6 +28,7 @@ from waterlooworks_flash_next.ai_settings import (
     CustomToken,
     OAuthCredential,
 )
+from waterlooworks_flash_next.credentials import CredentialError
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.openai_ledger import AttemptLedger, BudgetLimits
 from waterlooworks_flash_next.openai_settings import OpenAIKey, OpenAISettingsStore
@@ -444,3 +446,95 @@ def test_crashed_paid_session_keeps_attempts_unknown_for_operator_review(
         .fetchone()
     )
     assert row == (None, None)
+
+
+def test_failed_commit_keeps_the_lock_so_the_rotated_token_can_be_retried(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = AISettingsStore(path)
+    store.save_oauth(
+        "codex_device",
+        OAuthCredential(
+            type="oauth",
+            access="old",
+            refresh="old-refresh",
+            expires=int(time.time() * 1000),
+            accountId="acct",
+        ),
+    )
+    original = AISettingsStore.commit_locked
+    failures = [CredentialError("busy")]
+
+    def flaky(
+        self: AISettingsStore, config: AIConfig, credential: OAuthCredential
+    ) -> None:
+        if failures:
+            raise failures.pop()
+        original(self, config, credential)
+
+    monkeypatch.setattr(AISettingsStore, "commit_locked", flaky)
+    rotated = {
+        "type": "oauth",
+        "access": "new",
+        "refresh": "rotated-refresh",
+        "expires": int(time.time() * 1000) + 3_600_000,
+        "accountId": "acct",
+    }
+    config = AIConfig(access_mode="codex_device", model_id="gpt-5.6-luna")
+    session, _ = _session(path, config)
+    commit: dict[str, object] = {
+        "method": "credential.commit",
+        "params": {"lock": "$last", "credential": rotated},
+    }
+    try:
+        answers = _answers(
+            session.run_item(
+                _item(
+                    [
+                        {
+                            "method": "credential.lock",
+                            "params": {"provider_id": "openai-codex"},
+                        },
+                        commit,
+                        commit,
+                    ]
+                )
+            )
+        )
+    finally:
+        session.close()
+    assert answers[1]["error"] == "credential_unavailable"
+    assert answers[2]["ok"] is True  # same lock, still held after the failure
+    stored = store.load_slot("codex_device")
+    assert stored is not None and stored["refresh"] == "rotated-refresh"
+
+
+def test_commit_locked_retries_a_locked_database(
+    path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from waterlooworks_flash_next import ai_settings
+
+    store = AISettingsStore(path)
+    original = AISettingsStore._store_slot
+    calls: list[int] = []
+
+    def locked_once(self: AISettingsStore, *args: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        original(self, *args)
+
+    monkeypatch.setattr(AISettingsStore, "_store_slot", locked_once)
+    monkeypatch.setattr(ai_settings, "COMMIT_RETRY_DELAYS", (0.0,))
+    config = AIConfig(access_mode="codex_device", model_id="gpt-5.6-luna")
+    rotated = OAuthCredential(
+        type="oauth",
+        access="new",
+        refresh="rotated",
+        expires=int(time.time() * 1000) + 1000,
+        accountId="acct",
+    )
+    store.commit_locked(config, rotated)
+    assert len(calls) == 2
+    stored = store.load_slot("codex_device")
+    assert stored is not None and stored["refresh"] == "rotated"

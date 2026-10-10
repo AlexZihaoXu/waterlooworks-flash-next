@@ -673,12 +673,12 @@ class PiSession:
                 with self._state_lock:
                     if commit.lock not in self._held:
                         raise _Refused("invalid_lock")
-                try:
-                    rotated = OAuthCredential.model_validate(commit.credential)
-                    # Persist the rotated token BEFORE acknowledging the commit.
-                    self.store.commit_locked(self.config, rotated)
-                finally:
-                    self._release(commit.lock)
+                rotated = OAuthCredential.model_validate(commit.credential)
+                # Persist the rotated token BEFORE acknowledging the commit. On
+                # failure the lock stays held so the sidecar can retry the same
+                # token (or release); close() releases anything left.
+                self.store.commit_locked(self.config, rotated)
+                self._release(commit.lock)
                 return {}
             if method == "credential.release":
                 self._release(_LockParams.model_validate(params).lock)

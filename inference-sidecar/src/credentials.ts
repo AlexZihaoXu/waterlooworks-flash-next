@@ -52,7 +52,36 @@ export function parseCredential(value: unknown): Credential | undefined {
 export class RpcCredentialStore implements CredentialStore {
   #chains = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly rpc: RpcCaller) {}
+  /**
+   * `commitDelaysMs` are the waits before each commit retry. The backend keeps
+   * the provider lock held across a failed commit, so a retry can never race a
+   * second refresh, and the rotated token is not dropped on a busy database.
+   */
+  constructor(
+    private readonly rpc: RpcCaller,
+    private readonly commitDelaysMs: readonly number[] = [250, 1000, 3000],
+  ) {}
+
+  async #commit(lock: string, credential: Credential): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.rpc.call('credential.commit', { lock, credential });
+        return;
+      } catch (error) {
+        const retryable =
+          error instanceof RpcError &&
+          ['credential_unavailable', 'rpc_timeout'].includes(error.code);
+        const delay = this.commitDelaysMs[attempt];
+        if (!retryable || delay === undefined) {
+          await this.rpc
+            .call('credential.release', { lock })
+            .catch(() => undefined);
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
 
   #check(providerId: string): void {
     if (!PROVIDER_ID.test(providerId)) throw new RpcError('invalid_provider');
@@ -118,7 +147,7 @@ export class RpcCredentialStore implements CredentialStore {
             .catch(() => undefined);
           throw error;
         }
-        await this.rpc.call('credential.commit', { lock, credential: next });
+        await this.#commit(lock, next);
         return next;
       });
     this.#chains.set(providerId, run);

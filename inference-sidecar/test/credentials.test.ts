@@ -25,6 +25,8 @@ class FakeBackendStore implements RpcCaller {
   persisted = new Map<string, Credential>();
   locks = new Map<string, string>();
   calls: string[] = [];
+  /** Commits that fail like a briefly locked database before succeeding. */
+  failCommits = 0;
 
   async call(method: string, params: Record<string, unknown>) {
     this.calls.push(method);
@@ -52,6 +54,10 @@ class FakeBackendStore implements RpcCaller {
       case 'credential.commit': {
         const owner = this.locks.get(params.lock as string);
         assert.ok(owner);
+        if (this.failCommits > 0) {
+          this.failCommits -= 1;
+          throw new RpcError('credential_unavailable');
+        }
         // Persist BEFORE acknowledging, like the backend's locked transaction.
         this.persisted.set(owner, params.credential as Credential);
         this.locks.delete(params.lock as string);
@@ -164,4 +170,45 @@ test('credential shapes are strict and the sidecar cannot delete', async () => {
   const store = new RpcCredentialStore(new FakeBackendStore());
   await assert.rejects(store.delete('openai'));
   await assert.rejects(store.read('../etc'));
+});
+
+test('a transiently failing commit is retried under the same lock', async () => {
+  const backend = new FakeBackendStore();
+  backend.failCommits = 2;
+  const store = new RpcCredentialStore(backend, [0, 0, 0]);
+  const rotated: Credential = {
+    type: 'oauth',
+    access: 'new-access',
+    refresh: 'rotated-refresh',
+    expires: Date.now() + 3_600_000,
+  };
+  await store.modify('rotating', async () => rotated);
+  assert.deepEqual(backend.persisted.get('rotating'), rotated);
+  assert.equal(backend.calls.filter((c) => c === 'credential.lock').length, 1);
+  assert.equal(
+    backend.calls.filter((c) => c === 'credential.commit').length,
+    3,
+  );
+  assert.equal(backend.calls.includes('credential.release'), false);
+  assert.equal(backend.locks.size, 0);
+});
+
+test('exhausted commit retries release the lock and reject', async () => {
+  const backend = new FakeBackendStore();
+  backend.failCommits = 10;
+  const store = new RpcCredentialStore(backend, [0, 0]);
+  await assert.rejects(
+    store.modify('rotating', async () => ({
+      type: 'oauth',
+      access: 'a',
+      refresh: 'r',
+      expires: Date.now() + 1000,
+    })),
+  );
+  assert.equal(
+    backend.calls.filter((c) => c === 'credential.commit').length,
+    3,
+  );
+  assert.ok(backend.calls.includes('credential.release'));
+  assert.equal(backend.locks.size, 0);
 });
