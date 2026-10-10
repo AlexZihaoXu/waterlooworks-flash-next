@@ -194,13 +194,24 @@ body {
   pointer-events: none;
   z-index: 1;
 }
-/* Phones: pagination sits inline after the cards, never over them. */
-.pagination-inline {
-  display: grid;
-  justify-items: center;
+/* Phones: the count caption ends the list; the pager floats above the
+   Safari toolbar / home indicator and the list reserves room for it. */
+.results-caption {
+  padding-block: 0.25rem;
+}
+.pagination-float {
+  position: fixed;
+  inset-inline: 0;
+  bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  z-index: 15;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.pager-compact {
+  display: flex;
+  align-items: center;
   gap: 0.25rem;
-  padding-block: 0.25rem env(safe-area-inset-bottom);
-  text-align: center;
 }
 /* Phone cards: pay and deadline share the first detail line. */
 .posting-key-line {
@@ -563,6 +574,16 @@ body {
   }
   .results-scroll-content {
     padding-bottom: 0.25rem;
+  }
+  /* Pill height (44px buttons + panel padding) plus its gap above the inset. */
+  .posting-results {
+    --pager-space: 4.5rem;
+    padding-bottom: var(--pager-space);
+  }
+  /* Floating over cards: an opaque themed pill keeps text legible. */
+  .pagination-float .pagination-panel {
+    padding: 0.25rem 0.5rem;
+    background: var(--surface);
   }
 }
 

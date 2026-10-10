@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/app/App';
@@ -112,7 +113,7 @@ describe('phone workspace chrome', () => {
     vi.stubGlobal('innerWidth', 390);
     render(<App state={{ ...empty, compensation_sort_available: false }} />);
     expect(
-      screen.getByText('0 postings · Page 1/1').closest('.pagination-inline'),
+      screen.getByText('0 postings · Page 1/1').closest('.results-caption'),
     ).not.toBeNull();
     expect(
       screen.queryByRole('button', { name: /Sort by/ }),
@@ -145,14 +146,34 @@ describe('phone workspace chrome', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('lets the page scroll the cards and places pagination inline after them', () => {
+  it('lets the page scroll the cards under a compact floating pager', () => {
     vi.stubGlobal('innerWidth', 390);
     render(<App state={empty} />);
     const cards = screen.getByRole('region', { name: 'Posting cards' });
     expect(cards).not.toHaveClass('scroll-shadow');
     const pages = screen.getByRole('navigation', { name: 'Posting pages' });
+    expect(pages.closest('.pagination-float')).not.toBeNull();
     expect(pages.closest('.pagination-dock')).toBeNull();
-    expect(pages.closest('.pagination-inline')).not.toBeNull();
+    // Previous / current-of-total / next, with 44px HeroUI buttons.
+    for (const name of ['Previous page', 'Next page']) {
+      const button = within(pages).getByRole('button', { name });
+      expect(button).toHaveClass('button--lg', 'button--icon-only');
+      expect(button).toBeDisabled();
+    }
+    expect(within(pages).getByText('1 of 1')).toBeInTheDocument();
+    // The caption stays at the end of the list, not in the floating pill.
+    const caption = screen.getByText('0 postings · Page 1/1');
+    expect(caption.closest('.results-caption')).not.toBeNull();
+    expect(pages).not.toContainElement(caption);
+  });
+
+  it('reserves list space for the floating pager above the safe area', () => {
+    const css = readFileSync('src/styles/index.css', 'utf8');
+    const pager = /\.pagination-float\s*\{([^}]*)\}/.exec(css)![1];
+    expect(pager).toMatch(/position:\s*fixed/);
+    expect(pager).toMatch(/bottom:[^;]*env\(safe-area-inset-bottom\)/);
+    expect(css).toMatch(/--pager-space/);
+    expect(css).toMatch(/padding-bottom:\s*var\(--pager-space\)/);
   });
 
   it('shows only the logo, a theme menu and the sign-in content when signed out', () => {

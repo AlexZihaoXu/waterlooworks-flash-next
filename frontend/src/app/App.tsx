@@ -28,6 +28,8 @@ import {
   LuMonitor,
   LuRefreshCw,
   LuChevronDown,
+  LuChevronLeft,
+  LuChevronRight,
   LuFilter,
   LuArrowUpDown,
 } from 'react-icons/lu';
@@ -1766,63 +1768,101 @@ const WorkspaceView = memo(function WorkspaceView({
               )}
             </div>
           )}
-          {!loading && !signedOut && (
-            <div className={compact ? 'pagination-inline' : 'pagination-dock'}>
-              <div className="pagination-panel">
-                <div className="horizontal-overflow">
-                  <Pagination aria-label="Posting pages" size="sm">
-                    <Pagination.Content>
-                      <Pagination.Item>
-                        <Pagination.Previous
-                          aria-label="Previous"
-                          isDisabled={!connected || currentPage === 1}
-                          onPress={() => setPage(currentPage - 1)}
-                        >
-                          <Pagination.PreviousIcon />
-                          <span className="pagination-word">Previous</span>
-                        </Pagination.Previous>
-                      </Pagination.Item>
-                      {pageNumbers(currentPage, pages, compact).map(
-                        (number, index) => (
-                          <Pagination.Item key={`${number}-${index}`}>
-                            {number === 'ellipsis' ? (
-                              <Pagination.Ellipsis />
-                            ) : (
-                              <Pagination.Link
-                                aria-label={`Page ${number}`}
-                                isDisabled={!connected || filtered.length === 0}
-                                isActive={number === currentPage}
-                                onPress={() => setPage(number)}
-                              >
-                                {number}
-                              </Pagination.Link>
-                            )}
-                          </Pagination.Item>
-                        ),
-                      )}
-                      <Pagination.Item>
-                        <Pagination.Next
-                          aria-label="Next"
-                          isDisabled={!connected || currentPage === pages}
-                          onPress={() => setPage(currentPage + 1)}
-                        >
-                          <span className="pagination-word">Next</span>
-                          <Pagination.NextIcon />
-                        </Pagination.Next>
-                      </Pagination.Item>
-                    </Pagination.Content>
-                  </Pagination>
+          {!loading &&
+            !signedOut &&
+            (compact ? (
+              <>
+                <div className="results-caption">
+                  <Typography type="body-xs" color="muted" role="status">
+                    {connected
+                      ? `${countText} · Page ${currentPage}/${pages}${lastObserved ? ` · Updated ${displayTime(lastObserved)}` : ''}`
+                      : 'Waiting for saved postings'}
+                  </Typography>
+                </div>
+                {/* Phones: a floating pill (approved outer panel) with 44px
+                    HeroUI buttons; the list reserves space beneath it. */}
+                <div className="pagination-float">
+                  <div className="pagination-panel">
+                    <nav aria-label="Posting pages" className="pager-compact">
+                      <Button
+                        isIconOnly
+                        size="lg"
+                        variant="ghost"
+                        aria-label="Previous page"
+                        isDisabled={!connected || currentPage === 1}
+                        onPress={() => setPage(currentPage - 1)}
+                      >
+                        <LuChevronLeft aria-hidden="true" />
+                      </Button>
+                      <Typography type="body-sm" weight="medium">
+                        {currentPage} of {pages}
+                      </Typography>
+                      <Button
+                        isIconOnly
+                        size="lg"
+                        variant="ghost"
+                        aria-label="Next page"
+                        isDisabled={!connected || currentPage === pages}
+                        onPress={() => setPage(currentPage + 1)}
+                      >
+                        <LuChevronRight aria-hidden="true" />
+                      </Button>
+                    </nav>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="pagination-dock">
+                <div className="pagination-panel">
+                  <div className="horizontal-overflow">
+                    <Pagination aria-label="Posting pages" size="sm">
+                      <Pagination.Content>
+                        <Pagination.Item>
+                          <Pagination.Previous
+                            aria-label="Previous"
+                            isDisabled={!connected || currentPage === 1}
+                            onPress={() => setPage(currentPage - 1)}
+                          >
+                            <Pagination.PreviousIcon />
+                            <span className="pagination-word">Previous</span>
+                          </Pagination.Previous>
+                        </Pagination.Item>
+                        {pageNumbers(currentPage, pages, false).map(
+                          (number, index) => (
+                            <Pagination.Item key={`${number}-${index}`}>
+                              {number === 'ellipsis' ? (
+                                <Pagination.Ellipsis />
+                              ) : (
+                                <Pagination.Link
+                                  aria-label={`Page ${number}`}
+                                  isDisabled={
+                                    !connected || filtered.length === 0
+                                  }
+                                  isActive={number === currentPage}
+                                  onPress={() => setPage(number)}
+                                >
+                                  {number}
+                                </Pagination.Link>
+                              )}
+                            </Pagination.Item>
+                          ),
+                        )}
+                        <Pagination.Item>
+                          <Pagination.Next
+                            aria-label="Next"
+                            isDisabled={!connected || currentPage === pages}
+                            onPress={() => setPage(currentPage + 1)}
+                          >
+                            <span className="pagination-word">Next</span>
+                            <Pagination.NextIcon />
+                          </Pagination.Next>
+                        </Pagination.Item>
+                      </Pagination.Content>
+                    </Pagination>
+                  </div>
                 </div>
               </div>
-              {compact && (
-                <Typography type="body-xs" color="muted" role="status">
-                  {connected
-                    ? `${countText} · Page ${currentPage}/${pages}${lastObserved ? ` · Updated ${displayTime(lastObserved)}` : ''}`
-                    : 'Waiting for saved postings'}
-                </Typography>
-              )}
-            </div>
-          )}
+            ))}
         </motion.section>
         <div
           className="detail-layer"
