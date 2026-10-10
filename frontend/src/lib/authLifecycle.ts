@@ -1,3 +1,10 @@
+/** A bounded auth operation timed out or was superseded; never server text. */
+export class AuthCancelled extends Error {
+  constructor() {
+    super('Authentication cancelled or timed out.');
+  }
+}
+
 // A generation fences every asynchronous auth result, including logout/renew races.
 export class AuthGeneration {
   private generation = 0;
@@ -34,7 +41,7 @@ export function runAuthOperation<T>(
     controller.signal.addEventListener(
       'abort',
       () => {
-        reject(new Error('Authentication cancelled or timed out.'));
+        reject(new AuthCancelled());
       },
       { once: true },
     );
@@ -104,17 +111,61 @@ export type AppSession = {
   role: 'admin' | 'member';
   expires_at: number;
 };
-export type SignInFailure = 'cancelled' | 'unauthorized' | 'unavailable';
+// 'rejected': the exchange refused the Google identity or the prepared
+// reservation (401). 'owner-required': the empty instance accepts only its
+// configured owner as the first administrator (403).
+export type SignInFailure =
+  'cancelled' | 'rejected' | 'owner-required' | 'unavailable';
 
 /** HTTP refusal from an auth route; never carries server-supplied text. */
 export class AuthHttpError extends Error {
   readonly path: string;
   readonly status: number;
-  constructor(path: string, status: number) {
+  readonly retryAfter: number | null;
+  constructor(path: string, status: number, retryAfter: number | null = null) {
     super('Authentication unavailable.');
     this.path = path;
     this.status = status;
+    this.retryAfter = retryAfter;
   }
+}
+
+/** Seconds from a delta-seconds Retry-After header; dates/garbage are ignored. */
+export function parseRetryAfter(value: string | null): number | null {
+  if (value === null || !/^\d{1,6}$/.test(value.trim())) return null;
+  return Number(value.trim());
+}
+
+function errorCode(error: unknown) {
+  return typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string'
+    ? error.code
+    : null;
+}
+
+// A rate limit, overload, outage, timeout or dropped connection says nothing
+// about the session itself, so checks and renewals keep it and retry. Only an
+// explicit refusal (401/403) or an invalid session/token ends it.
+export function isTransientAuthFailure(error: unknown): boolean {
+  if (error instanceof AuthHttpError)
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  if (error instanceof AuthCancelled || error instanceof TypeError) return true;
+  if (
+    error instanceof DOMException &&
+    (error.name === 'TimeoutError' || error.name === 'AbortError')
+  )
+    return true;
+  return errorCode(error) === 'auth/network-request-failed';
+}
+
+export function renewalRetryDelayMs(error: unknown): number {
+  const seconds =
+    error instanceof AuthHttpError && error.retryAfter !== null
+      ? Math.min(Math.max(error.retryAfter, 1), 30)
+      : 10;
+  return seconds * 1000;
 }
 
 const cancelledCodes = new Set([
@@ -123,23 +174,19 @@ const cancelledCodes = new Set([
   'auth/user-cancelled',
 ]);
 
-// Only the exchange's verification refusal means "this account was not
-// accepted"; configuration, rate limits and transport stay "unavailable".
+// Only the exchange's own refusals are specific; configuration, rate limits
+// and transport stay "unavailable".
 export function classifySignInError(error: unknown): SignInFailure {
-  if (error instanceof AuthHttpError)
-    return error.path === 'exchange' &&
-      (error.status === 401 || error.status === 403)
-      ? 'unauthorized'
-      : 'unavailable';
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    typeof error.code === 'string' &&
-    cancelledCodes.has(error.code)
-  )
-    return 'cancelled';
-  return 'unavailable';
+  if (error instanceof AuthHttpError) {
+    if (error.path !== 'exchange') return 'unavailable';
+    if (error.status === 401) return 'rejected';
+    if (error.status === 403) return 'owner-required';
+    return 'unavailable';
+  }
+  const code = errorCode(error);
+  return code !== null && cancelledCodes.has(code)
+    ? 'cancelled'
+    : 'unavailable';
 }
 
 export type AuthState =

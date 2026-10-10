@@ -4,7 +4,10 @@ import {
   AuthHttpError,
   AuthQueue,
   classifySignInError,
+  isTransientAuthFailure,
+  parseRetryAfter,
   parseSession,
+  renewalRetryDelayMs,
   runAuthOperation,
   scheduleSessionRenewal,
   type AuthState,
@@ -23,7 +26,12 @@ async function authRequest(path: string, body?: object, signal?: AbortSignal) {
     credentials: 'same-origin',
     cache: 'no-store',
   });
-  if (!response.ok) throw new AuthHttpError(path, response.status);
+  if (!response.ok)
+    throw new AuthHttpError(
+      path,
+      response.status,
+      parseRetryAfter(response.headers.get('Retry-After')),
+    );
   return response.json() as Promise<unknown>;
 }
 
@@ -142,8 +150,10 @@ export function useAppAuth() {
           (actual.uid !== session.uid || actual.role !== session.role)
         )
           signOut(true, true);
-      } catch {
-        if (active) signOut(true, true);
+      } catch (error) {
+        // A rate limit or outage is not a verdict on the session; the next
+        // poll or focus checks again, and expiry still ends it on time.
+        if (active && !isTransientAuthFailure(error)) signOut(true, true);
       }
     };
     const poll = window.setInterval(() => void check(), 30_000);
@@ -164,38 +174,48 @@ export function useAppAuth() {
     if (!session) return;
     const current = generation.current;
     let signal = current.signal;
-    return scheduleSessionRenewal(
-      session.expires_at,
-      () => {
-        if (signal.aborted) return;
-        const epoch = current.begin();
-        signal = current.signal;
-        setState({ status: 'refreshing', session });
-        void queue.current
-          .run(async (operation) => {
-            const firebase = await operation.wait(import('./firebase'));
-            operation.check();
-            const id_token = await operation.wait(
-              firebase.renewedToken(session.uid),
-            );
-            operation.check();
-            const next = parseSession(
-              await operation.wait(
-                authRequest('exchange', { id_token }, operation.signal),
-              ),
-            );
-            operation.check();
-            if (current.current(epoch))
-              setState({ status: 'ready', session: next });
-          }, current.signal)
-          .catch(() => {
-            if (current.current(epoch)) signOut(true, true);
-          });
-      },
-      () => {
-        if (!signal.aborted) signOut(true, true);
-      },
-    );
+    let retry: number | undefined;
+    const renew = () => {
+      if (signal.aborted) return;
+      const epoch = current.begin();
+      signal = current.signal;
+      setState({ status: 'refreshing', session });
+      void queue.current
+        .run(async (operation) => {
+          const firebase = await operation.wait(import('./firebase'));
+          operation.check();
+          const id_token = await operation.wait(
+            firebase.renewedToken(session.uid),
+          );
+          operation.check();
+          const next = parseSession(
+            await operation.wait(
+              authRequest('exchange', { id_token }, operation.signal),
+            ),
+          );
+          operation.check();
+          if (current.current(epoch))
+            setState({ status: 'ready', session: next });
+        }, current.signal)
+        .catch((error: unknown) => {
+          if (!current.current(epoch)) return;
+          if (!isTransientAuthFailure(error)) {
+            signOut(true, true);
+            return;
+          }
+          // Keep the still-valid session and try again; the expiry timer
+          // below still ends it if renewal never succeeds in time.
+          setState({ status: 'ready', session });
+          retry = window.setTimeout(renew, renewalRetryDelayMs(error));
+        });
+    };
+    const cancel = scheduleSessionRenewal(session.expires_at, renew, () => {
+      if (!signal.aborted) signOut(true, true);
+    });
+    return () => {
+      cancel();
+      window.clearTimeout(retry);
+    };
   }, [session, signOut]);
 
   return { state, signIn, signOut: () => signOut() };

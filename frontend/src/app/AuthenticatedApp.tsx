@@ -76,22 +76,34 @@ export function AuthGate({
                 </Alert.Content>
               </Alert>
             )}
-            {state.status === 'error' && state.reason === 'unauthorized' && (
+            {state.status === 'error' && state.reason === 'rejected' && (
               <Alert status="warning">
                 <Alert.Indicator />
                 <Alert.Content>
-                  <Alert.Title>Account not authorized</Alert.Title>
+                  <Alert.Title>Sign-in not accepted</Alert.Title>
                   <Alert.Description>
-                    This Google account was not accepted. If you expected
-                    access, ask the administrator to approve it, then sign in
-                    again. You can also try a different Google account.
+                    Google sign-in was not accepted, possibly because it took
+                    too long. Try again, or use a different Google account.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert>
+            )}
+            {state.status === 'error' && state.reason === 'owner-required' && (
+              <Alert status="warning">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>Owner sign-in required</Alert.Title>
+                  <Alert.Description>
+                    This instance has no administrator yet, and only its
+                    configured owner can sign in first. Use the owner's Google
+                    account.
                   </Alert.Description>
                 </Alert.Content>
               </Alert>
             )}
             {state.status === 'error' &&
-              state.reason !== 'cancelled' &&
-              state.reason !== 'unauthorized' && (
+              (state.reason === undefined ||
+                state.reason === 'unavailable') && (
                 <Alert status="danger">
                   <Alert.Indicator />
                   <Alert.Content>

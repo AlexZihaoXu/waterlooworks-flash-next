@@ -4,6 +4,7 @@ import { AuthGate } from '../../src/app/AuthenticatedApp';
 import {
   AuthHttpError,
   classifySignInError,
+  type SignInFailure,
 } from '../../src/lib/authLifecycle';
 
 // Error shapes only (Firebase error codes and HTTP statuses); no tokens or
@@ -18,12 +19,12 @@ describe('sign-in failure classification', () => {
       'cancelled',
     );
   });
-  it('treats a rejected exchange as an account that is not authorized', () => {
+  it('separates a rejected exchange from the empty-instance owner pin', () => {
     expect(classifySignInError(new AuthHttpError('exchange', 401))).toBe(
-      'unauthorized',
+      'rejected',
     );
     expect(classifySignInError(new AuthHttpError('exchange', 403))).toBe(
-      'unauthorized',
+      'owner-required',
     );
   });
   it('keeps every other failure as service unavailable', () => {
@@ -54,7 +55,7 @@ describe('sign-in failure classification', () => {
 });
 
 describe('sign-in failure presentation', () => {
-  const gate = (reason?: 'cancelled' | 'unauthorized' | 'unavailable') =>
+  const gate = (reason?: SignInFailure) =>
     render(
       <AuthGate state={{ status: 'error', reason }} signIn={() => {}}>
         <p>Protected workspace</p>
@@ -69,13 +70,23 @@ describe('sign-in failure presentation', () => {
       screen.queryByText('Authentication unavailable'),
     ).not.toBeInTheDocument();
   });
-  it('tells an unapproved account to ask the administrator', () => {
-    gate('unauthorized');
+  it('asks a rejected sign-in to retry without promising an approval flow', () => {
+    gate('rejected');
     const alert = screen
-      .getByText('Account not authorized')
+      .getByText('Sign-in not accepted')
       .closest('.alert') as HTMLElement;
     expect(alert).toHaveClass('alert--warning');
-    expect(alert).toHaveTextContent(/administrator/);
+    expect(alert).toHaveTextContent(/try again/i);
+    expect(alert).not.toHaveTextContent(/approve/i);
+  });
+  it('explains that only the configured owner can claim an empty instance', () => {
+    gate('owner-required');
+    const alert = screen
+      .getByText('Owner sign-in required')
+      .closest('.alert') as HTMLElement;
+    expect(alert).toHaveClass('alert--warning');
+    expect(alert).toHaveTextContent(/configured owner/);
+    expect(alert).not.toHaveTextContent(/approve/i);
   });
   it.each([undefined, 'unavailable'] as const)(
     'keeps service failures as a danger alert (%s)',
