@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/app/App';
+import { AccountMenu } from '../../src/app/AuthenticatedApp';
 import type { WorkspaceState } from '../../src/lib/workspace';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -34,6 +35,31 @@ describe('phone workspace chrome', () => {
     expect(
       within(menu).getByRole('menuitemradio', { name: 'System' }),
     ).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Dark' }));
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+    expect(localStorage.getItem('heroui-theme')).toBe('dark');
+  });
+
+  it('moves the theme choice into the account menu when signed in', async () => {
+    vi.stubGlobal('innerWidth', 390);
+    render(
+      <App
+        state={empty}
+        account={<AccountMenu profile={null} signOut={() => {}} />}
+      />,
+    );
+    // Header keeps only the title and the avatar trigger.
+    expect(
+      screen.queryByRole('button', { name: 'Color theme' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }));
+    const menu = await screen.findByRole('menu');
+    expect(
+      within(menu).getByRole('menuitemradio', { name: 'System' }),
+    ).toHaveAttribute('aria-checked', 'true');
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Sign out' }),
+    ).toBeInTheDocument();
     fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Dark' }));
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
     expect(localStorage.getItem('heroui-theme')).toBe('dark');

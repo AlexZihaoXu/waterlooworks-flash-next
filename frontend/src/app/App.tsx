@@ -95,6 +95,8 @@ import { useJobDetail } from '../lib/useJobDetail';
 import { useSimilarJobs } from '../lib/useSimilarJobs';
 import { useLiveReducedMotion } from '../lib/useLiveReducedMotion';
 import { useCompactLayout } from '../lib/useCompactLayout';
+import { isThemeChoice, ThemeControlContext } from '../lib/themeControl';
+import { themeMenuSection } from './themeMenu';
 import { JobDetailContent } from './JobDetail';
 
 const PAGE_SIZE = 18;
@@ -216,6 +218,7 @@ const WorkspaceView = memo(function WorkspaceView({
 }) {
   const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
+  const themeControl = useMemo(() => ({ theme, setTheme }), [theme, setTheme]);
   const filterIds = useId();
   const [initialView] = useState(() => readBrowseUrl(window.location.search));
   const navigation = useRef(true);
@@ -840,115 +843,93 @@ const WorkspaceView = memo(function WorkspaceView({
           </Modal.Dialog>
         </Modal.Container>
       </Modal.Backdrop>
-      <header className="workspace-header">
-        <div className="stack-small workspace-brand">
-          <div className="brand-heading">
-            <BrandMark active={refreshing || requesting} />
-            <span className="brand-title">
-              <Typography
-                type={compact ? 'h6' : 'h4'}
-                truncate={compact}
-                role="heading"
-                aria-level={1}
-              >
-                WaterlooWorks Flash Next
-              </Typography>
-            </span>
-          </div>
-          <Typography type="body-xs" color="muted" truncate={compact}>
-            {lastObserved
-              ? `Updated ${displayTime(lastObserved)}`
-              : loading
-                ? '\u00a0'
-                : 'Find your next role.'}
-          </Typography>
-          {compact && refreshUnavailableNote}
-        </div>
-        <div className="stack-small">
-          <div className="inline-layout header-actions">
-            {compact ? (
-              // Phones: one 44px icon button opens the documented single-
-              // selection Dropdown instead of a three-button toggle group.
-              <Dropdown>
-                <Button
-                  isIconOnly
-                  size="lg"
-                  variant="ghost"
-                  aria-label="Color theme"
+      <ThemeControlContext value={themeControl}>
+        <header className="workspace-header">
+          <div className="stack-small workspace-brand">
+            <div className="brand-heading">
+              <BrandMark active={refreshing || requesting} />
+              <span className="brand-title">
+                <Typography
+                  type={compact ? 'h6' : 'h4'}
+                  truncate={compact}
+                  role="heading"
+                  aria-level={1}
                 >
-                  {theme === 'dark' ? (
-                    <LuMoon aria-hidden="true" />
-                  ) : theme === 'light' ? (
-                    <LuSun aria-hidden="true" />
-                  ) : (
-                    <LuMonitor aria-hidden="true" />
-                  )}
-                </Button>
-                <Dropdown.Popover placement="bottom end">
-                  <Dropdown.Menu
+                  WaterlooWorks Flash Next
+                </Typography>
+              </span>
+            </div>
+            <Typography type="body-xs" color="muted" truncate={compact}>
+              {lastObserved
+                ? `Updated ${displayTime(lastObserved)}`
+                : loading
+                  ? '\u00a0'
+                  : 'Find your next role.'}
+            </Typography>
+            {compact && refreshUnavailableNote}
+          </div>
+          <div className="stack-small">
+            <div className="inline-layout header-actions">
+              {compact ? (
+                // Phones: signed in, the theme choice lives in the account
+                // menu; signed out, one 44px icon button opens the same
+                // documented single-selection Dropdown section.
+                (account ?? (
+                  <Dropdown>
+                    <Button
+                      isIconOnly
+                      size="lg"
+                      variant="ghost"
+                      aria-label="Color theme"
+                    >
+                      {theme === 'dark' ? (
+                        <LuMoon aria-hidden="true" />
+                      ) : theme === 'light' ? (
+                        <LuSun aria-hidden="true" />
+                      ) : (
+                        <LuMonitor aria-hidden="true" />
+                      )}
+                    </Button>
+                    <Dropdown.Popover placement="bottom end">
+                      <Dropdown.Menu aria-label="Color theme">
+                        {themeMenuSection(themeControl)}
+                      </Dropdown.Menu>
+                    </Dropdown.Popover>
+                  </Dropdown>
+                ))
+              ) : (
+                <>
+                  {account}
+                  <ToggleButtonGroup
                     aria-label="Color theme"
                     selectionMode="single"
                     disallowEmptySelection
+                    size="sm"
                     selectedKeys={[theme]}
                     onSelectionChange={(keys) => {
-                      if (keys === 'all') return;
                       const [key] = keys;
-                      if (key === 'system' || key === 'light' || key === 'dark')
-                        setTheme(key);
+                      if (isThemeChoice(key)) setTheme(key);
                     }}
                   >
-                    <Dropdown.Item id="system" textValue="System">
+                    <ToggleButton isIconOnly aria-label="System" id="system">
                       <LuMonitor aria-hidden="true" />
-                      <Label>System</Label>
-                      <Dropdown.ItemIndicator />
-                    </Dropdown.Item>
-                    <Dropdown.Item id="light" textValue="Light">
+                    </ToggleButton>
+                    <ToggleButton isIconOnly aria-label="Light" id="light">
+                      <ToggleButtonGroup.Separator />
                       <LuSun aria-hidden="true" />
-                      <Label>Light</Label>
-                      <Dropdown.ItemIndicator />
-                    </Dropdown.Item>
-                    <Dropdown.Item id="dark" textValue="Dark">
+                    </ToggleButton>
+                    <ToggleButton isIconOnly aria-label="Dark" id="dark">
+                      <ToggleButtonGroup.Separator />
                       <LuMoon aria-hidden="true" />
-                      <Label>Dark</Label>
-                      <Dropdown.ItemIndicator />
-                    </Dropdown.Item>
-                  </Dropdown.Menu>
-                </Dropdown.Popover>
-              </Dropdown>
-            ) : (
-              <>
-                {account}
-                <ToggleButtonGroup
-                  aria-label="Color theme"
-                  selectionMode="single"
-                  disallowEmptySelection
-                  size="sm"
-                  selectedKeys={[theme]}
-                  onSelectionChange={(keys) => {
-                    const [key] = keys;
-                    if (key === 'system' || key === 'light' || key === 'dark')
-                      setTheme(key);
-                  }}
-                >
-                  <ToggleButton isIconOnly aria-label="System" id="system">
-                    <LuMonitor aria-hidden="true" />
-                  </ToggleButton>
-                  <ToggleButton isIconOnly aria-label="Light" id="light">
-                    <ToggleButtonGroup.Separator />
-                    <LuSun aria-hidden="true" />
-                  </ToggleButton>
-                  <ToggleButton isIconOnly aria-label="Dark" id="dark">
-                    <ToggleButtonGroup.Separator />
-                    <LuMoon aria-hidden="true" />
-                  </ToggleButton>
-                </ToggleButtonGroup>
-              </>
-            )}
-            {compact && account}
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                </>
+              )}
+            </div>
+            {!compact && refreshUnavailableNote}
           </div>
-          {!compact && refreshUnavailableNote}
-        </div>
-      </header>
+        </header>
+      </ThemeControlContext>
 
       {(state.status === 'disconnected' || state.status === 'error') && (
         <Alert status="danger">

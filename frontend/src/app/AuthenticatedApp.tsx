@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useImperativeHandle,
   useRef,
@@ -21,6 +22,7 @@ import {
   Input,
   Label,
   Meter,
+  Separator,
   Skeleton,
   Tabs,
   TextField,
@@ -40,6 +42,8 @@ import { useAccountProfile } from '../lib/useAccountProfile';
 import type { AuthState } from '../lib/authLifecycle';
 import { useAppAuth } from '../lib/useAppAuth';
 import { useCompactLayout } from '../lib/useCompactLayout';
+import { ThemeControlContext } from '../lib/themeControl';
+import { themeMenuSection } from './themeMenu';
 import { App } from './App';
 import { AdminSettingsDialog } from './AdminSettingsDialog';
 import { AISettingsPanel } from './AISettingsPanel';
@@ -272,6 +276,12 @@ export function AccountMenu({
   settingsRef?: Ref<AdminSettingsHandle>;
 }) {
   const compact = useCompactLayout();
+  const themeControl = use(ThemeControlContext);
+  // Phones fold the workspace theme choice into this menu.
+  const themeItems =
+    compact && themeControl
+      ? [themeMenuSection(themeControl), <Separator key="theme-separator" />]
+      : null;
   const photo = googlePhotoUrl(profile?.photo_url);
   const name = profile?.display_name || 'Account';
   const avatar = (
@@ -317,6 +327,7 @@ export function AccountMenu({
         compact={compact}
         content={content}
         identity={identity}
+        themeItems={themeItems}
         signOut={signOut}
         settingsRef={settingsRef}
       />
@@ -339,9 +350,12 @@ export function AccountMenu({
             if (key === 'sign-out') signOut();
           }}
         >
-          <Dropdown.Item id="sign-out" textValue="Sign out">
-            <Label>Sign out</Label>
-          </Dropdown.Item>
+          {themeItems}
+          <Dropdown.Section aria-label="Account">
+            <Dropdown.Item id="sign-out" textValue="Sign out">
+              <Label>Sign out</Label>
+            </Dropdown.Item>
+          </Dropdown.Section>
         </Dropdown.Menu>
       </Dropdown.Popover>
     </Dropdown>
@@ -356,6 +370,7 @@ function AdminAccountMenu({
   compact,
   content,
   identity,
+  themeItems,
   signOut,
   settingsRef,
 }: {
@@ -363,6 +378,7 @@ function AdminAccountMenu({
   compact: boolean;
   content: ReactNode;
   identity: ReactNode;
+  themeItems: ReactNode;
   signOut: () => void;
   settingsRef?: Ref<AdminSettingsHandle>;
 }) {
@@ -424,12 +440,15 @@ function AdminAccountMenu({
                 if (key === 'sign-out') signOut();
               }}
             >
-              <Dropdown.Item id="settings" textValue="Admin settings">
-                <Label>Admin settings</Label>
-              </Dropdown.Item>
-              <Dropdown.Item id="sign-out" textValue="Sign out">
-                <Label>Sign out</Label>
-              </Dropdown.Item>
+              {themeItems}
+              <Dropdown.Section aria-label="Account">
+                <Dropdown.Item id="settings" textValue="Admin settings">
+                  <Label>Admin settings</Label>
+                </Dropdown.Item>
+                <Dropdown.Item id="sign-out" textValue="Sign out">
+                  <Label>Sign out</Label>
+                </Dropdown.Item>
+              </Dropdown.Section>
             </Dropdown.Menu>
           </Dropdown.Popover>
         </Dropdown>
