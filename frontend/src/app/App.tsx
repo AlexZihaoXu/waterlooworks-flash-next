@@ -4,6 +4,7 @@ import {
   use,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -184,6 +185,7 @@ const WorkspaceView = memo(function WorkspaceView({
 }) {
   const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
+  const filterIds = useId();
   const [initialView] = useState(() => readBrowseUrl(window.location.search));
   const navigation = useRef(true);
   const [jobId, setJobId] = useState(() => readJobId(window.location.search));
@@ -798,6 +800,7 @@ const WorkspaceView = memo(function WorkspaceView({
                       >
                         <div className="stack-small">
                           <Typography
+                            id={`${filterIds}-${key}-label`}
                             type={compact ? 'body-xs' : 'body-sm'}
                             weight={
                               activeFilters[key].length ? 'medium' : 'normal'
@@ -815,12 +818,7 @@ const WorkspaceView = memo(function WorkspaceView({
                                 ? 'secondary'
                                 : 'tertiary'
                             }
-                            aria-label={`${filterLabels[key]} filter`}
-                            aria-description={
-                              activeFilters[key].length === 0
-                                ? 'All options'
-                                : `${activeFilters[key].length} selected`
-                            }
+                            aria-labelledby={`${filterIds}-${key}-label ${filterIds}-${key}-value`}
                             aria-haspopup="dialog"
                             isDisabled={
                               !connected ||
@@ -836,6 +834,7 @@ const WorkspaceView = memo(function WorkspaceView({
                           >
                             <span className="filter-trigger-content">
                               <Typography
+                                id={`${filterIds}-${key}-value`}
                                 type="body-sm"
                                 truncate
                                 color={

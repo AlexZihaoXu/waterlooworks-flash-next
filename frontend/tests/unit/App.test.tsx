@@ -67,27 +67,26 @@ describe('App', () => {
     expect(card.getByRole('heading', { name: 'Filters' })).toBeInTheDocument();
     expect(card.getByRole('separator')).toBeInTheDocument();
     expect(card.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
-    for (const name of [
-      'Organization filter',
-      'Country filter',
-      'City filter',
-      'Targeted disciplines filter',
-    ]) {
+    const names = [
+      'Organization All organizations',
+      'Country All countries',
+      'City All cities',
+      'Targeted disciplines All targeted disciplines',
+    ];
+    for (const name of names) {
       const button = card.getByRole('button', { name });
       expect(button).toHaveClass('button--tertiary');
       expect(button.querySelector('.typography--color-muted')).not.toBeNull();
+      // WCAG 2.5.3: the visible label and value form the name; no aria-label
+      // replaces the text a voice-control user can see.
+      expect(button).not.toHaveAttribute('aria-label');
+      expect(name).toContain(button.textContent!.trim());
     }
     expect(
       card
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label')),
-    ).toEqual([
-      'Clear filters',
-      'Organization filter',
-      'Country filter',
-      'City filter',
-      'Targeted disciplines filter',
-    ]);
+    ).toEqual(['Clear filters', null, null, null, null]);
   });
   it('shows an honest disconnected workspace without starting collection', () => {
     render(<App state={{ status: 'disconnected' }} />);
