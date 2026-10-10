@@ -10,6 +10,7 @@ import io
 import json
 import os
 import sqlite3
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -18,7 +19,10 @@ from cryptography.fernet import Fernet
 from dotenv.parser import parse_stream
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-from waterlooworks_flash_next.runtime_secrets import read_runtime_secret
+from waterlooworks_flash_next.runtime_secrets import (
+    is_private_owned_file,
+    read_runtime_secret,
+)
 
 
 class CredentialError(Exception):
@@ -255,22 +259,51 @@ def initialize_key(env_path: Path, database_path: Path) -> None:
             and connection.execute("SELECT 1 FROM openai_credentials").fetchone()
         ):
             raise ValueError
-        lock = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            lock = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            raise CredentialError(
+                f"Key initialization lock {lock_path.name} already exists. If no "
+                "other provisioning run is active, a previous run was interrupted: "
+                "remove that sidecar file next to the env file and retry."
+            ) from None
         # Exclusive application lock; never run concurrently with other .env editors.
-        original = env_path.read_bytes() if env_path.exists() else b""
-        for binding in parse_stream(io.StringIO(original.decode("utf-8"))):
-            if binding.error or binding.key in {
-                "WW_CREDENTIALS_KEY",
-                "WW_CREDENTIALS_KEY_FILE",
-            }:
-                raise ValueError
-        addition = b"" if not original or original.endswith(b"\n") else b"\n"
-        addition += b"WW_CREDENTIALS_KEY=" + Fernet.generate_key() + b"\n"
-        descriptor = os.open(env_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(descriptor, "ab") as output:
+        # Open without following symlinks, then validate the descriptor itself so the
+        # earlier path check cannot be raced. Existing files must already be private.
+        descriptor = os.open(
+            env_path,
+            os.O_RDWR
+            | os.O_APPEND
+            | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "r+b") as output:
+            info = os.fstat(output.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or not is_private_owned_file(info)
+            ):
+                raise CredentialError(
+                    "Key initialization refused; the env file must be a private "
+                    "regular file (mode 0600, one link, owned by the running user)."
+                )
+            original = output.read()
+            for binding in parse_stream(io.StringIO(original.decode("utf-8"))):
+                if binding.error or binding.key in {
+                    "WW_CREDENTIALS_KEY",
+                    "WW_CREDENTIALS_KEY_FILE",
+                }:
+                    raise ValueError
+            addition = b"" if not original or original.endswith(b"\n") else b"\n"
+            addition += b"WW_CREDENTIALS_KEY=" + Fernet.generate_key() + b"\n"
             output.write(addition)
             output.flush()
             os.fsync(output.fileno())
+    except CredentialError:
+        raise
     except Exception:
         raise CredentialError(
             "Key initialization refused; require schema12, schema13 or schema14, no "
@@ -295,11 +328,10 @@ def main() -> None:
     args = parser.parse_args()
     try:
         initialize_key(args.env_file, args.database)
-    except CredentialError:
+    except CredentialError as error:
+        # Every CredentialError message is fixed text without paths or values.
         raise SystemExit(
-            "Key initialization refused; existing keys and "
-            "encrypted credentials are never replaced. "
-            "Check offline provisioning requirements."
+            f"{error} Existing keys and encrypted credentials are never replaced."
         ) from None
     print(
         "Backend credentials key initialized. Restrict file "

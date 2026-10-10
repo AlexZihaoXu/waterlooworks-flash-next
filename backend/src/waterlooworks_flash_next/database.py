@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -29,6 +30,7 @@ from waterlooworks_flash_next.inference_schema import migrate_inference
 from waterlooworks_flash_next.normalized_schema import migrate_normalized_storage
 from waterlooworks_flash_next.observations import migrate_observations, utc_timestamp
 from waterlooworks_flash_next.openai_settings import migrate_openai_settings
+from waterlooworks_flash_next.runtime_secrets import is_private_owned_file
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
 SCHEMA_VERSION = 14
@@ -368,7 +370,14 @@ def open_database(path: Path) -> sqlite3.Connection:
         try:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
-            pass
+            # SQLite's -wal/-shm sidecars inherit this file's mode, so one check covers
+            # all three. Never log the path or repair someone else's permissions.
+            info = os.stat(path)
+            if not stat.S_ISREG(info.st_mode) or not is_private_owned_file(info):
+                raise DatabaseError(
+                    "Database file permissions must be owner-only (0600) and owned "
+                    "by the running user."
+                ) from None
         else:
             os.close(descriptor)
         connection = sqlite3.connect(path, timeout=5)

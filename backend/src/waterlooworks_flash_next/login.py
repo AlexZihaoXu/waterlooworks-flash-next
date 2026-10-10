@@ -4,6 +4,7 @@ Never enable Playwright debug logging, tracing, or screenshots for this flow.
 """
 
 import os
+import stat
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -126,9 +127,45 @@ class LoginSession:
             return
         self.closed = True
         try:
-            self.context.close()
+            close_browser_context(self.context)
         finally:
             self.playwright.stop()
+
+
+def secure_profile_directory(profile_path: Path) -> None:
+    """Create or tighten the persistent profile to an owner-only real directory.
+
+    Refuses symlinks, non-directories and directories owned by someone else, since
+    the profile holds ADFS/Duo trusted-device state. Messages never include paths.
+    """
+    try:
+        profile_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = profile_path.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError
+        if os.name != "nt":
+            if info.st_uid != os.geteuid():
+                raise ValueError
+            if info.st_mode & 0o077:
+                profile_path.chmod(0o700)
+    except Exception:
+        raise LoginFlowError("Browser profile directory is unsafe.") from None
+
+
+def close_browser_context(context: BrowserContext) -> None:
+    """Drop session cookies, then close; clearing failures never block closing.
+
+    Cookies are cleared on every run so a lingering ADFS/WaterlooWorks session does
+    not outlive the bounded login. Device-trust cookies are discarded as well, so a
+    later run may need a fresh Duo approval.
+    """
+    try:
+        try:
+            context.clear_cookies()
+        except Exception:
+            pass
+    finally:
+        context.close()
 
 
 def service_worker_policy(block: bool) -> Literal["allow", "block"]:
@@ -174,7 +211,7 @@ def start_login(
     try:
         playwright = sync_playwright().start()
         profile_path = settings.profile
-        profile_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        secure_profile_directory(profile_path)
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=profile_path,
             headless=settings.headless,
@@ -268,7 +305,7 @@ def start_login(
         try:
             try:
                 if context is not None:
-                    context.close()
+                    close_browser_context(context)
             finally:
                 if playwright is not None:
                     playwright.stop()
