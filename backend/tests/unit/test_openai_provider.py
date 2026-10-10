@@ -183,6 +183,26 @@ def test_admin_usage_is_empty_and_read_only(tmp_path: Path) -> None:
     connection.close()
 
 
+def test_admin_usage_stays_readable_with_a_malformed_daily_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from auth_support import session_client
+
+    path = tmp_path / "empty.sqlite3"
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "five dollars")
+    with session_client(path) as client:
+        response = client.get("/api/admin/openai-usage")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["daily_cost_stop_usd"] is None
+        assert body["daily_cost_stop_invalid"] is True
+        assert "five dollars" not in response.text
+        monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "2.50")
+        body = client.get("/api/admin/openai-usage").json()
+        assert body["daily_cost_stop_usd"] == "2.50"
+        assert body["daily_cost_stop_invalid"] is False
+
+
 def test_missing_provider_key_fails_without_reservation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

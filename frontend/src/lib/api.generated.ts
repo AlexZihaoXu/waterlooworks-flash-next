@@ -822,9 +822,14 @@ export interface components {
       runs: components['schemas']['OpenAIRunUsage'][];
       /**
        * Daily Cost Stop Usd
-       * @description Optional rolling 24-hour known-cost stop across runs; null when WW_OPENAI_DAILY_COST_STOP_USD is unset.
+       * @description Optional rolling 24-hour known-cost stop across runs; null when WW_OPENAI_DAILY_COST_STOP_USD is unset or invalid.
        */
       daily_cost_stop_usd: string | null;
+      /**
+       * Daily Cost Stop Invalid
+       * @description WW_OPENAI_DAILY_COST_STOP_USD is set but malformed or out of range; every new OpenAI reservation is refused until it is corrected.
+       */
+      daily_cost_stop_invalid: boolean;
       /** Rolling 24H Attempts */
       rolling_24h_attempts: number;
       /** Rolling 24H Unpriced Attempts */

@@ -46,6 +46,16 @@ export function parseOpenAIUsage(value: unknown): Usage {
   if (
     !count(data.default_request_limit) ||
     !usd(data.default_known_cost_stop_usd) ||
+    // Daily-stop fields are optional on read; when the stop is set, its
+    // rolling totals must be valid too.
+    (data.daily_cost_stop_invalid !== undefined &&
+      typeof data.daily_cost_stop_invalid !== 'boolean') ||
+    (data.daily_cost_stop_usd !== undefined &&
+      data.daily_cost_stop_usd !== null &&
+      (!usd(data.daily_cost_stop_usd) ||
+        !usd(data.rolling_24h_known_usd) ||
+        !count(data.rolling_24h_attempts) ||
+        !count(data.rolling_24h_unpriced_attempts))) ||
     !Array.isArray(data.runs) ||
     data.runs.length > 20 ||
     !data.runs.every(

@@ -3341,7 +3341,12 @@
               }
             ],
             "title": "Daily Cost Stop Usd",
-            "description": "Optional rolling 24-hour known-cost stop across runs; null when WW_OPENAI_DAILY_COST_STOP_USD is unset."
+            "description": "Optional rolling 24-hour known-cost stop across runs; null when WW_OPENAI_DAILY_COST_STOP_USD is unset or invalid."
+          },
+          "daily_cost_stop_invalid": {
+            "type": "boolean",
+            "title": "Daily Cost Stop Invalid",
+            "description": "WW_OPENAI_DAILY_COST_STOP_USD is set but malformed or out of range; every new OpenAI reservation is refused until it is corrected."
           },
           "rolling_24h_attempts": {
             "type": "integer",
@@ -3378,6 +3383,7 @@
           "default_known_cost_stop_usd",
           "runs",
           "daily_cost_stop_usd",
+          "daily_cost_stop_invalid",
           "rolling_24h_attempts",
           "rolling_24h_unpriced_attempts",
           "rolling_24h_known_usd",

@@ -388,6 +388,56 @@ describe('AdminSettings usage and pending-save boundaries', () => {
     },
   );
 
+  it.each([
+    [{ daily_cost_stop_usd: null, daily_cost_stop_invalid: true }, 'invalid'],
+    [
+      {
+        daily_cost_stop_usd: '2.5',
+        daily_cost_stop_invalid: false,
+        rolling_24h_attempts: 3,
+        rolling_24h_unpriced_attempts: 1,
+        rolling_24h_known_usd: '0.01',
+        rolling_24h_total_usd: null,
+      },
+      'set',
+    ],
+  ] as const)(
+    'shows the rolling daily cost stop (%#: %s)',
+    async (daily, kind) => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation((path) =>
+        String(path).endsWith('openai-usage')
+          ? Promise.resolve(
+              Response.json({
+                default_request_limit: 1,
+                default_known_cost_stop_usd: '1',
+                runs: [],
+                ...daily,
+              }),
+            )
+          : new Promise(() => {}),
+      );
+      openSettings();
+      fireEvent.click(await screen.findByRole('tab', { name: 'Usage' }));
+      await screen.findByText('No recorded OpenAI runs.');
+      if (kind === 'invalid') {
+        const alert = screen
+          .getByText('Daily cost stop misconfigured')
+          .closest('.alert') as HTMLElement;
+        expect(alert).toHaveClass('alert--warning');
+        expect(alert).toHaveTextContent(/WW_OPENAI_DAILY_COST_STOP_USD/);
+      } else {
+        expect(
+          screen.getByText(
+            '$2.5 USD rolling 24-hour known-cost stop · $0.01 USD known in the last 24 hours (3 attempts, 1 unpriced)',
+          ),
+        ).toBeInTheDocument();
+        expect(
+          screen.queryByText('Daily cost stop misconfigured'),
+        ).not.toBeInTheDocument();
+      }
+    },
+  );
+
   it('distinguishes an empty usage ledger from unavailable usage', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((path) =>
       String(path).endsWith('openai-usage')

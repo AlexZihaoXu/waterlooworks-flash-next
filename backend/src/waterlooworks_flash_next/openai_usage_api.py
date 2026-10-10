@@ -9,6 +9,7 @@ from waterlooworks_flash_next.app_auth import require_admin
 from waterlooworks_flash_next.openai_ledger import (
     AttemptLedger,
     BudgetLimits,
+    BudgetStopped,
     daily_cost_stop_from_environment,
 )
 from waterlooworks_flash_next.openai_usage import PRICING_DATE, UsageCounters
@@ -36,7 +37,11 @@ class OpenAIUsageStatus(BaseModel):
     runs: list[OpenAIRunUsage]
     daily_cost_stop_usd: str | None = Field(
         description="Optional rolling 24-hour known-cost stop across runs; null "
-        "when WW_OPENAI_DAILY_COST_STOP_USD is unset."
+        "when WW_OPENAI_DAILY_COST_STOP_USD is unset or invalid."
+    )
+    daily_cost_stop_invalid: bool = Field(
+        description="WW_OPENAI_DAILY_COST_STOP_USD is set but malformed or out of "
+        "range; every new OpenAI reservation is refused until it is corrected."
     )
     rolling_24h_attempts: int
     rolling_24h_unpriced_attempts: int
@@ -52,7 +57,13 @@ class OpenAIUsageStatus(BaseModel):
 def read_usage(path: Path) -> OpenAIUsageStatus:
     ledger = AttemptLedger(path)
     limits = BudgetLimits.from_environment()
-    daily_stop = daily_cost_stop_from_environment()
+    # A mistyped ceiling must stay visible here instead of hiding usage behind
+    # a 500; reservations keep failing closed on it.
+    try:
+        daily_stop = daily_cost_stop_from_environment()
+        daily_stop_invalid = False
+    except BudgetStopped:
+        daily_stop, daily_stop_invalid = None, True
     connection = ledger._connect()
     try:
         # One WAL read snapshot for run selection, prices and all token counters.
@@ -98,6 +109,7 @@ def read_usage(path: Path) -> OpenAIUsageStatus:
             default_known_cost_stop_usd=str(limits.known_cost_stop_usd),
             runs=runs,
             daily_cost_stop_usd=None if daily_stop is None else str(daily_stop),
+            daily_cost_stop_invalid=daily_stop_invalid,
             rolling_24h_attempts=rolling.attempts,
             rolling_24h_unpriced_attempts=rolling.unpriced_attempts,
             rolling_24h_known_usd=str(rolling.known_usd),

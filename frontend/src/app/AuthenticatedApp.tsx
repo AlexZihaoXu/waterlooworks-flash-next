@@ -547,6 +547,30 @@ function AdminAccountMenu({
                       {refresh.usage.default_known_cost_stop_usd} USD known-cost
                       stop
                     </p>
+                    {refresh.usage.daily_cost_stop_invalid === true && (
+                      <Alert status="warning">
+                        <Alert.Indicator />
+                        <Alert.Content>
+                          <Alert.Title>
+                            Daily cost stop misconfigured
+                          </Alert.Title>
+                          <Alert.Description>
+                            WW_OPENAI_DAILY_COST_STOP_USD is not a USD amount
+                            between 0.01 and 1000. New OpenAI extraction is
+                            refused until the operator corrects it.
+                          </Alert.Description>
+                        </Alert.Content>
+                      </Alert>
+                    )}
+                    {typeof refresh.usage.daily_cost_stop_usd === 'string' && (
+                      <p>
+                        ${refresh.usage.daily_cost_stop_usd} USD rolling 24-hour
+                        known-cost stop · ${refresh.usage.rolling_24h_known_usd}{' '}
+                        USD known in the last 24 hours (
+                        {refresh.usage.rolling_24h_attempts} attempts,{' '}
+                        {refresh.usage.rolling_24h_unpriced_attempts} unpriced)
+                      </p>
+                    )}
                     <Description>
                       Most recent 20 runs; older records and saved checkpoints
                       remain. No automatic resume.
