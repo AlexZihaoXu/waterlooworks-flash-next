@@ -31,6 +31,7 @@ from waterlooworks_flash_next.content_storage import (
 from waterlooworks_flash_next.database import StoredListing
 from waterlooworks_flash_next.listings import (
     LISTING_URL,
+    CollectionInterrupted,
     FailureCategory,
     ListingFetchError,
     NoRedirect,
@@ -283,8 +284,10 @@ class DetailCollection:
             [StoredListing, Callable[[Callable[[], str]], str]], DetailSource
         ]
         | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.source = source
+        self.should_stop = should_stop
         self.bootstrap = bootstrap
         self.connection = connection
         self.run_id = run_id
@@ -396,6 +399,8 @@ class DetailCollection:
         self._progress()
         consecutive = 0
         for posting in self.postings:
+            if self.should_stop is not None and self.should_stop():
+                raise CollectionInterrupted
             established = self.source is not None
             attempt_id = start_content_attempt(self.connection, self.run_id, posting.id)
             try:

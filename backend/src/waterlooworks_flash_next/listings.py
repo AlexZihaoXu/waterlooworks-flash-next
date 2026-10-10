@@ -3,6 +3,7 @@
 import codecs
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import Message
@@ -70,6 +71,13 @@ class ListingFetchError(Exception):
         self.category = category
         self.retryable = retryable
         self.status = status
+
+
+class CollectionInterrupted(Exception):
+    """Cooperative stop between pages, postings or analysis batches; no network."""
+
+    def __init__(self) -> None:
+        super().__init__("Collection stopped by a shutdown request.")
 
 
 def http_failure(status: int) -> ListingFetchError:
@@ -392,6 +400,7 @@ class ListingCollection:
     duplicates: int = 0
     complete: bool = False
     received_at: dict[str, datetime] = field(default_factory=dict)
+    should_stop: Callable[[], bool] | None = None
 
     def run(self) -> None:
         log = stage_logger("listings")
@@ -420,6 +429,8 @@ class ListingCollection:
                     pages[-1],
                 )
                 for number in pages:
+                    if self.should_stop is not None and self.should_stop():
+                        raise CollectionInterrupted
                     if number == 1:
                         payload = first  # Do not refetch the captured browser page.
                     else:

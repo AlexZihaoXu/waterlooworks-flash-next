@@ -106,6 +106,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Cooperative stop: the worker finalizes its run as interrupted at the
+            # next page/posting/analysis-batch checkpoint before SIGKILL.
+            await asyncio.to_thread(service.request_stop)
             verifier.close()
             workspace_cache.close()
             keyword_cache.close()

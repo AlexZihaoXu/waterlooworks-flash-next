@@ -1,5 +1,12 @@
-"""One explicit listings refresh at a time, with durable cooldown and safe events."""
+"""One explicit listings refresh at a time, with durable cooldown and safe events.
 
+Offline operator recovery after a killed refresh (API stopped first):
+
+    python -m waterlooworks_flash_next.refresh recover <database>
+"""
+
+import argparse
+import json
 import logging
 import math
 import sqlite3
@@ -8,6 +15,7 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from waterlooworks_flash_next.api_models import RefreshLog, RefreshSnapshot
@@ -31,7 +39,11 @@ from waterlooworks_flash_next.detail_fetch import (
 from waterlooworks_flash_next.duo import at_waterlooworks, submit_and_observe_duo
 from waterlooworks_flash_next.export import EXPORT_FIELDS
 from waterlooworks_flash_next.jobs import open_all_jobs
-from waterlooworks_flash_next.listings import ListingCollection, ListingFetchError
+from waterlooworks_flash_next.listings import (
+    CollectionInterrupted,
+    ListingCollection,
+    ListingFetchError,
+)
 from waterlooworks_flash_next.logging import stage_logger
 from waterlooworks_flash_next.login import AuthDeadline, LoginSession, start_login
 from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
@@ -42,6 +54,9 @@ from waterlooworks_flash_next.refresh_logging import (
 )
 
 COOLDOWN_SECONDS = 300
+# Lifespan shutdown waits this long for the worker to reach a stop checkpoint;
+# below compose stop_grace_period (190 s) so finalization precedes SIGKILL.
+SHUTDOWN_JOIN_SECONDS = 150.0
 
 
 class RefreshAnalysisError(Exception):
@@ -62,6 +77,11 @@ def configured_detail_limit(value: str | None) -> int | None:
     return int(value)
 
 
+_INTERRUPT_ATTEMPTS = tuple(
+    f"UPDATE {table} SET status='interrupted',finished_at=?,"
+    "error_category='cancelled' WHERE run_id=? AND status='running'"
+    for table in ("posting_content_attempts", "posting_fetch_attempts")
+)
 FAILED_SAME_REVISION = "failed_same_revision"
 _ITEM_FAILURES = frozenset(category.value for category in ITEM_FAILURE_CATEGORIES)
 # Latest terminal content attempt and the listing hash observed in that attempt's run.
@@ -136,7 +156,8 @@ class RefreshConflict(Exception):
 def claim_refresh(path: Path) -> str:
     """SQLite transaction prevents concurrent claims, including across API processes.
 
-    Stale running rows are NOT automatically cleared after a crash.
+    Stale running rows are NOT automatically cleared after a crash; the explicit
+    offline ``recover`` command finalizes them.
     """
     connection = open_database(path)
     try:
@@ -179,6 +200,76 @@ def claim_refresh(path: Path) -> str:
         connection.close()
 
 
+def recover_interrupted_runs(path: Path) -> dict[str, int]:
+    """Finalize running collection rows left by a killed process as interrupted.
+
+    Holding the provider lease proves no live refresh/extraction owns the database
+    (ProviderBusy otherwise). Never resumes, relogs in, fetches or infers.
+    """
+    with ProviderLease(path):
+        connection = open_database(path)
+        try:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                now = datetime.now(UTC).isoformat(timespec="microseconds")
+                runs = [
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT id FROM collection_runs WHERE status='running'"
+                    )
+                ]
+                attempts = 0
+                for run_id in runs:
+                    for statement in _INTERRUPT_ATTEMPTS:
+                        attempts += connection.execute(
+                            statement, (now, run_id)
+                        ).rowcount
+                    connection.execute(
+                        "UPDATE collection_runs SET status='interrupted',"
+                        "finished_at=? WHERE id=? AND status='running'",
+                        (now, run_id),
+                    )
+            return {"runs": len(runs), "attempts": attempts}
+        finally:
+            connection.close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m waterlooworks_flash_next.refresh",
+        description="Explicit offline refresh recovery; stop the API first.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    recover = commands.add_parser(
+        "recover",
+        help="Mark a stale running refresh and its open attempts interrupted.",
+    )
+    recover.add_argument("database", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        result = recover_interrupted_runs(args.database)
+    except ProviderBusy:
+        print(
+            "Refresh recovery refused: the database is busy with a live refresh or "
+            "extraction. Stop it first.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        print("Refresh recovery failed; diagnostics suppressed.", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {
+                "attempts_interrupted": result["attempts"],
+                "runs_interrupted": result["runs"],
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 class RefreshService:
     def __init__(
         self,
@@ -196,6 +287,21 @@ class RefreshService:
         self.cooldown_until: datetime | None = None
         self.provider_lease: ProviderLease | None = None
         self.auth_challenge = AuthChallenge()
+        self.stop_event = threading.Event()
+
+    def stop_requested(self) -> bool:
+        return self.stop_event.is_set()
+
+    def _checkpoint(self) -> None:
+        if self.stop_event.is_set():
+            raise CollectionInterrupted
+
+    def request_stop(self, timeout: float | None = SHUTDOWN_JOIN_SECONDS) -> None:
+        """Ask the worker to stop at its next checkpoint and wait a bounded time."""
+        self.stop_event.set()
+        worker = self.worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout)
 
     def restore(self) -> None:
         """Restore cooldown/unfinished state without automatically restarting."""
@@ -211,10 +317,14 @@ class RefreshService:
                 "ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
             if row:
+                status = row[1]
+                if status == "running" and self._lease_available():
+                    # No live owner can hold this row: a killed process left it.
+                    status = "interrupted"
                 self.state = RefreshSnapshot.model_validate(
                     {
                         "run_id": row[0],
-                        "status": row[1],
+                        "status": status,
                         "stage": "recovery_required"
                         if row[1] == "running"
                         else "previous_run",
@@ -249,6 +359,13 @@ class RefreshService:
                 self._analysis_progress(connection, row[0], log=False)
         finally:
             connection.close()
+
+    def _lease_available(self) -> bool:
+        try:
+            with ProviderLease(self.path):
+                return True
+        except ProviderBusy:
+            return False
 
     def snapshot(self) -> RefreshSnapshot:
         with self.lock:
@@ -310,6 +427,7 @@ class RefreshService:
                 lease.close()
                 raise
             self.provider_lease = lease
+            self.stop_event.clear()
             self.state = RefreshSnapshot(
                 run_id=run_id, status="running", stage="authentication"
             )
@@ -331,9 +449,19 @@ class RefreshService:
                 raise RuntimeError("Could not start refresh worker.") from None
             return run_id
 
-    def _finish(self, run_id: str, success: bool, category: str | None) -> None:
+    def _finish(
+        self,
+        run_id: str,
+        success: bool,
+        category: str | None,
+        *,
+        interrupted: bool = False,
+    ) -> None:
         from datetime import timedelta
 
+        status: Literal["completed", "failed", "interrupted"] = (
+            "completed" if success else "interrupted" if interrupted else "failed"
+        )
         now = datetime.now(UTC)
         connection = open_database(self.path)
         try:
@@ -343,7 +471,7 @@ class RefreshService:
                     "pages_completed=?, records_received=?, unique_postings=?, "
                     "duplicates=?, error_category=? WHERE id=?",
                     (
-                        "completed" if success else "failed",
+                        status,
                         now.isoformat(timespec="microseconds"),
                         self.state.pages_completed,
                         self.state.records_received,
@@ -359,7 +487,7 @@ class RefreshService:
         finally:
             connection.close()
         with self.lock:
-            self.state.status = "completed" if success else "failed"
+            self.state.status = status
             self.state.stage = "complete" if success else "stopped"
             self.state.eta_seconds = None
             self.state.detail_wait_seconds = 0
@@ -378,6 +506,9 @@ class RefreshService:
                 else "Listing and detail-content refresh completed."
             )
             if success
+            else "Refresh interrupted by shutdown; completed checkpoints are "
+            "preserved. No automatic restart."
+            if interrupted
             else "Refresh stopped; completed checkpoints are preserved. "
             "No automatic restart.",
             "info" if success else "error",
@@ -423,6 +554,7 @@ class RefreshService:
             InferenceConfig,
             create_inference_job,
             inference_job_status,
+            request_inference_stop,
             run_inference_job,
         )
         from waterlooworks_flash_next.inference_schema import _ERROR_CATEGORIES
@@ -469,8 +601,16 @@ class RefreshService:
                 "at most 4 simultaneous requests; validated cache reused."
             )
 
+            stopping = False
+
             def progress() -> None:
+                nonlocal stopping
                 self._analysis_progress(connection, job_id)
+                if self.stop_event.is_set() and not stopping:
+                    # Durable stop flag: no new batch is claimed; in-flight
+                    # completions may still checkpoint.
+                    stopping = True
+                    request_inference_stop(connection, job_id)
 
             progress()
             if inference_job_status(connection, job_id).persisted_status == "pending":
@@ -481,6 +621,7 @@ class RefreshService:
                     provider_lease=self.provider_lease,
                 )
             progress()
+            self._checkpoint()
             status = inference_job_status(connection, job_id)
             for reason, count in connection.execute(
                 "SELECT error_category,count(*) FROM inference_job_items "
@@ -511,7 +652,7 @@ class RefreshService:
                 "unknown; no model reasoning or posting content was logged.",
                 "warning" if status.counts.get("rejected") else "info",
             )
-        except RefreshAnalysisError:
+        except (RefreshAnalysisError, CollectionInterrupted):
             raise
         except Exception:
             self.emit(
@@ -553,6 +694,7 @@ class RefreshService:
     def _run(self, run_id: str) -> None:
         session: LoginSession | None = None
         success = False
+        interrupted = False
         category: str | None = "internal"
         handler = SafeRefreshHandler(self)
         scopes = [stage_logger(scope) for scope in ("login", "duo", "jobs", "listings")]
@@ -575,6 +717,7 @@ class RefreshService:
             )
             if not at_waterlooworks(session.page):
                 raise RuntimeError("Authentication not confirmed.")
+            self._checkpoint()
             source = open_all_jobs(session.page)
             if source is None:
                 raise RuntimeError("No fresh listing source.")
@@ -585,7 +728,7 @@ class RefreshService:
                 self.state.total_pages = max(
                     1, math.ceil(source.first_page.totalResults / source.page_size)
                 )
-            collection = ListingCollection(source)
+            collection = ListingCollection(source, should_stop=self.stop_requested)
             collection.run()  # Captured page 1 reused; existing 2/4/8-second policy.
             with self.lock:
                 self.state.stage = "saving"
@@ -685,6 +828,7 @@ class RefreshService:
                     queue,
                     self._detail_progress,
                     bootstrap=bootstrap,
+                    should_stop=self.stop_requested,
                 )
                 details.run()
                 if details.failed:
@@ -699,8 +843,11 @@ class RefreshService:
             if session is not None:
                 session.close()
                 session = None
+            self._checkpoint()
             self._analyze_saved_data(run_id)
             success, category = True, None
+        except CollectionInterrupted:
+            interrupted, category = True, None
         except RefreshAnalysisError:
             category = "internal"
         except ListingFetchError as error:
@@ -726,7 +873,7 @@ class RefreshService:
             for logger in scopes:
                 logger.removeHandler(handler)
             try:
-                self._finish(run_id, success, category)
+                self._finish(run_id, success, category, interrupted=interrupted)
             except Exception:
                 with self.lock:
                     self.state.status = "failed"
@@ -784,3 +931,7 @@ class SafeRefreshHandler(logging.Handler):
             else "debug"
         )
         self.service.emit(safe_message(record), level)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
