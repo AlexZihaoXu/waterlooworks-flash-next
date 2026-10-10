@@ -10,7 +10,7 @@ import {
 import { LuTerminal } from 'react-icons/lu';
 import { RefreshLogEntry } from './RefreshLogEntry';
 import { RefreshPanel } from './RefreshPanel';
-import { refreshProgress } from '../lib/refreshProgress';
+import { refreshProgress, refreshStageLabel } from '../lib/refreshProgress';
 import { refreshRunning } from '../lib/refreshState';
 import { displayNumber, type RefreshSnapshot } from '../lib/workspace';
 import { useLogFollow } from '../lib/useLogFollow';
@@ -230,7 +230,7 @@ export function RefreshActivity({
         <RefreshConsole
           key={runId}
           entries={entries}
-          status={`${refresh.status} · ${refresh.stage.replaceAll('_', ' ')}`}
+          status={`${refresh.status} · ${refreshStageLabel(refresh.stage)}`}
           revision={`${runId}:${refresh.logs.at(-1)?.sequence ?? 0}`}
         />
       </RefreshPanel>
