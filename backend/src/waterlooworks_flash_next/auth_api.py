@@ -89,7 +89,15 @@ def install_auth(
             response = await call_next(request)
         except Exception:
             return refuse(500, "Request unavailable; diagnostics suppressed.")
-        response.headers["Cache-Control"] = "no-store"
+        if request.url.path.startswith("/api/admin/"):
+            # Admin settings, step-up reveal and Duo status: never cacheable,
+            # whatever a handler or error path set.
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
+        else:
+            # Default no-store, but respect an explicit handler policy (for
+            # example the keyword index's ETag revalidation).
+            response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 

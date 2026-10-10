@@ -428,3 +428,28 @@ def test_auth_storage_overload_is_503_with_retry_after(tmp_path: Path) -> None:
             "detail": "Authentication is busy. Try again shortly."
         }
         assert client.post("/api/auth/prepare", json={}).status_code == 200
+
+
+def test_admin_responses_are_always_no_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import secrets
+
+    monkeypatch.delenv("WW_CREDENTIALS_KEY", raising=False)
+    monkeypatch.delenv("WW_CREDENTIALS_KEY_FILE", raising=False)
+    with session_client(tmp_path / "db.sqlite3") as client:
+        responses = [
+            client.get("/api/admin/openai-key"),
+            client.get("/api/admin/waterlooworks-credentials"),
+            client.get("/api/admin/refresh-auth"),
+            client.post(
+                "/api/admin/openai-key/reveal",
+                json={
+                    "challenge": secrets.token_urlsafe(32),
+                    "id_token": secrets.token_urlsafe(32),
+                },
+            ),
+        ]
+        for response in responses:
+            assert response.headers["cache-control"] == "no-store"
+            assert response.headers["pragma"] == "no-cache"

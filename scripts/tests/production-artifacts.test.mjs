@@ -139,6 +139,62 @@ test('nginx exact-host TLS boundary strips forwarding, disables SSE buffering an
   assert.match(nginx, /access_log off/);
 });
 
+test('nginx sends strict browser security headers on every response', () => {
+  const nginx = read('deployment/nginx.conf.template');
+  const server = nginx.split(/\n    server \{/)[1];
+  // Server-level only: a location-level add_header would drop these.
+  assert.doesNotMatch(
+    server
+      .split(/\n        location /)
+      .slice(1)
+      .join(''),
+    /add_header/,
+  );
+  const header = (name) => {
+    const match = server.match(
+      new RegExp(`add_header ${name} "([^"]+)" always;`),
+    );
+    assert.ok(match, name);
+    return match[1];
+  };
+  const csp = header('Content-Security-Policy');
+  const directives = Object.fromEntries(
+    csp
+      .split(';')
+      .map((part) => part.trim().split(/\s+/))
+      .filter((parts) => parts[0])
+      .map(([name, ...values]) => [name, values]),
+  );
+  assert.deepEqual(directives['default-src'], ["'self'"]);
+  assert.deepEqual(directives['script-src'], [
+    "'self'",
+    'https://apis.google.com',
+  ]);
+  assert.deepEqual(directives['connect-src'], [
+    "'self'",
+    'https://identitytoolkit.googleapis.com',
+    'https://securetoken.googleapis.com',
+  ]);
+  assert.deepEqual(directives['frame-src'], [
+    'https://alex-xu-central.firebaseapp.com',
+  ]);
+  assert.deepEqual(directives['frame-ancestors'], ["'none'"]);
+  assert.deepEqual(directives['object-src'], ["'none'"]);
+  assert.deepEqual(directives['base-uri'], ["'none'"]);
+  assert.ok(!csp.includes("'unsafe-eval'"));
+  assert.ok(!directives['script-src'].includes("'unsafe-inline'"));
+  assert.match(header('Strict-Transport-Security'), /^max-age=\d{8,}/);
+  assert.equal(header('X-Frame-Options'), 'DENY');
+  assert.equal(header('X-Content-Type-Options'), 'nosniff');
+  assert.equal(header('Referrer-Policy'), 'no-referrer');
+  assert.equal(
+    header('Cross-Origin-Opener-Policy'),
+    'same-origin-allow-popups',
+  );
+  assert.match(header('Permissions-Policy'), /camera=\(\)/);
+  assert.match(header('Permissions-Policy'), /geolocation=\(\)/);
+});
+
 test('nginx rate-limits the anonymous auth endpoints', () => {
   const nginx = read('deployment/nginx.conf.template');
   // Only /api/auth/ gets a non-empty key; empty keys are never limited.
