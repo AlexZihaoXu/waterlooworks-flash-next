@@ -20,8 +20,10 @@ import {
   Form,
   Input,
   Label,
+  Skeleton,
   Tabs,
   TextField,
+  Typography,
 } from '@heroui/react';
 import { useAdminCredentials } from '../lib/useAdminCredentials';
 import { useOpenAISettings } from '../lib/useOpenAISettings';
@@ -515,19 +517,19 @@ function AdminAccountMenu({
             <Tabs.Panel id="usage">
               <div className="grid gap-4">
                 <div className="grid gap-2">
-                  <h3>OpenAI usage and limits</h3>
-                  <p>
-                    The known-cost stop threshold is not a guaranteed cap.
-                    In-flight calls may add charges.
-                  </p>
+                  <Typography type="h5" render={(props) => <h3 {...props} />}>
+                    OpenAI usage and limits
+                  </Typography>
                   <Description>
-                    Partial or failed runs and unknown usage can leave analysis
-                    incomplete. Usage is not proof of completed analysis.
+                    The known-cost stop threshold is not a guaranteed cap.
+                    Unknown is not zero.
                   </Description>
                 </div>
                 {refresh.usage ? (
                   <div className="grid gap-2">
-                    <h4>Current operator limits</h4>
+                    <Typography type="h6" render={(props) => <h4 {...props} />}>
+                      Current operator limits
+                    </Typography>
                     <p>
                       {refresh.usage.default_request_limit} attempts per run · $
                       {refresh.usage.default_known_cost_stop_usd} USD known-cost
@@ -584,24 +586,65 @@ function AdminAccountMenu({
                                 {run.output_tokens ?? 'unknown'} (includes
                                 reasoning: {run.reasoning_tokens ?? 'unknown'}).
                               </Description>
-                              <Description>
-                                Cached and reasoning subsets are already
-                                included, not extra tokens. Costs are estimates,
-                                not invoices.
-                              </Description>
                             </Accordion.Body>
                           </Accordion.Panel>
                         </Accordion.Item>
                       ))}
                     </Accordion>
                   </div>
+                ) : refresh.usageError ? (
+                  <Alert status="warning">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Title>Usage unavailable</Alert.Title>
+                      <Alert.Description>
+                        Usage could not be loaded. Unknown is not zero. Check
+                        your session or reopen settings.
+                      </Alert.Description>
+                    </Alert.Content>
+                  </Alert>
                 ) : (
-                  <p role="status">
-                    Usage unavailable or loading. Unknown is not zero.
-                  </p>
+                  <div
+                    className="grid gap-2"
+                    role="status"
+                    aria-label="Loading usage"
+                    aria-busy="true"
+                  >
+                    {[75, 55, 65].map((width) => (
+                      <div
+                        key={width}
+                        className="skeleton-text-line"
+                        style={{ width: `${width}%` }}
+                      >
+                        <Skeleton>
+                          <div className="skeleton-line-space" />
+                        </Skeleton>
+                      </div>
+                    ))}
+                  </div>
                 )}
                 <Accordion>
-                  <Accordion.Item>
+                  <Accordion.Item id="about-estimates">
+                    <Accordion.Heading>
+                      <Accordion.Trigger>
+                        About these estimates
+                        <Accordion.Indicator />
+                      </Accordion.Trigger>
+                    </Accordion.Heading>
+                    <Accordion.Panel>
+                      <Accordion.Body>
+                        <Description>
+                          In-flight calls may add charges after the stop
+                          threshold. Partial or failed runs and unknown usage
+                          can leave analysis incomplete; usage is not proof of
+                          completed analysis. Cached and reasoning token subsets
+                          are already included in input/output totals, not extra
+                          tokens. Costs are estimates, not invoices.
+                        </Description>
+                      </Accordion.Body>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                  <Accordion.Item id="model-pricing">
                     <Accordion.Heading>
                       <Accordion.Trigger>
                         Model and pricing details
@@ -614,8 +657,7 @@ function AdminAccountMenu({
                         <Description>
                           Standard pricing estimate as of 2026-09-09, USD per
                           million tokens: input $0.20; cached read $0.02; cache
-                          write $0.25; output $1.20. Estimate only, not an
-                          invoice.
+                          write $0.25; output $1.20.
                         </Description>
                       </Accordion.Body>
                     </Accordion.Panel>

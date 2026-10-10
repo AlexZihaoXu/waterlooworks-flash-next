@@ -103,6 +103,21 @@ describe('AdminSettings documented tab composition', () => {
     expect(
       screen.queryByText(/20 attempts|\$1 known-cost/),
     ).not.toBeInTheDocument();
+    // Styled semantic headings and a loading skeleton, not a merged
+    // "unavailable or loading" message.
+    expect(
+      screen.getByRole('heading', {
+        name: 'OpenAI usage and limits',
+        level: 3,
+      }),
+    ).toHaveClass('typography');
+    expect(
+      screen.getByRole('button', { name: 'About these estimates' }),
+    ).toHaveAttribute('aria-expanded', 'false');
+    const loadingUsage = screen.getByRole('status', { name: 'Loading usage' });
+    expect(loadingUsage).toHaveAttribute('aria-busy', 'true');
+    expect(loadingUsage.querySelector('.skeleton')).not.toBeNull();
+    expect(screen.queryByText(/Usage unavailable/)).not.toBeInTheDocument();
     fireEvent.keyDown(usage, { key: 'ArrowRight' });
     fireEvent.keyUp(usage, { key: 'ArrowRight' });
     expect(
@@ -128,9 +143,14 @@ describe('AdminSettings documented tab composition', () => {
       await screen.findByText(/Duo status unavailable/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
+    const alert = (await screen.findByText('Usage unavailable')).closest(
+      '.alert',
+    ) as HTMLElement;
+    expect(alert).toHaveClass('alert--warning');
+    expect(alert).toHaveTextContent(/Unknown is not zero/);
     expect(
-      screen.getByText(/Usage unavailable or loading. Unknown is not zero/),
-    ).toBeInTheDocument();
+      screen.queryByRole('status', { name: 'Loading usage' }),
+    ).not.toBeInTheDocument();
   });
 
   it.each(['Usage', 'Go to Refresh'])(
@@ -355,9 +375,14 @@ describe('AdminSettings usage and pending-save boundaries', () => {
       expect(screen.getByText(/Input: unknown/)).toHaveTextContent(
         'Input: unknown (includes cached read: 0, cache write: unknown). Output: 0 (includes reasoning: unknown).',
       );
-      expect(screen.getByText(/not extra tokens/)).toBeVisible();
       expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
       expect(screen.getByText(/not a guaranteed cap/)).toBeVisible();
+      // Shared disclaimers appear once, not repeated in every run panel.
+      fireEvent.click(
+        screen.getByRole('button', { name: 'About these estimates' }),
+      );
+      expect(await screen.findByText(/not extra tokens/)).toBeVisible();
+      expect(screen.getAllByText(/not extra tokens/)).toHaveLength(1);
       expect(screen.getByText(/Partial or failed runs/)).toBeVisible();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     },
@@ -495,6 +520,7 @@ describe('AdminSettings transient key presentation', () => {
           expires_in_seconds: 180,
         },
         usage: null,
+        usageError: false,
         message: '',
         clear: vi.fn(),
       });

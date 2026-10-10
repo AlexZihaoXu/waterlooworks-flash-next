@@ -117,3 +117,22 @@ it('retains exact Decimal scientific cost strings and unknown subsets without ad
   counters.runs[0].known_usd = 'NaN';
   expect(() => parseOpenAIUsage(counters)).toThrow('Usage unavailable.');
 });
+
+it('separates a usage read failure from a usage read still loading', async () => {
+  let fail!: (error: Error) => void;
+  vi.spyOn(globalThis, 'fetch').mockImplementation((path) =>
+    String(path).endsWith('openai-usage')
+      ? new Promise((_, reject) => {
+          fail = reject;
+        })
+      : new Promise(() => {}),
+  );
+  const { result } = renderHook(() => useAdminRefreshStatus(true, 'admin-a'));
+  await waitFor(() => expect(fail).toBeTypeOf('function'));
+  expect(result.current.usage).toBeNull();
+  expect(result.current.usageError).toBe(false);
+  await act(async () => fail(new Error(crypto.randomUUID())));
+  await waitFor(() => expect(result.current.usageError).toBe(true));
+  act(() => result.current.clear());
+  expect(result.current.usageError).toBe(false);
+});

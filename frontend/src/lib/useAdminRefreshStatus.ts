@@ -94,6 +94,8 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
   const poll = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
+  // Distinguishes a failed usage read from one still loading (null usage).
+  const [usageError, setUsageError] = useState(false);
   const [message, setMessage] = useState('');
   const clear = useCallback(() => {
     lifecycle.current.begin();
@@ -103,6 +105,7 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
     poll.current = null;
     setChallenge(null);
     setUsage(null);
+    setUsageError(false);
     setMessage('');
   }, []);
 
@@ -145,10 +148,14 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
           read('/api/admin/openai-usage', lifecycle.current.signal)
             .then(parseOpenAIUsage)
             .then((value) => {
-              if (current()) setUsage(value);
+              if (!current()) return;
+              setUsage(value);
+              setUsageError(false);
             })
             .catch(() => {
-              if (current()) setUsage(null);
+              if (!current()) return;
+              setUsage(null);
+              setUsageError(true);
             }),
         ]);
         // One pair at a time, bounded to 15s each; no poll while hidden/closed.
@@ -169,5 +176,5 @@ export function useAdminRefreshStatus(isOpen: boolean, uid: string) {
     };
   }, [isOpen, uid, clear]);
 
-  return { challenge, usage, message, clear };
+  return { challenge, usage, usageError, message, clear };
 }

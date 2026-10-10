@@ -36,6 +36,7 @@ import {
   Button,
   Card,
   Chip,
+  Disclosure,
   Drawer,
   Label,
   ListBox,
@@ -1113,16 +1114,33 @@ const WorkspaceView = memo(function WorkspaceView({
             </Typography>
           )}
           {payMetric && paySortAvailable && (
-            <Typography type="body-xs" color="muted">
-              Highest first within comparable currency / pay-period groups.
-              Average = (minimum + maximum) ÷ 2; tiers use outer bounds.
-              Weekly/monthly/yearly pay uses stated hours or 40h/week, with 52
-              weeks/year. Currency conversion follows your display setting using
-              dated FX. Unspecified currencies count as CAD for sorting and
-              colors; * marks that assumption. Missing salary sorts as zero;
-              unknown units and disputed pay remain unranked. Colors use maximum
-              CAD/hour pay.
-            </Typography>
+            <Disclosure>
+              <Disclosure.Heading>
+                <Disclosure.Trigger>
+                  <span className="filter-heading">
+                    <Typography type="body-xs" color="muted">
+                      How pay sorting works
+                    </Typography>
+                    <Disclosure.Indicator />
+                  </span>
+                </Disclosure.Trigger>
+              </Disclosure.Heading>
+              <Disclosure.Content>
+                <Disclosure.Body>
+                  <Typography type="body-xs" color="muted">
+                    Highest first within comparable currency / pay-period
+                    groups. Average = (minimum + maximum) ÷ 2; tiers use outer
+                    bounds. Weekly/monthly/yearly pay uses stated hours or
+                    40h/week, with 52 weeks/year. Currency conversion follows
+                    your display setting using dated FX. Unspecified currencies
+                    count as CAD for sorting and colors; * marks that
+                    assumption. Missing salary sorts as zero; unknown units and
+                    disputed pay remain unranked. Colors use maximum CAD/hour
+                    pay.
+                  </Typography>
+                </Disclosure.Body>
+              </Disclosure.Content>
+            </Disclosure>
           )}
           {signedOut ? (
             <div className="auth-results">
