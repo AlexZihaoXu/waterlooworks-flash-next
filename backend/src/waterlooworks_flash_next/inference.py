@@ -32,7 +32,6 @@ from waterlooworks_flash_next.model_validation import (
     ExtractionCandidate,
     ModelOutputError,
     ValidatedExtraction,
-    validate_extraction,
 )
 from waterlooworks_flash_next.normalized_storage import decimal_to_storage
 from waterlooworks_flash_next.openai_ledger import (
@@ -48,6 +47,11 @@ from waterlooworks_flash_next.pi_bridge import (
     PiSession,
     SidecarError,
     require_sidecar,
+)
+from waterlooworks_flash_next.pi_submission import (
+    SubmissionContext,
+    SubmissionRejected,
+    validate_submission,
 )
 from waterlooworks_flash_next.provider_lease import ProviderLease
 
@@ -220,33 +224,30 @@ def _database_path(connection: sqlite3.Connection) -> Path:
     return Path(connection.execute("PRAGMA database_list").fetchone()[2])
 
 
-def _validate_submission(
-    item: _Item, payload: dict[str, object]
-) -> ValidatedExtraction:
-    candidate = ExtractionCandidate.model_validate(payload)
-    return validate_extraction(
-        candidate,
+def submission_context(item: _Item) -> SubmissionContext:
+    return SubmissionContext(
         item.fields,
-        source_hash=item.content_hash,
-        request_compensation=item.request_compensation,
-        request_skills=item.request_skills,
-        deterministic_skills=item.deterministic_skills,
+        item.content_hash,
+        item.request_compensation,
+        item.request_skills,
+        item.deterministic_skills,
     )
 
 
+def _validate_submission(
+    item: _Item, payload: dict[str, object]
+) -> ValidatedExtraction:
+    """Resolve cited/approximate evidence to exact text, then validate."""
+    return validate_submission(dict(payload), submission_context(item))
+
+
 def _check(item: _Item, payload: dict[str, object]) -> tuple[bool, str | None]:
-    """Authoritative in-loop check; hints are fixed text, never source values."""
+    """Authoritative in-loop check with fixed, value-free reason hints."""
     try:
         _validate_submission(item, payload)
         return True, None
-    except ValidationError:
-        return False, "Rejected: the payload does not match the required schema."
-    except (ModelOutputError, ValueError):
-        return False, (
-            "Rejected: every evidence text must be copied exactly from the named "
-            "section, categories must follow the request flags, and the pay and "
-            "skill rules apply. Fix the evidence or return empty lists."
-        )
+    except SubmissionRejected as rejected:
+        return False, rejected.hint
 
 
 # Sidecar per-item outcome -> (job category, retryable, halt). Caps and model
@@ -302,7 +303,7 @@ def _complete(item: _Item, session: PiSession) -> ValidatedExtraction:
         raise _failure(result, session.config.is_zero_cost)
     try:
         return _validate_submission(item, result.payload)
-    except (ModelOutputError, ValidationError, ValueError):
+    except (SubmissionRejected, ModelOutputError, ValidationError, ValueError):
         raise _ProviderError("evidence_rejected") from None
 
 

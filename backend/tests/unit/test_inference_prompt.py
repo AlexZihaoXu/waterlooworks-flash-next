@@ -78,3 +78,23 @@ def test_identity_changes_with_configuration_and_schema_is_strict() -> None:
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == {"base_rates", "skills"}
     assert strict_schema(ExtractionCandidate.model_json_schema())["required"]
+
+
+def test_header_says_when_the_full_posting_is_inline() -> None:
+    small, _ = _build({"Job Summary:": "Build things"})
+    assert json.loads(small.user)["complete"] is True
+    assert "submit_extraction now" in json.loads(small.user)["next"]
+    large, _ = _build({"Zeta Notes:": "x" * (INLINE_BUDGET_CHARS + 1)})
+    assert json.loads(large.user)["complete"] is False
+    assert "FIRST reply" in small.system and "<amount>" in small.system
+
+
+def test_submission_schema_accepts_text_or_offsets_for_every_evidence() -> None:
+    prompt, _ = _build({"Job Summary:": "Build things"})
+    rate = prompt.submit_schema["properties"]["base_rates"]["items"]
+    for evidence in (
+        rate["properties"]["evidence"],
+        rate["properties"]["eligibility_evidence"]["anyOf"][0],
+    ):
+        assert set(evidence["required"]) == {"field", "text", "start", "end"}
+        assert evidence["additionalProperties"] is False

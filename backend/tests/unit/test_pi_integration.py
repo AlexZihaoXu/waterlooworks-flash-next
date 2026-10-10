@@ -51,7 +51,13 @@ SUBMISSION = {
             "hours_per_week": "35",
             "payout_frequency": None,
             "eligibility": None,
-            "evidence": {"field": "Compensation and Benefits:", "text": PAY},
+            # Cited by reference: the backend reconstructs the exact text.
+            "evidence": {
+                "field": "Compensation and Benefits:",
+                "text": None,
+                "start": 0,
+                "end": len(PAY),
+            },
             "eligibility_evidence": None,
         }
     ],

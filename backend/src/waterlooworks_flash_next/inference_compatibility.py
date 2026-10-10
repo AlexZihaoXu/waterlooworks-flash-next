@@ -6,7 +6,7 @@ from typing import cast
 from waterlooworks_flash_next.inference_prompt import (
     LEGACY_RESPONSES_MODEL,
     LEGACY_RESPONSES_TEMPLATE,
-    PI_TEMPLATE_VERSION,
+    PI_TRUSTED_TEMPLATES,
 )
 from waterlooworks_flash_next.model_validation import (
     INPUT_VERSION,
@@ -20,7 +20,8 @@ LEGACY_MODEL_ID = "qwen3.8-27b@q4_k_m"
 
 
 # Pi rows carry their configuration hash in the template version
-# ("v9-pi-tools+<hash>") and their access mode/model in "pi:<mode>:<model>";
+# ("<pi template>+<hash>" for every trusted Pi template) and their access
+# mode/model in "pi:<mode>:<model>";
 # their max output tokens are part of that configuration, so any bound is valid.
 _TRUSTED = """SELECT a.*,cache.cache_id FROM effective_model_projections e
         JOIN analysis_projections a ON a.projection_id=e.projection_id
@@ -30,12 +31,17 @@ _TRUSTED = """SELECT a.*,cache.cache_id FROM effective_model_projections e
             (cache.max_tokens=4096 AND cache.model_id=? AND cache.template_version=?)
             OR (cache.max_tokens=4096 AND cache.model_id=?
                 AND cache.template_version=?)
-            OR (substr(cache.model_id,1,3)='pi:'
-                AND substr(cache.template_version,1,?)=?))"""
+            OR (substr(cache.model_id,1,3)='pi:' AND ("""
+_TRUSTED += " OR ".join(
+    "substr(cache.template_version,1,?)=?" for _ in PI_TRUSTED_TEMPLATES
+)
+_TRUSTED += ")))"
 
 
 def _trusted_parameters() -> tuple[str | int, ...]:
-    prefix = PI_TEMPLATE_VERSION + "+"
+    prefixes: list[str | int] = []
+    for template in PI_TRUSTED_TEMPLATES:
+        prefixes += [len(template) + 1, template + "+"]
     return (
         INPUT_VERSION,
         VALIDATOR_VERSION,
@@ -43,8 +49,7 @@ def _trusted_parameters() -> tuple[str | int, ...]:
         LEGACY_RESPONSES_TEMPLATE,
         LEGACY_MODEL_ID,
         LEGACY_TEMPLATE_VERSION,
-        len(prefix),
-        prefix,
+        *prefixes,
     )
 
 

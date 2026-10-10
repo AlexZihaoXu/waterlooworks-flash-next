@@ -30,6 +30,7 @@ from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.inference import active_config, require_ready, run_limits
 from waterlooworks_flash_next.inference_prompt import (
     PI_TEMPLATE_VERSION,
+    PI_TRUSTED_TEMPLATES,
     config_hash,
     config_identity,
 )
@@ -252,7 +253,7 @@ def pi_configuration_valid(config: dict[str, Any]) -> bool:
     return bool(
         config.get("provider") == "pi"
         and config.get("version") == COUNTRY_VERSION
-        and config.get("providerVersion") == PI_TEMPLATE_VERSION
+        and config.get("providerVersion") in PI_TRUSTED_TEMPLATES
         and config.get("prompt_hash") == _hash(PROMPT)
         and config.get("tool_prompt_hash") == _hash(COUNTRY_TOOL_INSTRUCTIONS)
         and config.get("countries_hash")
