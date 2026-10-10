@@ -1,4 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  memo,
+  use,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { usePayPreferences } from '../lib/usePayPreferences';
 import { compensationForSorting, presentSummary } from '../lib/hourlyPay';
 import { countryFlagUrl, inferredCountryName } from '../lib/countryInference';
@@ -53,6 +64,7 @@ import {
   type PostingFilters,
   type WorkspaceState,
   type Posting,
+  type RefreshSnapshot,
 } from '../lib/workspace';
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
@@ -88,31 +100,90 @@ const notice = {
   ],
 } as const;
 
+// Live refresh snapshots change about once a second during a refresh. Only the
+// refresh presentation subscribes to them; the memoized browser receives
+// primitive summaries so the posting grid does not re-render on every tick.
+const RefreshContext = createContext<RefreshSnapshot | null>(null);
+
+function LiveRefreshActivity() {
+  return <RefreshActivity refresh={use(RefreshContext)} />;
+}
+
 export function App({
   state: suppliedState,
+  refresh: suppliedRefresh = null,
   signedOutContent,
   account,
 }: {
   state?: WorkspaceState;
+  /** Presentation input for a supplied state; live mode uses the SSE stream. */
+  refresh?: RefreshSnapshot | null;
   signedOutContent?: ReactNode;
   account?: ReactNode;
 }) {
   const signedOut = signedOutContent !== undefined;
-  const remote = useWorkspace(!signedOut && suppliedState === undefined);
+  const live = suppliedState === undefined;
+  const remote = useWorkspace(!signedOut && live);
   const state = suppliedState ?? remote.state;
-  const refresh = suppliedState === undefined ? remote.refresh : null;
+  const refresh = live ? remote.refresh : suppliedRefresh;
+  // useWorkspace recreates manualRefresh with each snapshot; keep one stable
+  // callback that always invokes the latest decision logic.
+  const latestManualRefresh = useRef(remote.manualRefresh);
+  useLayoutEffect(() => {
+    latestManualRefresh.current = remote.manualRefresh;
+  });
+  const manualRefresh = useCallback(() => latestManualRefresh.current(), []);
+  return (
+    <RefreshContext value={refresh}>
+      <WorkspaceView
+        state={state}
+        live={live}
+        refreshKey={`${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`}
+        refreshing={refresh?.status === 'running'}
+        requesting={remote.requesting}
+        streamConnected={remote.streamConnected}
+        streamInterrupted={remote.streamInterrupted}
+        actionError={remote.actionError}
+        manualRefresh={manualRefresh}
+        signedOutContent={signedOutContent}
+        account={account}
+      />
+    </RefreshContext>
+  );
+}
+
+const WorkspaceView = memo(function WorkspaceView({
+  state,
+  live,
+  refreshKey,
+  refreshing,
+  requesting,
+  streamConnected,
+  streamInterrupted,
+  actionError,
+  manualRefresh,
+  signedOutContent,
+  account,
+}: {
+  state: WorkspaceState;
+  live: boolean;
+  refreshKey: string;
+  refreshing: boolean;
+  requesting: boolean;
+  streamConnected: boolean;
+  streamInterrupted: boolean;
+  actionError: string | null;
+  manualRefresh: ReturnType<typeof useWorkspace>['manualRefresh'];
+  signedOutContent?: ReactNode;
+  account?: ReactNode;
+}) {
+  const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
   const [initialView] = useState(() => readBrowseUrl(window.location.search));
   const navigation = useRef(true);
   const [jobId, setJobId] = useState(() => readJobId(window.location.search));
-  const detail = useJobDetail(
-    signedOut ? null : jobId,
-    `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
-  );
-  const similarJobs = useSimilarJobs(
-    detail,
-    `${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`,
-  );
+  const detail = useJobDetail(signedOut ? null : jobId, refreshKey);
+  const similarJobs = useSimilarJobs(detail, refreshKey);
   const detailOpen = !signedOut && jobId !== null;
   const returnTarget = useRef<{
     element: HTMLAnchorElement;
@@ -194,13 +265,16 @@ export function App({
     };
   }, []);
   const refreshToast = useRef<string | null>(null);
-  const needsTierFx =
-    state.status === 'ready' &&
-    state.postings.some((posting) =>
-      posting.compensation_sort?.source_rates.some(
-        (rate) => rate.currency !== null && rate.currency !== 'CAD',
+  const needsTierFx = useMemo(
+    () =>
+      state.status === 'ready' &&
+      state.postings.some((posting) =>
+        posting.compensation_sort?.source_rates.some(
+          (rate) => rate.currency !== null && rate.currency !== 'CAD',
+        ),
       ),
-    );
+    [state],
+  );
   const { preferences, setPreferences, fx, fxStatus } = usePayPreferences(
     needsTierFx,
     !signedOut,
@@ -364,10 +438,17 @@ export function App({
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
   );
-  const lastObserved = postings
-    .map((posting) => posting.last_seen_at)
-    .sort()
-    .at(-1);
+  const lastObserved = useMemo(
+    () =>
+      postings.reduce<string | undefined>(
+        (latest, posting) =>
+          latest === undefined || posting.last_seen_at > latest
+            ? posting.last_seen_at
+            : latest,
+        undefined,
+      ),
+    [postings],
+  );
   const hasFilters = Boolean(
     appliedQuery.trim() ||
     Object.values(activeFilters).some((values) => values.length > 0),
@@ -384,13 +465,12 @@ export function App({
       node.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
     else if (node) node.scrollTop = 0;
   }, [currentPage, appliedQuery, activeFilters, sort, reducedMotion]);
-  const refreshing = refresh?.status === 'running';
   const canRefresh =
-    suppliedState === undefined &&
+    live &&
     state.status === 'ready' &&
     state.manual_refresh_available &&
-    remote.streamConnected &&
-    !remote.requesting;
+    streamConnected &&
+    !requesting;
 
   return (
     <main className="workspace">
@@ -467,7 +547,7 @@ export function App({
       <header className="workspace-header">
         <div className="stack-small">
           <div className="brand-heading">
-            <BrandMark active={refreshing || remote.requesting} />
+            <BrandMark active={refreshing || requesting} />
             <Typography type="h4" role="heading" aria-level={1}>
               WaterlooWorks Flash Next
             </Typography>
@@ -536,16 +616,16 @@ export function App({
           </Alert.Content>
         </Alert>
       )}
-      {remote.actionError && (
+      {actionError && (
         <Alert status="warning">
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Title>Refresh notice</Alert.Title>
-            <Alert.Description>{remote.actionError}</Alert.Description>
+            <Alert.Description>{actionError}</Alert.Description>
           </Alert.Content>
         </Alert>
       )}
-      {connected && remote.streamInterrupted && suppliedState === undefined && (
+      {connected && streamInterrupted && live && (
         <Alert status="warning">
           <Alert.Indicator />
           <Alert.Content>
@@ -557,7 +637,7 @@ export function App({
           </Alert.Content>
         </Alert>
       )}
-      <RefreshActivity refresh={refresh} />
+      <LiveRefreshActivity />
 
       <motion.div
         className="browser-layout"
@@ -590,13 +670,11 @@ export function App({
             <Typography type="h2">Postings</Typography>
             <Button
               size="sm"
-              variant={
-                refreshing || remote.requesting ? 'secondary' : 'tertiary'
-              }
+              variant={refreshing || requesting ? 'secondary' : 'tertiary'}
               isDisabled={!canRefresh}
-              isPending={remote.requesting}
+              isPending={requesting}
               onPress={async () => {
-                const result = await remote.manualRefresh();
+                const result = await manualRefresh();
                 if (result === 'cooldown' || result === 'running') {
                   if (refreshToast.current) toast.close(refreshToast.current);
                   refreshToast.current = toast.warning(
@@ -616,14 +694,12 @@ export function App({
               <LuRefreshCw
                 aria-hidden="true"
                 color={
-                  refreshing || remote.requesting
-                    ? 'currentColor'
-                    : 'var(--muted)'
+                  refreshing || requesting ? 'currentColor' : 'var(--muted)'
                 }
               />
               <Typography
                 type="body-sm"
-                color={refreshing || remote.requesting ? 'default' : 'muted'}
+                color={refreshing || requesting ? 'default' : 'muted'}
               >
                 {refreshing ? 'Refreshing…' : 'Refresh postings'}
               </Typography>
@@ -1487,4 +1563,4 @@ export function App({
       </motion.div>
     </main>
   );
-}
+});
