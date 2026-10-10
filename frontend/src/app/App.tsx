@@ -48,6 +48,7 @@ import {
   Separator,
   Skeleton,
   Toast,
+  Tooltip,
   toast,
   ToggleButton,
   ToggleButtonGroup,
@@ -78,7 +79,7 @@ import {
   sortPostings,
   type PostingSort,
 } from '../lib/sorting';
-import { deadlineBadge, parseDeadline } from '../lib/deadlines';
+import { deadlineBadge, exactDeadline, parseDeadline } from '../lib/deadlines';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { groupedOptionRows } from '../lib/optionGroups';
 import { FilterOptionList } from './FilterOptionList';
@@ -1319,31 +1320,36 @@ const WorkspaceView = memo(function WorkspaceView({
                                           {posting.posting_id}
                                         </Typography>
                                       </div>
-                                      <div
-                                        title={
-                                          deadline === null
-                                            ? 'Deadline could not be verified'
-                                            : `${displayValue(posting.listing.deadline)} Eastern Time`
-                                        }
-                                      >
-                                        {badge.quiet ? (
-                                          <Typography
-                                            type="body-xs"
-                                            color="muted"
-                                            weight="normal"
-                                          >
-                                            {badge.label}
-                                          </Typography>
-                                        ) : (
-                                          <Chip
-                                            size="sm"
-                                            variant={badge.variant}
-                                            color={badge.color}
-                                          >
-                                            {badge.label}
-                                          </Chip>
-                                        )}
-                                      </div>
+                                      <Tooltip delay={300}>
+                                        <Tooltip.Trigger
+                                          aria-label={`${badge.label}. Deadline: ${exactDeadline(deadline, posting.listing.deadline)}`}
+                                        >
+                                          {badge.quiet ? (
+                                            <Typography
+                                              type="body-xs"
+                                              color="muted"
+                                              weight="normal"
+                                            >
+                                              {badge.label}
+                                            </Typography>
+                                          ) : (
+                                            <Chip
+                                              size="sm"
+                                              variant={badge.variant}
+                                              color={badge.color}
+                                            >
+                                              {badge.label}
+                                            </Chip>
+                                          )}
+                                        </Tooltip.Trigger>
+                                        <Tooltip.Content showArrow>
+                                          <Tooltip.Arrow />
+                                          {exactDeadline(
+                                            deadline,
+                                            posting.listing.deadline,
+                                          )}
+                                        </Tooltip.Content>
+                                      </Tooltip>
                                     </div>
                                   </Card.Header>
                                   <Separator />

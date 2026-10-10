@@ -71,6 +71,13 @@ export function deadlineBadge(
   };
 }
 
+/** Exact source deadline for keyboard/hover disclosure; source text unchanged. */
+export function exactDeadline(deadline: number | null, raw: unknown): string {
+  return deadline === null || typeof raw !== 'string' || !raw.trim()
+    ? 'Deadline could not be verified'
+    : `${raw.trim()} Eastern Time`;
+}
+
 export function compareRemaining(
   a: number | null,
   b: number | null,
