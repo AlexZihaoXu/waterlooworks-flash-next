@@ -374,6 +374,15 @@ class SessionStore:
                         "WHERE token_hash=?",
                         (now + ROTATION_GRACE_SECONDS, _digest(cookie)),
                     )
+                    # Renewal continues the same session for the same UID: an
+                    # open key-reveal challenge follows the rotated token instead
+                    # of cascading away with the old row. It still needs its own
+                    # fresh Google re-authentication to be consumed.
+                    connection.execute(
+                        "UPDATE openai_reauth_challenges SET session_hash=? "
+                        "WHERE session_hash=? AND uid=?",
+                        (_digest(fresh), _digest(cookie), uid),
+                    )
             return IssuedSession(
                 fresh,
                 SessionIdentity(

@@ -360,3 +360,32 @@ def test_waterlooworks_ciphertext_cannot_be_substituted_for_openai_key(
         store.status()
     with pytest.raises(CredentialError):
         store.save(key)
+
+
+def test_renewal_rebinds_open_reveal_challenge_to_rotated_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, sessions, cookie, store = setup_store(tmp_path, monkeypatch)
+    secret = secrets.token_urlsafe(48)
+    store.save(OpenAIKey(api_key=SecretStr(secret)))
+    challenge = store.prepare_reveal(cookie, "owner", now=100.25)
+    # The hourly renewal rotates the cookie while the re-auth popup is open.
+    renewed = sessions.issue(cookie, "owner", 1000, auth_time=100, now=101).cookie
+    assert renewed != cookie
+    # The rotated-from value cannot use the challenge once it moved...
+    with pytest.raises(AuthError):
+        store.consume_reveal(cookie, "owner", challenge.challenge, 101, 1000, now=102)
+    # ...and purging the old row does not cascade the challenge away.
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("DELETE FROM app_sessions WHERE expires_at<=131")
+    assert (
+        store.consume_reveal(renewed, "owner", challenge.challenge, 101, 1000, now=102)
+        == secret
+    )
+    # A separate fresh login never inherits another session's challenge.
+    second = store.prepare_reveal(renewed, "owner", now=102.5)
+    other = sessions.prepare(None, now=103)
+    other = sessions.issue(other, "owner", 1000, auth_time=103, now=103).cookie
+    with pytest.raises(AuthError):
+        store.consume_reveal(other, "owner", second.challenge, 104, 1000, now=104)
