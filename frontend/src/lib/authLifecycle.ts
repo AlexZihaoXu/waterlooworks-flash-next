@@ -105,7 +105,10 @@ export type AppSession = {
   expires_at: number;
 };
 export type AuthState =
-  | { status: 'checking' | 'signed-out' | 'error' }
+  | { status: 'checking' | 'error' }
+  // 'session-ended': renewal, expiry or a session check ended the session
+  // without an explicit sign-out; the sign-in card explains it.
+  | { status: 'signed-out'; notice?: 'session-ended' }
   | { status: 'ready' | 'refreshing'; session: AppSession };
 
 export function parseSession(value: unknown): AppSession {

@@ -31,9 +31,14 @@ export function useAppAuth() {
   const queue = useRef(new AuthQueue());
   const channel = useRef<BroadcastChannel | null>(null);
 
-  const signOut = useCallback((broadcast = true) => {
+  const signOut = useCallback((broadcast = true, ended = false) => {
     const current = generation.current.begin();
-    setState({ status: 'signed-out' }); // Unmount readers/worker immediately.
+    // Unmount readers/worker immediately.
+    setState(
+      ended
+        ? { status: 'signed-out', notice: 'session-ended' }
+        : { status: 'signed-out' },
+    );
     if (broadcast) channel.current?.postMessage('signed-out');
     // Send invalidation immediately, even while a popup/token verification waits.
     // The database tombstone wins over a delayed exchange; queued new login waits.
@@ -133,9 +138,9 @@ export function useAppAuth() {
           active &&
           (actual.uid !== session.uid || actual.role !== session.role)
         )
-          signOut();
+          signOut(true, true);
       } catch {
-        if (active) signOut();
+        if (active) signOut(true, true);
       }
     };
     const poll = window.setInterval(() => void check(), 30_000);
@@ -181,11 +186,11 @@ export function useAppAuth() {
               setState({ status: 'ready', session: next });
           }, current.signal)
           .catch(() => {
-            if (current.current(epoch)) signOut();
+            if (current.current(epoch)) signOut(true, true);
           });
       },
       () => {
-        if (!signal.aborted) signOut();
+        if (!signal.aborted) signOut(true, true);
       },
     );
   }, [session, signOut]);

@@ -37,8 +37,10 @@ export function AuthGate({
   signIn: () => void;
   children: ReactNode;
 }) {
-  if (state.status === 'ready') return children;
-  const pending = state.status === 'checking' || state.status === 'refreshing';
+  // Renewal keeps the same verified session: never tear down the workspace.
+  if (state.status === 'ready' || state.status === 'refreshing')
+    return children;
+  const pending = state.status === 'checking';
   return (
     <App
       key="signed-out"
@@ -65,7 +67,19 @@ export function AuthGate({
                 </Alert.Content>
               </Alert>
             )}
-            {state.status === 'refreshing' && <p>Renewing your session…</p>}
+            {state.status === 'signed-out' &&
+              state.notice === 'session-ended' && (
+                <Alert status="warning">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Title>Session ended</Alert.Title>
+                    <Alert.Description>
+                      Your session could not be renewed or confirmed. Sign in
+                      again to continue. Saved jobs are hidden until then.
+                    </Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
           </Card.Content>
           <Card.Footer>
             <Button
@@ -591,20 +605,22 @@ function AdminAccountMenu({
 
 export function AuthenticatedApp() {
   const { state, signIn, signOut } = useAppAuth();
-  const profile = useAccountProfile(
-    state.status === 'ready' ? state.session.uid : null,
-  );
+  const session =
+    state.status === 'ready' || state.status === 'refreshing'
+      ? state.session
+      : null;
+  const profile = useAccountProfile(session?.uid ?? null);
   return (
     <AuthGate state={state} signIn={signIn}>
-      {state.status === 'ready' && (
+      {session && (
         <App
-          key={state.session.uid}
+          key={session.uid}
           account={
             <AccountMenu
               profile={profile}
               signOut={signOut}
-              role={state.session.role}
-              uid={state.session.uid}
+              role={session.role}
+              uid={session.uid}
             />
           }
         />
