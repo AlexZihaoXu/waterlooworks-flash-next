@@ -453,3 +453,39 @@ def test_admin_responses_are_always_no_store(
         for response in responses:
             assert response.headers["cache-control"] == "no-store"
             assert response.headers["pragma"] == "no-cache"
+
+
+def test_unhandled_failure_logs_fixed_incident_line_without_secrets(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+    import re
+    import secrets
+
+    secret = secrets.token_urlsafe(16)
+    app = create_app(tmp_path / "db.sqlite3")
+
+    @app.get("/api/test-only-failure/{value}")
+    def failure(value: str) -> None:
+        raise RuntimeError(secret + value)
+
+    logger = logging.getLogger("api")
+    logger.addHandler(caplog.handler)
+    try:
+        with TestClient(app, base_url="https://localhost") as client:
+            response = client.get(f"/api/test-only-failure/{secret}")
+    finally:
+        logger.removeHandler(caplog.handler)
+    assert response.status_code == 500
+    assert response.headers["cache-control"] == "no-store"
+    incident = response.json()["incident"]
+    assert re.fullmatch(r"[0-9a-f]{8}", incident)
+    assert response.json()["detail"] == (
+        f"Request unavailable; diagnostics suppressed. Incident {incident}."
+    )
+    lines = [record.getMessage() for record in caplog.records]
+    assert lines == [
+        f"Unhandled request failure; incident {incident}; "
+        "GET /api/test-only-failure/{value}; RuntimeError"
+    ]
+    assert secret not in caplog.text and secret not in response.text

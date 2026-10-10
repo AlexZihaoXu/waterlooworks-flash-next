@@ -1,6 +1,7 @@
 """Authentication transport and bounded public session endpoints."""
 
 import asyncio
+import secrets
 import sqlite3
 import threading
 import time
@@ -25,6 +26,7 @@ from waterlooworks_flash_next.app_auth import (
     require_firebase_ready,
     require_session,
 )
+from waterlooworks_flash_next.logging import stage_logger
 
 
 class AuthBusy(Exception):
@@ -39,6 +41,7 @@ def install_auth(
 ) -> None:
     app.state.firebase = verifier
     app.state.sessions = sessions
+    log = stage_logger("api")
     verification_slots = threading.BoundedSemaphore(4)
     profile_slots = threading.BoundedSemaphore(4)
 
@@ -87,8 +90,28 @@ def install_auth(
             request._body = b"".join(chunks)
         try:
             response = await call_next(request)
-        except Exception:
-            return refuse(500, "Request unavailable; diagnostics suppressed.")
+        except Exception as error:
+            # Fixed, secret-free incident line: random id, method, matched route
+            # template and exception type only. Never the message, arguments,
+            # traceback, raw path, query, headers, cookies or body.
+            incident = secrets.token_hex(4)
+            route = getattr(request.scope.get("route"), "path", "unmatched")
+            log.error(
+                "Unhandled request failure; incident %s; %s %s; %s",
+                incident,
+                request.method,
+                route,
+                type(error).__name__,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Request unavailable; diagnostics suppressed. "
+                    f"Incident {incident}.",
+                    "incident": incident,
+                },
+                headers={"Cache-Control": "no-store"},
+            )
         if request.url.path.startswith("/api/admin/"):
             # Admin settings, step-up reveal and Duo status: never cacheable,
             # whatever a handler or error path set.
