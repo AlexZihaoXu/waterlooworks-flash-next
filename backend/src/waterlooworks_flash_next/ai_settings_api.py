@@ -101,7 +101,15 @@ def install_ai_settings(app: FastAPI, path: Path) -> None:
         return options
 
     def view() -> AISettingsView:
-        return store.view()
+        # Explicit fixed 503 (never a 500) when the backend key is unavailable.
+        try:
+            return store.view()
+        except CredentialError:
+            raise HTTPException(
+                503,
+                "AI settings unavailable; check the backend key.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
 
     @app.get(
         "/api/admin/ai",

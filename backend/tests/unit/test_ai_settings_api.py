@@ -248,3 +248,20 @@ def test_chatgpt_paste_flow_through_the_api(path: Path) -> None:
         view = client.get("/api/admin/ai").json()
         assert view["credentials"]["chatgpt_signin"]["configured"] is True
         assert str(tokens["refresh_token"]) not in str(view)
+
+
+def test_missing_credentials_key_is_a_fixed_503(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("WW_CREDENTIALS_KEY", raising=False)
+    path = tmp_path / "empty.sqlite3"
+    with session_client(path) as client:
+        for response in (
+            client.get("/api/admin/ai"),
+            client.put("/api/admin/ai", json={"access_mode": "custom"}),
+        ):
+            assert response.status_code == 503
+            assert response.json() == {
+                "detail": "AI settings unavailable; check the backend key."
+            }
+            assert response.headers["cache-control"] == "no-store"
