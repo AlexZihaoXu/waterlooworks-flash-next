@@ -2,7 +2,6 @@
 
 import errno
 import json
-import math
 import random
 import socket
 import sqlite3
@@ -10,7 +9,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from email.utils import parsedate_to_datetime
 from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from ssl import SSLError
 from urllib.error import HTTPError, URLError
@@ -31,10 +29,14 @@ from waterlooworks_flash_next.content_storage import (
 from waterlooworks_flash_next.database import StoredListing
 from waterlooworks_flash_next.listings import (
     LISTING_URL,
+    MAX_RETRY_AFTER_SECONDS,
     FailureCategory,
     ListingFetchError,
     build_direct_opener,
     decode_response_text,
+)
+from waterlooworks_flash_next.listings import (
+    retry_after_seconds as retry_after_seconds,  # re-exported for existing importers
 )
 
 MAX_DETAIL_BYTES = 5 * 1024 * 1024
@@ -44,22 +46,6 @@ def retry_delay(retry: int) -> int:
     if retry not in (1, 2, 3):
         raise ValueError("Only three retries are allowed.")
     return 5 * retry
-
-
-def retry_after_seconds(value: str | None, *, now: float) -> int | None:
-    if value is None:
-        return None
-    try:
-        if value.strip().isascii() and value.strip().isdigit():
-            seconds = int(value.strip())
-        else:
-            date = parsedate_to_datetime(value)
-            if date.tzinfo is None:
-                return None
-            seconds = max(0, math.ceil(date.timestamp() - now))
-        return seconds if 0 <= seconds <= 2**31 - 1 else None
-    except (ValueError, TypeError, OverflowError):
-        return None
 
 
 @dataclass
@@ -105,8 +91,26 @@ class DetailFetchError(ListingFetchError):
             category,
             status=status,
             retryable=retryable,
+            retry_after=retry_after,
         )
-        self.retry_after = retry_after
+
+
+def record_blocked_until(
+    connection: sqlite3.Connection, run_id: str, retry_after: int
+) -> None:
+    """Durably block manual refreshes until now + the clamped server Retry-After.
+
+    Shared by listing and detail phases. Clear a stale block with
+    `python -m waterlooworks_flash_next.rate_limit clear`.
+    """
+    until = datetime.now(UTC) + timedelta(
+        seconds=min(max(retry_after, 0), MAX_RETRY_AFTER_SECONDS)
+    )
+    with connection:
+        connection.execute(
+            "UPDATE collection_runs SET blocked_until=? WHERE id=?",
+            (until.isoformat(), run_id),
+        )
 
 
 def transport_failure(error: BaseException) -> DetailFetchError:
@@ -394,12 +398,9 @@ class DetailCollection:
                     error.category == FailureCategory.RATE_LIMIT
                     and error.retry_after is not None
                 ):
-                    until = datetime.now(UTC) + timedelta(seconds=error.retry_after)
-                    with self.connection:
-                        self.connection.execute(
-                            "UPDATE collection_runs SET blocked_until=? WHERE id=?",
-                            (until.isoformat(), self.run_id),
-                        )
+                    record_blocked_until(
+                        self.connection, self.run_id, error.retry_after
+                    )
                 fail_content_attempt(
                     self.connection,
                     attempt_id,

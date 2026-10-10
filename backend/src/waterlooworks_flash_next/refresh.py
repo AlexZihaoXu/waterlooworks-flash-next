@@ -24,13 +24,19 @@ from waterlooworks_flash_next.detail_capture import (
 )
 from waterlooworks_flash_next.detail_fetch import (
     DetailCollection,
+    DetailFetchError,
     DetailProgress,
     DetailSource,
+    record_blocked_until,
 )
 from waterlooworks_flash_next.duo import at_waterlooworks, submit_and_observe_duo
 from waterlooworks_flash_next.export import EXPORT_FIELDS
 from waterlooworks_flash_next.jobs import open_all_jobs
-from waterlooworks_flash_next.listings import ListingCollection, ListingFetchError
+from waterlooworks_flash_next.listings import (
+    FailureCategory,
+    ListingCollection,
+    ListingFetchError,
+)
 from waterlooworks_flash_next.logging import stage_logger
 from waterlooworks_flash_next.login import AuthDeadline, LoginSession, start_login
 from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
@@ -269,6 +275,22 @@ class RefreshService:
                     self.provider_lease = None
                 raise RuntimeError("Could not start refresh worker.") from None
             return run_id
+
+    def persist_listing_block(self, run_id: str, error: ListingFetchError) -> None:
+        """Persist a listing-phase 429 Retry-After exactly like the detail phase."""
+        if error.category != FailureCategory.RATE_LIMIT or error.retry_after is None:
+            return
+        try:
+            connection = open_database(self.path)
+            try:
+                record_blocked_until(connection, run_id, error.retry_after)
+            finally:
+                connection.close()
+        except Exception:
+            self.emit(
+                "Could not persist the server Retry-After; diagnostics suppressed.",
+                "warning",
+            )
 
     def _finish(self, run_id: str, success: bool, category: str | None) -> None:
         from datetime import timedelta
@@ -628,6 +650,9 @@ class RefreshService:
             category = "internal"
         except ListingFetchError as error:
             category = error.category.value
+            if not isinstance(error, DetailFetchError):
+                # Detail failures persist their block at the failing checkpoint.
+                self.persist_listing_block(run_id, error)
             self.emit(
                 f"Refresh failure category: {category}; "
                 f"HTTP {error.status if error.status is not None else 'unavailable'}.",
