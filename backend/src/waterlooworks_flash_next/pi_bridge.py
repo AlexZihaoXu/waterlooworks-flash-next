@@ -266,6 +266,26 @@ class ItemResult:
     tool_calls: int
 
 
+@dataclass
+class ItemMetrics:
+    """Per-item token totals from finalized turns; no content."""
+
+    finalized_turns: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cached_tokens: int = 0
+
+    def add(self, usage: "_Usage") -> None:
+        self.finalized_turns += 1
+        self.input_tokens += (
+            (usage.input or 0) + (usage.cache_read or 0) + (usage.cache_write or 0)
+        )
+        self.output_tokens += usage.output or 0
+        self.reasoning_tokens += usage.reasoning or 0
+        self.cached_tokens += usage.cache_read or 0
+
+
 def usage_counters(usage: _Usage) -> UsageCounters:
     """pi-ai input excludes cache reads/writes; the ledger's input includes them."""
     try:
@@ -314,6 +334,7 @@ class PiSession:
         endpoint: ValidatedEndpoint | None = None,
         sidecar_dir: Path | None = None,
         item_timeout_seconds: float | None = None,
+        ledger: Any = None,
     ) -> None:
         if config.model_id is None:
             raise SidecarError("configuration")
@@ -325,7 +346,10 @@ class PiSession:
         self.endpoint = endpoint
         self.sidecar_dir = sidecar_dir
         self.store = AISettingsStore(path)
-        self.ledger = AttemptLedger(path)
+        # Dry-run evaluation injects an in-memory ledger; runs use SQLite.
+        self.ledger = ledger if ledger is not None else AttemptLedger(path)
+        self._attempt_items: dict[str, str] = {}
+        self._metrics: dict[str, ItemMetrics] = {}
         self.item_timeout = item_timeout_seconds or min(
             3600.0,
             config.request_timeout_seconds * (config.max_turns + 1) + 60.0,
@@ -556,6 +580,11 @@ class PiSession:
 
     # ----- items ---------------------------------------------------------------
 
+    def item_metrics(self, item_id: str) -> "ItemMetrics":
+        """Token usage reported for one item's model turns (counts only)."""
+        with self._state_lock:
+            return self._metrics.pop(item_id, ItemMetrics())
+
     def run_item(self, item: PiItem) -> ItemResult:
         future: concurrent.futures.Future[ItemResult] = concurrent.futures.Future()
         with self._state_lock:
@@ -730,12 +759,16 @@ class PiSession:
                 self.run_id, operation, active_attempts=frozenset(self._active_attempts)
             )
             self._active_attempts.add(attempt)
+            self._attempt_items[attempt] = item.item_id
         return attempt
 
     def _finalize(self, params: _FinalizeParams) -> None:
         with self._state_lock:
             if params.attempt not in self._active_attempts:
                 raise _Refused("unknown_attempt")
+            item_id = self._attempt_items.pop(params.attempt, None)
+            if item_id is not None:
+                self._metrics.setdefault(item_id, ItemMetrics()).add(params.usage)
         try:
             counters = usage_counters(params.usage)
             model = params.model

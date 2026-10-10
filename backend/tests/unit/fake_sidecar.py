@@ -97,7 +97,7 @@ def main() -> None:
                 "type": "item_result",
                 "item_id": message["item_id"],
                 "status": script.get("status", "submitted"),
-                "payload": {"answers": answers}
+                "payload": script.get("submit", {"answers": answers})
                 if script.get("status", "submitted") == "submitted"
                 else None,
                 "category": script.get("category"),
