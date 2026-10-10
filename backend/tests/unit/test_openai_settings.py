@@ -8,7 +8,7 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
-from waterlooworks_flash_next.app_auth import AuthError, SessionStore
+from waterlooworks_flash_next.app_auth import AuthError, BootstrapOwner, SessionStore
 from waterlooworks_flash_next.credentials import CredentialError
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.openai_settings import OpenAIKey, OpenAISettingsStore
@@ -20,7 +20,7 @@ def setup_store(
     path = tmp_path / "empty.sqlite3"
     open_database(path).close()
     monkeypatch.setenv("WW_CREDENTIALS_KEY", Fernet.generate_key().decode())
-    sessions = SessionStore(path)
+    sessions = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
     cookie = sessions.prepare(None, now=100)
     sessions.issue(cookie, "owner", 1000, now=100)
     store = OpenAISettingsStore(path)

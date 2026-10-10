@@ -52,6 +52,18 @@ test('production Compose isolates API, storage, secrets and sandbox', () => {
   );
   assert.match(backend, /WW_AUTH_TRUSTED_PROXY: 172\.30\.87\.2/);
   assert.match(backend, /WW_BROWSER_PROFILE: \/app\/browser-profile/);
+  // First-admin bootstrap is pinned to an operator-chosen owner, never first come.
+  assert.match(
+    backend,
+    /WW_BOOTSTRAP_ADMIN_EMAIL: \$\{WW_BOOTSTRAP_ADMIN_EMAIL:\?[^}]+\}/,
+  );
+  assert.match(
+    backend,
+    /WW_BOOTSTRAP_ADMIN_UID: \$\{WW_BOOTSTRAP_ADMIN_UID:-\}/,
+  );
+  const example = read('deployment/production.env.example');
+  assert.match(example, /^WW_BOOTSTRAP_ADMIN_EMAIL=owner@example\.invalid$/m);
+  assert.match(example, /^WW_BOOTSTRAP_ADMIN_UID=$/m);
   assert.doesNotMatch(
     compose,
     /privileged:|SYS_ADMIN|unconfined|ipc: host|network_mode: host|VITE_.*KEY/,

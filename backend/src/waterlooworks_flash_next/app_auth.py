@@ -37,6 +37,43 @@ class AuthError(Exception):
     """Fixed messages only; never include credentials, claims, or SDK exceptions."""
 
 
+class BootstrapRefused(AuthError):
+    """Empty database and the verified identity is not the pinned owner."""
+
+
+@dataclass(frozen=True)
+class BootstrapOwner:
+    """Operator pin for the sole first admin; every configured field must match.
+
+    `email` must be a Google-verified address and compares case-insensitively.
+    """
+
+    uid: str | None = None
+    email: str | None = None
+
+    @classmethod
+    def from_environment(cls) -> "BootstrapOwner":
+        uid = (runtime_value("WW_BOOTSTRAP_ADMIN_UID") or "").strip()
+        email = (runtime_value("WW_BOOTSTRAP_ADMIN_EMAIL") or "").strip()
+        return cls(uid or None, email or None)
+
+    def matches(self, uid: str, verified_email: str | None) -> bool:
+        if self.uid is None and self.email is None:
+            return False  # Fail closed: never promote an arbitrary first caller.
+        if self.uid is not None and (not 1 <= len(self.uid) <= 128 or uid != self.uid):
+            return False
+        if self.email is not None:
+            pinned = self.email.casefold()
+            if (
+                len(pinned) > 320
+                or "@" not in pinned
+                or verified_email is None
+                or verified_email.strip().casefold() != pinned
+            ):
+                return False
+        return True
+
+
 def decode_service_account(value: str | None) -> dict[str, Any]:
     try:
         if not value or len(value) > 32768:
@@ -67,6 +104,14 @@ def decode_service_account(value: str | None) -> dict[str, Any]:
         return data
     except Exception:
         raise AuthError("Authentication configuration unavailable.") from None
+
+
+@dataclass(frozen=True)
+class VerifiedGoogleIdentity:
+    uid: str
+    expires: int
+    auth_time: Any
+    email: str | None  # Present only when Google marked it verified.
 
 
 class FirebaseVerifier:
@@ -110,17 +155,17 @@ class FirebaseVerifier:
             except Exception:
                 raise AuthError("Authentication configuration unavailable.") from None
 
-    def verify(self, token: str) -> tuple[str, int]:
-        uid, expires, _ = self._verify_claims(token)
-        return uid, expires
+    def verify(self, token: str) -> VerifiedGoogleIdentity:
+        return self._verify_claims(token)
 
     def verify_reauth(self, token: str) -> tuple[str, int, int]:
-        uid, expires, auth_time = self._verify_claims(token)
+        verified = self._verify_claims(token)
+        uid, expires, auth_time = verified.uid, verified.expires, verified.auth_time
         if type(auth_time) is not int or auth_time > time.time():
             raise AuthError("Google authentication was not accepted.")
         return uid, expires, auth_time
 
-    def _verify_claims(self, token: str) -> tuple[str, int, Any]:
+    def _verify_claims(self, token: str) -> "VerifiedGoogleIdentity":
         self.ensure_ready()
         try:
             claims = auth.verify_id_token(
@@ -142,7 +187,17 @@ class FirebaseVerifier:
                 or provider.get("sign_in_provider") != "google.com"
             ):
                 raise ValueError
-            return uid, expires, claims.get("auth_time")
+            email = claims.get("email")
+            verified_email = (
+                email
+                if isinstance(email, str)
+                and len(email) <= 320
+                and claims.get("email_verified") is True
+                else None
+            )
+            return VerifiedGoogleIdentity(
+                uid, expires, claims.get("auth_time"), verified_email
+            )
         except Exception:
             raise AuthError("Google authentication was not accepted.") from None
 
@@ -185,8 +240,10 @@ def _digest(cookie: str | None) -> str:
 
 
 class SessionStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, bootstrap: BootstrapOwner | None = None) -> None:
+        """`bootstrap` defaults to WW_BOOTSTRAP_ADMIN_UID/EMAIL read at issue time."""
         self.path = path
+        self.bootstrap = bootstrap
 
     def _connect(self, *, readonly: bool = False) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -227,10 +284,18 @@ class SessionStore:
             connection.close()
 
     def issue(
-        self, cookie: str | None, uid: str, token_expiry: int, *, now: int | None = None
+        self,
+        cookie: str | None,
+        uid: str,
+        token_expiry: int,
+        *,
+        email: str | None = None,
+        now: int | None = None,
     ) -> SessionIdentity:
         """Internal primitive: caller must have verified Google identity first.
 
+        `email` is passed only when Google marked it verified. An empty user
+        table admits only the pinned owner, as admin; otherwise nobody.
         Reuse the prepared cookie. Logout deletes its row, so an in-flight token
         verification cannot resurrect a logged-out session or bootstrap a user.
         """
@@ -252,13 +317,15 @@ class SessionStore:
                     "SELECT role FROM app_users WHERE uid=?", (uid,)
                 ).fetchone()
                 if user is None:
-                    role = (
-                        "member"
-                        if connection.execute(
-                            "SELECT 1 FROM app_users LIMIT 1"
-                        ).fetchone()
-                        else "admin"
-                    )
+                    if connection.execute("SELECT 1 FROM app_users LIMIT 1").fetchone():
+                        role = "member"
+                    else:
+                        owner = self.bootstrap or BootstrapOwner.from_environment()
+                        if not owner.matches(uid, email):
+                            raise BootstrapRefused(
+                                "First administrator must be the configured owner."
+                            )
+                        role = "admin"
                     connection.execute(
                         "INSERT INTO app_users VALUES (?, ?, ?)", (uid, role, now)
                     )

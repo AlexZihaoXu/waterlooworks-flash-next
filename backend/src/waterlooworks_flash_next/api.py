@@ -117,7 +117,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             "Google-authenticated shared listings API. Admin-only refresh with "
             "a 300-second post-run cooldown and sequential detail content "
             "after the full listing save. "
-            "Configure safe HTTPS and owner-first bootstrap before opening access."
+            "Configure safe HTTPS and the pinned owner bootstrap before opening access."
         ),
         responses={
             401: {"model": ErrorResponse},

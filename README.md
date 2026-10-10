@@ -2,7 +2,7 @@
 
 WaterlooWorks Flash Next is a Google-authenticated shared WaterlooWorks listing browser with explicit manual refresh, search, filters, and SQLite history. Manual refresh collects plain-text detail content after saving the full listing pass, then normalizes saved postings and runs bounded OpenAI-assisted extraction across the saved workspace. Individual posting pages read saved content, normalized analysis, history, and comparisons without fetching.
 
-Any server-verified Google account may browse saved jobs. The first successful app login atomically becomes the sole admin; only admin can refresh. Keep the instance closed until the owner signs in first. The signed-out app shell remains visible without loading protected data. See [Firebase setup, schema11 migration, HTTPS and acceptance gates](docs/firebase-auth.md).
+Any server-verified Google account may browse saved jobs. Only the operator-pinned owner (`WW_BOOTSTRAP_ADMIN_EMAIL` and/or `WW_BOOTSTRAP_ADMIN_UID`) can become the sole admin of an empty database; any other first sign-in is refused. Only admin can refresh. The signed-out app shell remains visible without loading protected data. See [Firebase setup, schema11 migration, HTTPS and acceptance gates](docs/firebase-auth.md).
 
 ## The idea
 
@@ -330,7 +330,7 @@ waterlooworks-flash-next/
 
 ## Deployment model
 
-The project code may be public. This instance intentionally permits **any server-verified Google account** to browse its shared saved dataset; the first login becomes its sole collection admin. Keep credentials, sessions and fetched postings out of the repository. The collector remains single-worker. Configure Firebase, exact origins and safe HTTPS before opening access; see [authentication deployment safeguards](docs/firebase-auth.md).
+The project code may be public. This instance intentionally permits **any server-verified Google account** to browse its shared saved dataset; the operator-pinned owner becomes its sole collection admin. Keep credentials, sessions and fetched postings out of the repository. The collector remains single-worker. Configure Firebase, exact origins and safe HTTPS before opening access; see [authentication deployment safeguards](docs/firebase-auth.md).
 
 The deployment goal is to start the service with a single Docker Compose command after initial configuration, with two profiles:
 

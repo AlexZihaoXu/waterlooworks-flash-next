@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "WaterlooWorks Flash Next local API",
-    "description": "Google-authenticated shared listings API. Admin-only refresh with a 300-second post-run cooldown and sequential detail content after the full listing save. Configure safe HTTPS and owner-first bootstrap before opening access.",
+    "description": "Google-authenticated shared listings API. Admin-only refresh with a 300-second post-run cooldown and sequential detail content after the full listing save. Configure safe HTTPS and the pinned owner bootstrap before opening access.",
     "version": "0.1.0"
   },
   "paths": {

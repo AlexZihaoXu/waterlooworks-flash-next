@@ -16,6 +16,7 @@ from waterlooworks_flash_next.app_auth import (
     MAX_TTL,
     AuthError,
     AuthTransport,
+    BootstrapRefused,
     FirebaseVerifier,
     SessionIdentity,
     SessionStore,
@@ -90,6 +91,16 @@ def install_auth(
             status_code=401, content={"detail": "Authentication was not accepted."}
         )
 
+    @app.exception_handler(BootstrapRefused)
+    async def bootstrap_refused(
+        request: Request, error: BootstrapRefused
+    ) -> JSONResponse:
+        # Fixed text; never echo the attempted identity or the configured pin.
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "First administrator must be the configured owner."},
+        )
+
     def set_cookie(request: Request, response: Response, cookie: str, ttl: int) -> None:
         transport = cast(AuthTransport, app.state.transport)
         response.set_cookie(
@@ -129,8 +140,10 @@ def install_auth(
         if not verification_slots.acquire(blocking=False):
             raise HTTPException(429, "Authentication is busy. Try again later.")
         try:
-            uid, expires = verifier.verify(body.id_token)
-            identity = sessions.issue(cookie, uid, expires)
+            verified = verifier.verify(body.id_token)
+            identity = sessions.issue(
+                cookie, verified.uid, verified.expires, email=verified.email
+            )
         finally:
             verification_slots.release()
         set_cookie(

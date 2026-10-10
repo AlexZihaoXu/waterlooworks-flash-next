@@ -13,6 +13,7 @@ from waterlooworks_flash_next.app_auth import (
     COOKIE,
     AuthError,
     AuthTransport,
+    BootstrapOwner,
     SessionStore,
     require_firebase_ready,
 )
@@ -100,7 +101,7 @@ def test_profile_denies_prepared_expired_and_logged_out_sessions(
     app = create_app(path)
     app.dependency_overrides[require_firebase_ready] = configuration_ready
     with TestClient(app, base_url="https://localhost") as client:
-        store = SessionStore(path)
+        store = SessionStore(path, bootstrap=BootstrapOwner(uid="internal-uid"))
         cookie = store.prepare(None)
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/auth/profile").status_code == 401
@@ -258,7 +259,7 @@ def test_auth_schema_upgrade_is_additive_and_bootstrap_cannot_reset(
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     connection.close()
-    store = SessionStore(path)
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner-uid"))
     cookie = store.prepare(None)
     store.issue(cookie, "owner-uid", int(time.time()) + 300)
     with sqlite3.connect(path) as connection:

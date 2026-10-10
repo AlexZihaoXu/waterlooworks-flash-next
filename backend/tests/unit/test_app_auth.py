@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from waterlooworks_flash_next.api import create_app
 from waterlooworks_flash_next.app_auth import (
     AuthError,
+    BootstrapOwner,
+    BootstrapRefused,
     SessionStore,
     decode_service_account,
 )
@@ -33,7 +35,11 @@ def test_invalid_service_account_is_sanitized(value: str | None) -> None:
         decode_service_account(value)
 
 
-def test_first_admin_is_atomic_and_persistent(tmp_path: Path) -> None:
+def test_first_admin_is_atomic_and_persistent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("WW_BOOTSTRAP_ADMIN_EMAIL", raising=False)
+    monkeypatch.setenv("WW_BOOTSTRAP_ADMIN_UID", "uid-a")
     path = tmp_path / "db.sqlite3"
     open_database(path).close()
     store = SessionStore(path)
@@ -41,22 +47,114 @@ def test_first_admin_is_atomic_and_persistent(tmp_path: Path) -> None:
     with ThreadPoolExecutor(2) as pool:
         roles = list(
             pool.map(
-                lambda pair: store.issue(pair[0], pair[1], 500, now=100).role,
-                zip(cookies, ("uid-a", "uid-b"), strict=True),
+                lambda cookie: store.issue(cookie, "uid-a", 500, now=100).role,
+                cookies,
             )
         )
-    assert sorted(roles) == ["admin", "member"]
+    assert roles == ["admin", "admin"]
+    member = store.prepare(None, now=100)
+    assert store.issue(member, "uid-b", 500, now=100).role == "member"
     open_database(path).close()
-    assert SessionStore(path).issue(cookies[0], "uid-a", 500, now=101).role == roles[0]
+    assert SessionStore(path).issue(cookies[0], "uid-a", 500, now=101).role == "admin"
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT count(*) FROM app_users").fetchone()[0] == 2
         assert all(cookie not in str(list(connection.iterdump())) for cookie in cookies)
 
 
-def test_expiry_logout_and_delayed_exchange_cannot_resurrect(tmp_path: Path) -> None:
+def _user_count(path: Path) -> int:
+    with sqlite3.connect(path) as connection:
+        return int(connection.execute("SELECT count(*) FROM app_users").fetchone()[0])
+
+
+@pytest.mark.parametrize(
+    ("pins", "uid", "email"),
+    [
+        ({}, "owner-uid", "owner@example.invalid"),
+        ({"WW_BOOTSTRAP_ADMIN_UID": "owner-uid"}, "other-uid", None),
+        ({"WW_BOOTSTRAP_ADMIN_UID": ""}, "owner-uid", None),
+        ({"WW_BOOTSTRAP_ADMIN_EMAIL": "owner@example.invalid"}, "owner-uid", None),
+        (
+            {"WW_BOOTSTRAP_ADMIN_EMAIL": "owner@example.invalid"},
+            "owner-uid",
+            "other@example.invalid",
+        ),
+        (
+            {
+                "WW_BOOTSTRAP_ADMIN_UID": "owner-uid",
+                "WW_BOOTSTRAP_ADMIN_EMAIL": "owner@example.invalid",
+            },
+            "owner-uid",
+            "other@example.invalid",
+        ),
+    ],
+)
+def test_empty_database_refuses_unpinned_first_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pins: dict[str, str],
+    uid: str,
+    email: str | None,
+) -> None:
+    for name in ("WW_BOOTSTRAP_ADMIN_UID", "WW_BOOTSTRAP_ADMIN_EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in pins.items():
+        monkeypatch.setenv(name, value)
     path = tmp_path / "db.sqlite3"
     open_database(path).close()
     store = SessionStore(path)
+    cookie = store.prepare(None, now=100)
+    with pytest.raises(BootstrapRefused) as error:
+        store.issue(cookie, uid, 500, email=email, now=100)
+    assert str(error.value) == "First administrator must be the configured owner."
+    assert uid not in str(error.value)
+    assert _user_count(path) == 0
+    assert store.lookup(cookie, now=101) is None
+
+
+@pytest.mark.parametrize(
+    ("pins", "email"),
+    [
+        ({"WW_BOOTSTRAP_ADMIN_UID": "owner-uid"}, None),
+        (
+            {"WW_BOOTSTRAP_ADMIN_EMAIL": " Owner@Example.INVALID "},
+            "owner@example.invalid",
+        ),
+        (
+            {
+                "WW_BOOTSTRAP_ADMIN_UID": "owner-uid",
+                "WW_BOOTSTRAP_ADMIN_EMAIL": "owner@example.invalid",
+            },
+            "OWNER@example.invalid",
+        ),
+    ],
+)
+def test_pinned_owner_bootstraps_admin_then_others_are_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pins: dict[str, str],
+    email: str | None,
+) -> None:
+    for name in ("WW_BOOTSTRAP_ADMIN_UID", "WW_BOOTSTRAP_ADMIN_EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in pins.items():
+        monkeypatch.setenv(name, value)
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path)
+    cookie = store.prepare(None, now=100)
+    assert store.issue(cookie, "owner-uid", 500, email=email, now=100).role == "admin"
+    # Existing admin: the pin no longer matters and later users are members.
+    for name in pins:
+        monkeypatch.delenv(name)
+    other = store.prepare(None, now=100)
+    assert store.issue(other, "other-uid", 500, now=100).role == "member"
+    assert _user_count(path) == 2
+
+
+def test_expiry_logout_and_delayed_exchange_cannot_resurrect(tmp_path: Path) -> None:
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="uid"))
     cookie = store.prepare(None, now=100)
     assert store.lookup(cookie, now=100) is None
     store.issue(cookie, "uid", 150, now=100)

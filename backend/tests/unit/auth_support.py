@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from waterlooworks_flash_next.api import create_app
 from waterlooworks_flash_next.app_auth import (
     COOKIE,
+    BootstrapOwner,
     SessionStore,
     require_firebase_ready,
 )
@@ -29,7 +30,10 @@ def session_client(path: Path, *, app: FastAPI | None = None) -> Iterator[TestCl
     with TestClient(
         instance, base_url="https://localhost", headers=AUTH_HEADERS
     ) as client:
-        store = SessionStore(path)
+        # Explicit test owner pin; production reads the operator's runtime pin.
+        store = SessionStore(
+            path, bootstrap=BootstrapOwner(uid="internal-session-test")
+        )
         cookie = store.prepare(None)
         store.issue(cookie, "internal-session-test", int(time.time()) + 3600)
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")

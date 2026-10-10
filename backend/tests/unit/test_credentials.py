@@ -230,7 +230,7 @@ def test_explicit_key_initialization_never_overwrites(
 def test_schema12_additive_preserves_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from waterlooworks_flash_next.app_auth import SessionStore
+    from waterlooworks_flash_next.app_auth import BootstrapOwner, SessionStore
 
     path = tmp_path / "db.sqlite3"
     from waterlooworks_flash_next import database
@@ -238,7 +238,7 @@ def test_schema12_additive_preserves_auth(
     with monkeypatch.context() as legacy:
         legacy.setattr(database, "SCHEMA_VERSION", 13)
         open_database(path).close()
-    store = SessionStore(path)
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
     cookie = store.prepare(None)
     identity = store.issue(cookie, "owner", int(time.time()) + 300)
     with sqlite3.connect(path) as connection:

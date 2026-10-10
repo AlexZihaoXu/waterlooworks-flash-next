@@ -2,7 +2,7 @@
 
 Schema10 adds a separate, read-only `country_inference` contract to workspace postings and posting detail. Existing country source facts/nulls and pay/keyword authority are unchanged. The explicit local country CLI, source-current selection, SVG flag UI, and deployment/pilot safeguards are documented in [inferred work country](country-inference.md). No model calls run on API GET/startup/SSE.
 
-The API requires **server-verified Google login** for every saved-data, FX, refresh/status/log and SSE endpoint. Any Google account may browse; the first successful app login becomes the sole admin, and only admin may mutate. Keep one Uvicorn worker. Complete [Firebase configuration, owner-first bootstrap, schema11 migration and safe transport](firebase-auth.md) before starting it. No containers are required.
+The API requires **server-verified Google login** for every saved-data, FX, refresh/status/log and SSE endpoint. Any Google account may browse once an admin exists; only the owner pinned by `WW_BOOTSTRAP_ADMIN_EMAIL`/`WW_BOOTSTRAP_ADMIN_UID` can become the sole admin of an empty database, and only admin may mutate. Keep one Uvicorn worker. Complete [Firebase configuration, pinned owner bootstrap, schema11 migration and safe transport](firebase-auth.md) before starting it. No containers are required.
 
 ## Start explicitly
 
