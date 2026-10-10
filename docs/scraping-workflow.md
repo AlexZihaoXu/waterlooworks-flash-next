@@ -145,20 +145,18 @@ Temporary launchers and execution scripts have been removed. Core modules under 
 - `duo.py`: `submit_and_observe_duo(session)` submits once and observes code/trust/failure branches until authenticated arrival or an unknown destination. **Calling it may trigger a Duo notification.** Its Duo failure handler raises a sanitized exception and closes the browser; the refresh worker clears the channel, finalizes the run and releases its provider lease.
 - `jobs.py`: `open_all_jobs(session.page)` confirms authentication, navigates to the board, clicks All Jobs, and returns a fresh `ListingSource` or `None`.
 - `listings.py`: construct `ListingCollection(source)` and immediately call `.run()` for paced, sequential collection. Inspect safe aggregate values such as `.pages_completed`, `.complete`, and `len(.postings)`. Catch `ListingFetchError` at the application boundary and close the session; never log raw exceptions.
-- `export.py`: `export_listings(collection, output_directory)` exports a completed collection only. Use a private ignored directory such as `.experiment/output/`.
+- `listing_fields.py`: the allowlisted listing columns copied into saved listings.
 - `logging.py`: safe stage-log formatting and logger configuration.
 - `database.py`: SQLite schema v4, transactional migration, empty run creation, the `StoredListing` model, and atomic `save_listings()` upserts with SHA-256 revision history. The explicit API refresh worker now saves completed listing passes and finalizes run counters/status.
-- `details.py`, `detail_schema.py`, `detail_storage.py`: strict detail metadata models, null-only unverified content fields, independent detail history, and explicit fetch-attempt lifecycle APIs. See [the posting model](posting-model.md).
+- `detail_schema.py`: legacy v3 migration that creates the empty metadata-only detail tables, kept so existing databases keep migrating. The unused `details.py`/`detail_storage.py` APIs were removed; see [the posting model](posting-model.md).
 
 Do not auto-run these modules on import. Callers own browser cleanup through `session.close()` on completion, cancellation, or failure. Chromium uses the explicit absolute private `WW_BROWSER_PROFILE` directory; `WW_BROWSER_HEADLESS=1` is the default, and explicit `0` permits headed local operation. Sandbox is enabled and no browser/CDP/VNC port is exposed. Normal caching and service workers are enabled outside refresh; refresh blocks service workers. Cookies/storage can persist, but the site controls expiration. Do not inspect, log, commit, ship, or concurrently open the profile.
 
 Typing is approximately **33.3 ms per character**. Credentials load only at runtime on the verified authentication origin. Keep `DEBUG` and `PWDEBUG` unset. No per-posting detail collector is implemented.
 
-## Private JSON export
+## Saved listing fields
 
-`export_listings()` atomically writes UTF-8 JSON with a unique timestamped filename in the supplied output directory. Exported fields are allowlisted: ID, title, organization, division, openings, city, level, application count, and deadline, plus collection counts and export time. Runtime actions, cookies, request headers, credentials, internal apply controls, and raw response objects are never serialized. Keep outputs private and ignored; incomplete collections cannot be exported as complete results.
-
-The writer is tested with empty data only, without mock postings or live requests. Full-data export has not been live-verified.
+Saved listings copy only allowlisted columns: ID, title, organization, division, openings, city, level, application count, and deadline (`listing_fields.LISTING_FIELDS`). Runtime actions, cookies, request headers, credentials, internal apply controls, and raw response objects are never persisted. The earlier private JSON export (`export.py`) had no runtime caller and was removed.
 
 ## Logs
 

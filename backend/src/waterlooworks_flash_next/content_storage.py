@@ -1,6 +1,8 @@
-"""Atomic content-only checkpoints, independent from v3 metadata histories."""
+"""Atomic content-only checkpoints; legacy v3 metadata tables stay untouched."""
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -8,9 +10,22 @@ from waterlooworks_flash_next.compact_history import HistoryReader, store_payloa
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import DatabaseError, canonical_snapshot
 from waterlooworks_flash_next.detail_schema import DETAIL_ERROR_CATEGORIES
-from waterlooworks_flash_next.detail_storage import _write
 
 EXTRACTOR_VERSION = "labels-text-v3"
+
+
+@contextmanager
+def _write(connection: sqlite3.Connection) -> Iterator[None]:
+    if connection.in_transaction:
+        raise DatabaseError("Content persistence requires its own transaction.")
+    try:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield
+    except (sqlite3.Error, ValueError, TypeError, AttributeError):
+        raise DatabaseError(
+            "Content persistence failed; diagnostics suppressed."
+        ) from None
 
 
 def start_content_attempt(

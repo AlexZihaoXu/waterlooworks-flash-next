@@ -20,7 +20,10 @@ from waterlooworks_flash_next.api_models import (
 )
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import StoredListing
-from waterlooworks_flash_next.inference_compatibility import trusted_model_projection
+from waterlooworks_flash_next.inference_compatibility import (
+    trusted_model_projection,
+    trusted_model_projections,
+)
 from waterlooworks_flash_next.observations import observation_series
 from waterlooworks_flash_next.source_enrichment import (
     SourceEnrichment,
@@ -33,6 +36,22 @@ from waterlooworks_flash_next.source_enrichment import (
 WW_JOB_BOARD = "https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm"
 
 
+# Current deterministic projection whose listing/content are still source-current.
+_CURRENT_PROJECTION = """FROM posting_projection_current pointer
+           JOIN analysis_projections a
+             ON a.projection_id=pointer.deterministic_projection_id
+           JOIN normalized_fixed_fields f USING(projection_id)
+           JOIN normalized_projection_results r USING(projection_id)
+           JOIN postings p USING(posting_id)
+           JOIN posting_contents c USING(posting_id)
+           WHERE a.producer_kind='deterministic_parser'
+             AND a.listing_hash=p.content_hash AND a.content_hash=c.content_hash
+             AND a.listing_revision_id=(SELECT max(revision_id)
+                 FROM posting_revisions WHERE posting_id=a.posting_id)
+             AND a.content_revision_id=(SELECT max(revision_id)
+                 FROM posting_content_revisions WHERE posting_id=a.posting_id)"""
+
+
 def _projection(connection: sqlite3.Connection, posting_id: str) -> sqlite3.Row | None:
     return cast(
         sqlite3.Row | None,
@@ -40,20 +59,9 @@ def _projection(connection: sqlite3.Connection, posting_id: str) -> sqlite3.Row 
             """SELECT a.*, f.*, r.skills_state,r.compensation_state,
                   r.compensation_reason,r.application_state,
                   r.external_application_required,r.application_route,
-                  p.listing_json,c.content_json
-           FROM posting_projection_current pointer
-           JOIN analysis_projections a
-             ON a.projection_id=pointer.deterministic_projection_id
-           JOIN normalized_fixed_fields f USING(projection_id)
-           JOIN normalized_projection_results r USING(projection_id)
-           JOIN postings p USING(posting_id)
-           JOIN posting_contents c USING(posting_id)
-           WHERE pointer.posting_id=? AND a.producer_kind='deterministic_parser'
-             AND a.listing_hash=p.content_hash AND a.content_hash=c.content_hash
-             AND a.listing_revision_id=(SELECT max(revision_id)
-                 FROM posting_revisions WHERE posting_id=a.posting_id)
-             AND a.content_revision_id=(SELECT max(revision_id)
-                 FROM posting_content_revisions WHERE posting_id=a.posting_id)""",
+                  p.listing_json,c.content_json """
+            + _CURRENT_PROJECTION
+            + " AND pointer.posting_id=?",
             (posting_id,),
         ).fetchone(),
     )
@@ -117,6 +125,109 @@ def _span_text(
     if row["source_hash"] != content_hash or not (0 <= start < end <= len(source)):
         return ""
     return source[start:end]
+
+
+def _merged_compensation(
+    pay_rows: list[sqlite3.Row],
+    content: StoredPostingContent,
+    content_hash: str,
+    source_pay: list[SourcePay],
+) -> tuple[list[CompensationRate], bool]:
+    """Source-anchored saved rates reconciled with saved extraction pay."""
+    legacy: list[SourcePay] = []
+    for item in pay_rows:
+        evidence = _span_text(content, content_hash, item)
+        if not evidence:
+            continue
+        rate = CompensationRate(
+            bound_type=item["bound_type"],
+            minimum=item["minimum_decimal"],
+            maximum=item["maximum_decimal"],
+            minimum_inclusive=bool(item["minimum_inclusive"])
+            if item["minimum_inclusive"] is not None
+            else None,
+            maximum_inclusive=bool(item["maximum_inclusive"])
+            if item["maximum_inclusive"] is not None
+            else None,
+            currency=item["currency"],
+            period=item["period"],
+            hours_per_week=item["hours_per_week_decimal"],
+            payout_frequency=item["payout_frequency"],
+            eligibility=item["eligibility"],
+            source_field=item["source_field"],
+            evidence_text=evidence,
+        )
+        legacy.append(
+            SourcePay(
+                rate,
+                *legacy_amount_span(rate, item["source_start"], item["source_end"]),
+            )
+        )
+    return merge_compensation(legacy, source_pay)
+
+
+def read_compensations(
+    connection: sqlite3.Connection,
+) -> dict[str, tuple[list[CompensationRate], bool]]:
+    """Every saved posting's merged pay, as ``read_analysis`` would report it.
+
+    A fixed number of set-based queries; content is parsed only for postings that
+    have saved rates needing evidence spans. Caller owns the read transaction.
+    """
+    source = read_source_enrichment(connection)
+    current = {
+        row["posting_id"]: row
+        for row in connection.execute(
+            "SELECT a.posting_id,a.projection_id,a.content_hash,"
+            "r.compensation_state " + _CURRENT_PROJECTION
+        )
+    }
+    models = trusted_model_projections(connection) if current else {}
+    pay_projection: dict[str, int] = {}
+    for posting_id, row in current.items():
+        model = models.get(posting_id)
+        model_pay = model is not None and row["compensation_state"] == "needs_analysis"
+        pay_projection[posting_id] = (
+            model["projection_id"]
+            if model is not None and model_pay
+            else row["projection_id"]
+        )
+    pay_rows: dict[int, list[sqlite3.Row]] = {}
+    if pay_projection:
+        for item in connection.execute(
+            "SELECT * FROM normalized_compensation_rates WHERE projection_id IN "
+            "(SELECT value FROM json_each(?)) ORDER BY projection_id,ordinal",
+            (json.dumps(sorted(set(pay_projection.values()))),),
+        ):
+            pay_rows.setdefault(item["projection_id"], []).append(item)
+    paid = sorted(
+        posting_id
+        for posting_id, projection_id in pay_projection.items()
+        if projection_id in pay_rows
+    )
+    contents: dict[str, StoredPostingContent] = {}
+    if paid:
+        for item in connection.execute(
+            "SELECT posting_id,content_json FROM posting_contents WHERE posting_id IN "
+            "(SELECT value FROM json_each(?))",
+            (json.dumps(paid),),
+        ):
+            contents[item[0]] = StoredPostingContent.model_validate_json(item[1])
+    result: dict[str, tuple[list[CompensationRate], bool]] = {}
+    for posting_id in sorted(
+        set(current) | {id_ for id_, entry in source.items() if entry.pay}
+    ):
+        entry = source.get(posting_id, SourceEnrichment())
+        row = current.get(posting_id)
+        rows = pay_rows.get(pay_projection[posting_id], []) if row is not None else []
+        if row is None or not rows:
+            # No saved rates: only saved extraction pay can contribute.
+            result[posting_id] = merge_compensation([], entry.pay)
+        else:
+            result[posting_id] = _merged_compensation(
+                rows, contents[posting_id], row["content_hash"], entry.pay
+            )
+    return result
 
 
 def read_analysis(
@@ -244,39 +355,9 @@ def read_analysis(
         "WHERE projection_id=? ORDER BY ordinal",
         (pay_projection_id,),
     ).fetchall()
-    compensation = [
-        CompensationRate(
-            bound_type=item["bound_type"],
-            minimum=item["minimum_decimal"],
-            maximum=item["maximum_decimal"],
-            minimum_inclusive=bool(item["minimum_inclusive"])
-            if item["minimum_inclusive"] is not None
-            else None,
-            maximum_inclusive=bool(item["maximum_inclusive"])
-            if item["maximum_inclusive"] is not None
-            else None,
-            currency=item["currency"],
-            period=item["period"],
-            hours_per_week=item["hours_per_week_decimal"],
-            payout_frequency=item["payout_frequency"],
-            eligibility=item["eligibility"],
-            source_field=item["source_field"],
-            evidence_text=_span_text(content, row["content_hash"], item),
-        )
-        for item in pay_rows
-        if _span_text(content, row["content_hash"], item)
-    ]
-    legacy = [
-        SourcePay(
-            rate, *legacy_amount_span(rate, item["source_start"], item["source_end"])
-        )
-        for rate, item in zip(
-            compensation,
-            (i for i in pay_rows if _span_text(content, row["content_hash"], i)),
-            strict=True,
-        )
-    ]
-    compensation, needs_review = merge_compensation(legacy, source.pay)
+    compensation, needs_review = _merged_compensation(
+        pay_rows, content, row["content_hash"], source.pay
+    )
     empty["compensation_needs_review"] = needs_review
     links = [
         ApplicationLink(
@@ -522,7 +603,8 @@ def read_comparisons(
                  FROM posting_content_revisions WHERE posting_id=a.posting_id)""",
         (posting_id,),
     ).fetchall()
-    eligible: list[tuple[int, ComparablePosting]] = []
+    # Rank first; salary rows are read only for the twelve returned postings.
+    eligible: list[tuple[int, str, sqlite3.Row, list[str], list[str], bool]] = []
     for item in candidates:
         skills = set(item["skills"].split("|")) if item["skills"] else set()
         levels = set(item["levels"].split("|")) if item["levels"] else set()
@@ -532,6 +614,21 @@ def read_comparisons(
             item["work_term_year"],
             item["work_term_season"],
         )
+        if not (shared_skills or shared_levels or shared_term):
+            continue
+        eligible.append(
+            (
+                len(shared_skills) + len(shared_levels) + int(shared_term),
+                item["posting_id"],
+                item,
+                shared_skills,
+                shared_levels,
+                shared_term,
+            )
+        )
+    eligible.sort(key=lambda entry: (-entry[0], entry[1]))
+    comparisons = []
+    for _, _, item, shared_skills, shared_levels, shared_term in eligible[:12]:
         why = []
         if shared_skills:
             why.append(
@@ -542,31 +639,25 @@ def read_comparisons(
             why.append("shared level")
         if shared_term:
             why.append("same work term")
-        if not why:
-            continue
-        eligible.append(
-            (
-                len(shared_skills) + len(shared_levels) + int(shared_term),
-                ComparablePosting(
-                    posting_id=item["posting_id"],
-                    title=item["title"],
-                    organization=item["organization"],
-                    shared_skills=shared_skills,
-                    shared_levels=shared_levels,
-                    shared_work_term=shared_term,
-                    why_eligible=why,
-                    application_count=item["application_count"],
-                    openings=item["openings"],
-                    salary=_comparison_rates(
-                        connection,
-                        item["projection_id"],
-                        salary_currency,
-                        salary_period,
-                    ),
+        comparisons.append(
+            ComparablePosting(
+                posting_id=item["posting_id"],
+                title=item["title"],
+                organization=item["organization"],
+                shared_skills=shared_skills,
+                shared_levels=shared_levels,
+                shared_work_term=shared_term,
+                why_eligible=why,
+                application_count=item["application_count"],
+                openings=item["openings"],
+                salary=_comparison_rates(
+                    connection,
+                    item["projection_id"],
+                    salary_currency,
+                    salary_period,
                 ),
             )
         )
-    eligible.sort(key=lambda pair: (-pair[0], pair[1].posting_id))
     return PostingComparisonResponse(
         posting_id=posting_id,
         cohort_description=(
@@ -577,5 +668,5 @@ def read_comparisons(
         eligible_count=len(eligible),
         salary_currency=salary_currency,
         salary_period=salary_period,
-        comparisons=[item for _, item in eligible[:12]],
+        comparisons=comparisons,
     )

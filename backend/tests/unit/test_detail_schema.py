@@ -1,10 +1,13 @@
-"""Schema/model tests with empty SQLite databases, never fabricated postings."""
+"""Legacy v3 detail-table migration compatibility on empty SQLite databases.
+
+The metadata-only detail storage APIs were removed; their empty tables remain so
+existing databases keep migrating. Never fabricated postings.
+"""
 
 import sqlite3
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from waterlooworks_flash_next.database import (
     _SCHEMA,
@@ -14,31 +17,24 @@ from waterlooworks_flash_next.database import (
     open_database,
     start_collection_run,
 )
-from waterlooworks_flash_next.detail_storage import (
-    fail_detail_attempt,
-    start_detail_attempt,
-)
-from waterlooworks_flash_next.details import DetailContent, DetailMetadata, StoredDetail
+from waterlooworks_flash_next.listing_fields import LISTING_FIELDS
 
 
-def test_detail_contract_keeps_unverified_content_null() -> None:
-    assert set(DetailContent.model_fields) == {
-        "work_term",
-        "duration",
-        "description",
-        "responsibilities",
-        "qualifications",
-        "compensation_text",
-        "work_arrangement",
-        "location_details",
-        "application_instructions",
+def test_listing_allowlist_excludes_request_and_action_fields() -> None:
+    assert set(LISTING_FIELDS) == {
+        "Id",
+        "JobTitle",
+        "Organization",
+        "Division",
+        "Openings",
+        "City",
+        "Level",
+        "ApplicationCount",
+        "Deadline",
     }
-    assert set(DetailContent().model_dump().values()) == {None}
-    with pytest.raises(ValidationError):
-        DetailContent.model_validate({"description": False})
-    with pytest.raises(ValidationError):
-        DetailMetadata.model_validate({"action": None})
-    assert StoredDetail.model_json_schema()["additionalProperties"] is False
+    assert not {"action", "apply", "Cookie", "password", "username"} & set(
+        LISTING_FIELDS
+    )
 
 
 def test_v2_migration_keeps_real_run_and_creates_empty_detail_tables(
@@ -68,29 +64,6 @@ def test_v2_migration_keeps_real_run_and_creates_empty_detail_tables(
     connection.close()
     connection = open_database(path)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    connection.close()
-
-
-def test_attempt_api_rejects_missing_identity_and_nested_transactions(
-    tmp_path: Path,
-) -> None:
-    connection = open_database(tmp_path / "db.sqlite3")
-    run_id = start_collection_run(connection)
-    with pytest.raises(DatabaseError):
-        start_detail_attempt(connection, run_id, "")
-    with pytest.raises(DatabaseError):
-        fail_detail_attempt(connection, "", "network")
-    connection.execute("BEGIN")
-    with pytest.raises(DatabaseError, match="transaction"):
-        start_detail_attempt(connection, run_id, "")
-    with pytest.raises(DatabaseError, match="transaction"):
-        fail_detail_attempt(connection, "", "network")
-    assert connection.in_transaction
-    connection.rollback()
-    assert (
-        connection.execute("SELECT COUNT(*) FROM posting_fetch_attempts").fetchone()[0]
-        == 0
-    )
     connection.close()
 
 

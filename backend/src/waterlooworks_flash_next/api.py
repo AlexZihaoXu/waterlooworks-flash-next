@@ -1,10 +1,9 @@
 """Google-authenticated shared API; admin-only explicit collection."""
 
 import asyncio
-import json
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -13,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from fastapi import Path as ApiPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.middleware.gzip import GZipMiddleware
 
 from waterlooworks_flash_next.analysis_read import (
@@ -27,7 +27,6 @@ from waterlooworks_flash_next.api_models import (
     HealthResponse,
     JobDetailResponse,
     KeywordIndexResponse,
-    ListingRevision,
     PostingAnalysisResponse,
     PostingComparisonResponse,
     PostingHistoryResponse,
@@ -47,7 +46,6 @@ from waterlooworks_flash_next.app_auth import (
 )
 from waterlooworks_flash_next.auth_api import install_auth
 from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
-from waterlooworks_flash_next.compact_history import HistoryReader
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.country_inference import read_country_inferences
@@ -62,6 +60,11 @@ from waterlooworks_flash_next.database import (
     SCHEMA_VERSION,
     StoredListing,
     open_database,
+)
+from waterlooworks_flash_next.event_streams import (
+    StreamLease,
+    StreamLimiter,
+    session_key,
 )
 from waterlooworks_flash_next.exchange_rates import ExchangeRates
 from waterlooworks_flash_next.keyword_index import read_keyword_index
@@ -108,8 +111,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     docs = os.environ.get("WW_API_DOCS") == "1"
     verifier = FirebaseVerifier(root if database_path is None else path.parent)
     sessions = SessionStore(path)
-    workspace_cache = SnapshotCache[bytes](path)
+    workspace_cache = SnapshotCache[tuple[bytes, bytes]](path)
     keyword_cache = SnapshotCache[tuple[bytes, str]](path)
+    event_streams = StreamLimiter()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -243,17 +247,11 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     )
     def workspace(request: Request) -> Response:
         try:
-            # Cache only identity-free data; attach authorization outside the cache.
-            payload = json.loads(
-                workspace_cache.get(
-                    lambda: workspace_snapshot().model_dump_json().encode()
-                )
-            )
-            payload["manual_refresh_available"] = (
-                enabled and request.state.identity.role == "admin"
-            )
+            # Cache identity-free bytes for both capability variants; choose per
+            # request so neither role nor UID enters the shared cache.
+            member, admin = workspace_cache.get(workspace_variants)
             return Response(
-                json.dumps(payload),
+                admin if enabled and request.state.identity.role == "admin" else member,
                 media_type="application/json",
                 headers={"Cache-Control": "no-store"},
             )
@@ -261,6 +259,15 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             raise HTTPException(
                 500, "Stored workspace is unavailable; diagnostics suppressed."
             ) from None
+
+    def workspace_variants() -> tuple[bytes, bytes]:
+        snapshot = workspace_snapshot()
+        return (
+            snapshot.model_dump_json().encode(),
+            snapshot.model_copy(update={"manual_refresh_available": True})
+            .model_dump_json()
+            .encode(),
+        )
 
     def workspace_snapshot() -> WorkspaceResponse:
         connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -273,25 +280,6 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             targeted = read_targeted_disciplines(connection)
             compensation = read_compensation_sorts(connection)
             countries = read_country_inferences(connection)
-            history: dict[str, list[ListingRevision]] = {}
-            history_reader = HistoryReader(connection)
-            for row in connection.execute(
-                "SELECT * FROM posting_revisions ORDER BY revision_id DESC"
-            ):
-                history.setdefault(row["posting_id"], []).append(
-                    ListingRevision(
-                        revision_id=row["revision_id"],
-                        content_hash=row["content_hash"],
-                        hash_version=row["hash_version"],
-                        observed_at=row["observed_at"],
-                        run_id=row["run_id"],
-                        snapshot=StoredListing.model_validate_json(
-                            history_reader.read(
-                                row["payload_id"], row["content_hash"], "listing"
-                            )
-                        ),
-                    )
-                )
             postings = []
             for row in connection.execute(
                 "SELECT * FROM postings ORDER BY last_seen_at DESC, posting_id"
@@ -306,7 +294,6 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                         location=listing.city
                         if isinstance(listing.city, str)
                         else None,
-                        listing_revisions=history.get(row["posting_id"], []),
                         targeted_disciplines=targeted.get(row["posting_id"], []),
                         work_arrangement=arrangements.get(row["posting_id"]),
                         compensation_sort=compensation.get(row["posting_id"]),
@@ -527,17 +514,31 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 ),
                 "content": {"text/event-stream": {"schema": {"type": "string"}}},
                 "x-event-payload": {"$ref": "#/components/schemas/RefreshSnapshot"},
-            }
+            },
+            429: {
+                "model": ErrorResponse,
+                "description": "Per-session or server-wide live stream cap reached.",
+            },
         },
     )
     async def events(request: Request, once: bool = False) -> StreamingResponse:
+        lease = event_streams.acquire(session_key(request.cookies.get(COOKIE)))
+        if lease is None:
+            raise HTTPException(
+                429,
+                "Too many live update streams are open; close another tab and retry.",
+                headers={"Retry-After": "5", "Cache-Control": "no-store"},
+            )
         return StreamingResponse(
-            session_event_stream(request, service, sessions, once=once),
+            session_event_stream(request, service, sessions, once=once, lease=lease),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            # Idempotent backstop for a response whose body never starts.
+            background=BackgroundTask(lease.release),
         )
 
     app.include_router(protected)
+    app.state.event_streams = event_streams
     return app
 
 
@@ -547,18 +548,32 @@ async def session_event_stream(
     sessions: SessionStore,
     *,
     once: bool = False,
-) -> AsyncIterator[str]:
-    """Recheck the persisted session before every SSE emission, not only connection."""
+    lease: StreamLease | None = None,
+) -> AsyncGenerator[str, None]:
+    """Recheck the persisted session before every SSE emission, not only connection.
+
+    SQLite session reads and the refresh-state lock run in worker threads so a
+    slow lock holder never stalls the event loop for every other request.
+    """
+    cookie = request.cookies.get(COOKIE)
     previous = ""
-    while not await request.is_disconnected():
-        if sessions.lookup(request.cookies.get(COOKIE)) is None:
-            break
-        payload = service.snapshot().model_dump_json()
-        if payload != previous:
-            yield "event: refresh\ndata: " + payload + "\n\n"
-            previous = payload
-        else:
-            yield ": keep-alive\n\n"
-        if once:
-            break
-        await asyncio.sleep(1)
+    try:
+        while not await request.is_disconnected():
+            if await asyncio.to_thread(sessions.lookup, cookie) is None:
+                break
+            payload = await asyncio.to_thread(_snapshot_json, service)
+            if payload != previous:
+                yield "event: refresh\ndata: " + payload + "\n\n"
+                previous = payload
+            else:
+                yield ": keep-alive\n\n"
+            if once:
+                break
+            await asyncio.sleep(1)
+    finally:
+        if lease is not None:
+            lease.release()
+
+
+def _snapshot_json(service: RefreshService) -> str:
+    return service.snapshot().model_dump_json()

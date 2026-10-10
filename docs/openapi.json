@@ -1984,6 +1984,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "429": {
+            "description": "Per-session or server-wide live stream cap reached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3173,44 +3183,6 @@
         "required": ["revision", "run_id", "total_postings", "entries"],
         "title": "KeywordIndexResponse"
       },
-      "ListingRevision": {
-        "properties": {
-          "revision_id": {
-            "type": "integer",
-            "title": "Revision Id"
-          },
-          "content_hash": {
-            "type": "string",
-            "title": "Content Hash"
-          },
-          "hash_version": {
-            "type": "string",
-            "title": "Hash Version"
-          },
-          "observed_at": {
-            "type": "string",
-            "title": "Observed At"
-          },
-          "run_id": {
-            "type": "string",
-            "title": "Run Id"
-          },
-          "snapshot": {
-            "$ref": "#/components/schemas/StoredListing"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "revision_id",
-          "content_hash",
-          "hash_version",
-          "observed_at",
-          "run_id",
-          "snapshot"
-        ],
-        "title": "ListingRevision"
-      },
       "OpenAIKey": {
         "properties": {
           "api_key": {
@@ -3929,13 +3901,6 @@
                 "type": "null"
               }
             ]
-          },
-          "listing_revisions": {
-            "items": {
-              "$ref": "#/components/schemas/ListingRevision"
-            },
-            "type": "array",
-            "title": "Listing Revisions"
           }
         },
         "additionalProperties": false,
@@ -3950,8 +3915,7 @@
           "country",
           "country_inference",
           "targeted_disciplines",
-          "compensation_sort",
-          "listing_revisions"
+          "compensation_sort"
         ],
         "title": "PostingResponse"
       },

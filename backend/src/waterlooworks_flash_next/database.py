@@ -25,6 +25,7 @@ from waterlooworks_flash_next.compact_history import (
 from waterlooworks_flash_next.content_schema import migrate_content
 from waterlooworks_flash_next.country_schema import migrate_country_inference
 from waterlooworks_flash_next.credentials import migrate_credentials
+from waterlooworks_flash_next.data_generation import ensure_data_generation
 from waterlooworks_flash_next.detail_schema import migrate_details
 from waterlooworks_flash_next.inference_schema import migrate_inference
 from waterlooworks_flash_next.normalized_schema import migrate_normalized_storage
@@ -466,6 +467,8 @@ def open_database(path: Path) -> sqlite3.Connection:
                         connection.execute("PRAGMA user_version = 14")
             finally:
                 connection.execute("PRAGMA foreign_keys = ON")
+        # Idempotent cache-invalidation triggers, outside the versioned contract.
+        ensure_data_generation(connection)
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
     except Exception as error:

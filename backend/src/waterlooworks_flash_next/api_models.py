@@ -24,15 +24,6 @@ class RefreshRequest(Contract):
     """An explicit empty object starts one guarded listing-then-content refresh."""
 
 
-class ListingRevision(Contract):
-    revision_id: int
-    content_hash: str
-    hash_version: str
-    observed_at: str
-    run_id: str
-    snapshot: StoredListing
-
-
 class CompensationRate(Contract):
     bound_type: Literal["fixed", "range", "minimum", "maximum"]
     minimum: str | None
@@ -100,7 +91,6 @@ class PostingResponse(Contract):
     country_inference: CountryInference = Field(default_factory=CountryInference)
     targeted_disciplines: list[str] = Field(default_factory=list)
     compensation_sort: CompensationSort | None = None
-    listing_revisions: list[ListingRevision]
 
 
 class JobDetailResponse(Contract):

@@ -77,18 +77,7 @@ export function parseWorkspace(value: unknown): WorkspaceResponse {
               (value) => typeof value === 'string',
             ))) &&
         validCompensation(posting.compensation_sort) &&
-        validListing(posting.listing) &&
-        Array.isArray(posting.listing_revisions) &&
-        posting.listing_revisions.every(
-          (revision) =>
-            record(revision) &&
-            typeof revision.revision_id === 'number' &&
-            typeof revision.content_hash === 'string' &&
-            typeof revision.observed_at === 'string' &&
-            typeof revision.hash_version === 'string' &&
-            typeof revision.run_id === 'string' &&
-            validListing(revision.snapshot),
-        ),
+        validListing(posting.listing),
     )
   ) {
     throw new Error('Invalid workspace response.');

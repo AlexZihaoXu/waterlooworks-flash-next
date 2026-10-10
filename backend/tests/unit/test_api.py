@@ -102,3 +102,26 @@ def test_api_docs_require_explicit_flag(
     ) as client:
         assert client.get("/doc").status_code == 200
         assert "openapi" in client.get("/doc/openapi.json").json()
+
+
+def test_workspace_serves_cached_compact_bytes_without_revision_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from waterlooworks_flash_next.api_models import PostingResponse
+
+    # Per-posting history stays at /api/postings/{id}/history, not the workspace.
+    assert "listing_revisions" not in PostingResponse.model_fields
+    monkeypatch.setenv("WW_API_DOCS", "1")
+    with session_client(tmp_path / "db.sqlite3") as client:
+        schema = client.get("/doc/openapi.json").json()["components"]["schemas"]
+        assert "listing_revisions" not in schema["PostingResponse"]["properties"]
+        assert "ListingRevision" not in schema
+        first = client.get("/api/workspace")
+        second = client.get("/api/workspace")
+        # Served as the cached serialization, not re-encoded per request.
+        assert first.content == second.content
+        assert first.content == (
+            b'{"status":"ready","postings":[],"manual_refresh_available":false,'
+            b'"details_available":false,"compensation_sort_available":true}'
+        )
+        assert first.headers["cache-control"] == "no-store"

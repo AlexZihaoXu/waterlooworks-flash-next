@@ -39,8 +39,8 @@ from waterlooworks_flash_next.detail_fetch import (
     record_blocked_until,
 )
 from waterlooworks_flash_next.duo import at_waterlooworks, submit_and_observe_duo
-from waterlooworks_flash_next.export import EXPORT_FIELDS
 from waterlooworks_flash_next.jobs import open_all_jobs
+from waterlooworks_flash_next.listing_fields import LISTING_FIELDS as EXPORT_FIELDS
 from waterlooworks_flash_next.listings import (
     CollectionInterrupted,
     FailureCategory,

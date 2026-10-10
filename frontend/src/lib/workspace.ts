@@ -6,7 +6,6 @@ import { matchesSelection, matchesAnySelection } from './filterSelection';
 // API types are generated from the same OpenAPI tracked in docs/openapi.json.
 export type Posting = components['schemas']['PostingResponse'];
 export type ListingSnapshot = components['schemas']['StoredListing'];
-export type ListingRevision = components['schemas']['ListingRevision'];
 export type RefreshSnapshot = components['schemas']['RefreshSnapshot'];
 export type WorkspaceResponse = components['schemas']['WorkspaceResponse'];
 export type WorkspaceState =
