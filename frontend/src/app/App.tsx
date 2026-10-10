@@ -29,6 +29,7 @@ import {
   LuRefreshCw,
   LuChevronDown,
   LuFilter,
+  LuArrowUpDown,
 } from 'react-icons/lu';
 import {
   Alert,
@@ -50,6 +51,7 @@ import {
   Select,
   Separator,
   Skeleton,
+  Spinner,
   Toast,
   Tooltip,
   toast,
@@ -94,8 +96,8 @@ import { jobUrl, readJobId, shouldOpenJob } from '../lib/jobDetail';
 import { useJobDetail } from '../lib/useJobDetail';
 import { useSimilarJobs } from '../lib/useSimilarJobs';
 import { useLiveReducedMotion } from '../lib/useLiveReducedMotion';
-import { useCompactLayout } from '../lib/useCompactLayout';
-import { isThemeChoice, ThemeControlContext } from '../lib/themeControl';
+import { COMPACT_MAX_WIDTH, useCompactLayout } from '../lib/useCompactLayout';
+import { isThemeChoice } from '../lib/themeControl';
 import { themeMenuSection } from './themeMenu';
 import { JobDetailContent } from './JobDetail';
 
@@ -218,7 +220,7 @@ const WorkspaceView = memo(function WorkspaceView({
 }) {
   const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
-  const themeControl = useMemo(() => ({ theme, setTheme }), [theme, setTheme]);
+
   const filterIds = useId();
   const [initialView] = useState(() => readBrowseUrl(window.location.search));
   const navigation = useRef(true);
@@ -333,11 +335,14 @@ const WorkspaceView = memo(function WorkspaceView({
   useEffect(() => {
     const timer = window.setTimeout(
       () => {
-        if (detailOpen)
+        if (detailOpen) {
+          // Phones scroll the page itself, so bring the detail into view.
+          if (window.innerWidth <= COMPACT_MAX_WIDTH)
+            window.scrollTo({ top: 0, behavior: 'instant' });
           detailHeading.current
             ?.querySelector<HTMLElement>('[data-detail-title]')
             ?.focus({ preventScroll: true });
-        else {
+        } else {
           const saved = window.history.state?.jobBrowsePosition as unknown;
           const position =
             returnTarget.current ??
@@ -497,7 +502,9 @@ const WorkspaceView = memo(function WorkspaceView({
   useEffect(() => {
     if (readJobId(window.location.search) !== null) return;
     const node = resultsScroll.current;
-    if (node?.scrollTo)
+    if (window.innerWidth <= COMPACT_MAX_WIDTH)
+      window.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
+    else if (node?.scrollTo)
       node.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
     else if (node) node.scrollTop = 0;
   }, [currentPage, appliedQuery, activeFilters, sort, reducedMotion]);
@@ -534,23 +541,13 @@ const WorkspaceView = memo(function WorkspaceView({
         }
       }}
     >
-      {compact ? (
-        <>
-          <Label>Sort by</Label>
-          <Select.Trigger>
-            <Select.Value />
-            <Select.Indicator />
-          </Select.Trigger>
-        </>
-      ) : (
-        <div className="sort-layout">
-          <Label>Sort by</Label>
-          <Select.Trigger>
-            <Select.Value />
-            <Select.Indicator />
-          </Select.Trigger>
-        </div>
-      )}
+      <div className="sort-layout">
+        <Label>Sort by</Label>
+        <Select.Trigger>
+          <Select.Value />
+          <Select.Indicator />
+        </Select.Trigger>
+      </div>
       <Select.Popover>
         <ListBox>
           {(Object.entries(sortLabels) as [PostingSort, string][]).map(
@@ -565,13 +562,47 @@ const WorkspaceView = memo(function WorkspaceView({
       </Select.Popover>
     </Select>
   );
+  const countText = `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'}`;
+  const payNotes = (
+    <>
+      {connected && !paySortAvailable && (
+        <Typography type="body-xs" color="muted">
+          Compensation sorting requires the updated API. It stays disabled until
+          the server can be safely restarted.
+        </Typography>
+      )}
+      {payMetric && paySortAvailable && (
+        <Disclosure>
+          <Disclosure.Heading>
+            <Disclosure.Trigger>
+              <span className="filter-heading">
+                <Typography type="body-xs" color="muted">
+                  How pay sorting works
+                </Typography>
+                <Disclosure.Indicator />
+              </span>
+            </Disclosure.Trigger>
+          </Disclosure.Heading>
+          <Disclosure.Content>
+            <Disclosure.Body>
+              <Typography type="body-xs" color="muted">
+                Highest first within comparable currency / pay-period groups.
+                Average = (minimum + maximum) ÷ 2; tiers use outer bounds.
+                Weekly/monthly/yearly pay uses stated hours or 40h/week, with 52
+                weeks/year. Currency conversion follows your display setting
+                using dated FX. Unspecified currencies count as CAD for sorting
+                and colors; * marks that assumption. Missing salary sorts as
+                zero; unknown units and disputed pay remain unranked. Colors use
+                maximum CAD/hour pay.
+              </Typography>
+            </Disclosure.Body>
+          </Disclosure.Content>
+        </Disclosure>
+      )}
+    </>
+  );
   const sidebarContent = (
     <div className="sidebar-content">
-      {compact && (
-        <Card>
-          <Card.Content>{sortSelect}</Card.Content>
-        </Card>
-      )}
       <Card>
         <Card.Header>
           <div className="workspace-toolbar">
@@ -757,12 +788,95 @@ const WorkspaceView = memo(function WorkspaceView({
             <Typography type="body-xs" color="muted">
               * Currency assumed to be CAD; retained after conversion.
             </Typography>
+            {compact && payNotes}
           </div>
         </Card.Content>
       </Card>
     </div>
   );
 
+  // The page scrolls on phones: hidden browse regions must not keep height.
+  // Instant, so scroll restoration on Back sees the full list height.
+  const collapsedOnPhone = {
+    height: detailOpen ? 0 : 'auto',
+    overflow: detailOpen ? 'hidden' : 'visible',
+  };
+  const browseTransition = {
+    ...transition,
+    visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
+    ...(compact ? { height: { duration: 0 } } : {}),
+  };
+  const requestRefresh = async () => {
+    const result = await manualRefresh();
+    if (result === 'cooldown' || result === 'running') {
+      if (refreshToast.current) toast.close(refreshToast.current);
+      refreshToast.current = toast.warning(
+        result === 'running'
+          ? 'Refresh already running'
+          : 'Refresh is on cooldown',
+        {
+          description:
+            result === 'running'
+              ? 'Wait for the current refresh to finish.'
+              : refreshRetryAfter() > 0
+                ? `Next refresh allowed in ${refreshWaitText(
+                    refreshRetryAfter(),
+                  )}. Pacing protects the WaterlooWorks account; see Admin settings › Refresh.`
+                : 'Please wait before refreshing again.',
+        },
+      );
+    }
+  };
+  const sortKeys = Object.keys(sortLabels) as PostingSort[];
+  const paySortKeys: PostingSort[] = [
+    'compensation-average',
+    'compensation-minimum',
+    'compensation-maximum',
+  ];
+  // Phones: icon-only HeroUI Dropdown with documented single selection.
+  const compactSort = (
+    <Dropdown>
+      <Tooltip delay={300}>
+        <Button
+          isIconOnly
+          size="lg"
+          variant={sort === 'id' ? 'tertiary' : 'secondary'}
+          aria-label={`Sort: ${sortLabels[sort]}`}
+          isDisabled={!connected}
+        >
+          <LuArrowUpDown aria-hidden="true" />
+        </Button>
+        <Tooltip.Content>Sort: {sortLabels[sort]}</Tooltip.Content>
+      </Tooltip>
+      <Dropdown.Popover placement="bottom end">
+        <Dropdown.Menu
+          aria-label="Sort postings"
+          selectionMode="single"
+          disallowEmptySelection
+          selectedKeys={[sort]}
+          disabledKeys={paySortAvailable ? [] : paySortKeys}
+          onSelectionChange={(keys) => {
+            if (keys === 'all') return;
+            const [key] = keys;
+            if (typeof key === 'string' && Object.hasOwn(sortLabels, key)) {
+              setSort(key as PostingSort);
+              setPage(1);
+            }
+          }}
+        >
+          {sortKeys.map((key) => (
+            <Dropdown.Item key={key} id={key} textValue={sortLabels[key]}>
+              <Label>{sortLabels[key]}</Label>
+              <Dropdown.ItemIndicator />
+            </Dropdown.Item>
+          ))}
+        </Dropdown.Menu>
+      </Dropdown.Popover>
+    </Dropdown>
+  );
+  const showCompactRefresh =
+    !signedOut &&
+    !(state.status === 'ready' && !state.manual_refresh_available);
   const refreshUnavailableNote = connected &&
     state.status === 'ready' &&
     !state.manual_refresh_available && (
@@ -770,6 +884,357 @@ const WorkspaceView = memo(function WorkspaceView({
         Manual refresh is unavailable for this account or server.
       </Typography>
     );
+
+  const resultsContent = (
+    <div className="results-scroll-content">
+      <div className="results-transition">
+        <AnimatePresence initial={false} mode="sync">
+          <motion.div
+            key={loading ? 'loading' : 'loaded'}
+            className="results-layer"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={transition}
+          >
+            {loading ? (
+              <div
+                className="posting-grid"
+                aria-hidden="true"
+                data-loading-placeholder="true"
+              >
+                {Array.from({ length: PAGE_SIZE }, (_, index) => (
+                  <Card key={index} data-posting-skeleton="true">
+                    <Card.Header>
+                      <div className="posting-title">
+                        <div className="skeleton-title-block">
+                          <Skeleton animationType="none">
+                            <div className="skeleton-title-space" />
+                          </Skeleton>
+                          <div className="skeleton-short-title">
+                            <Skeleton animationType="none">
+                              <div className="skeleton-title-space" />
+                            </Skeleton>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="posting-field">
+                        <Skeleton animationType="none">
+                          <div className="skeleton-icon-space" />
+                        </Skeleton>
+                        <div className="skeleton-text-line skeleton-company-line">
+                          <Skeleton animationType="none">
+                            <div className="skeleton-line-space" />
+                          </Skeleton>
+                        </div>
+                      </div>
+                      <div className="posting-identity">
+                        <div className="posting-field">
+                          <Skeleton animationType="none">
+                            <div className="skeleton-icon-space" />
+                          </Skeleton>
+                          <div className="skeleton-text-line skeleton-id-line">
+                            <Skeleton animationType="none">
+                              <div className="skeleton-line-space" />
+                            </Skeleton>
+                          </div>
+                        </div>
+                        <div className="skeleton-text-line skeleton-deadline-line">
+                          <Skeleton animationType="none">
+                            <div className="skeleton-line-space" />
+                          </Skeleton>
+                        </div>
+                      </div>
+                    </Card.Header>
+                    <Separator />
+                    <Card.Content>
+                      <div className="posting-details">
+                        {[65, 60, 55, 50, 45].map((width) => (
+                          <div className="posting-field" key={width}>
+                            <Skeleton animationType="none">
+                              <div className="skeleton-icon-space" />
+                            </Skeleton>
+                            <div
+                              className="skeleton-text-line"
+                              style={{ width: `${width}%` }}
+                            >
+                              <Skeleton animationType="none">
+                                <div className="skeleton-line-space" />
+                              </Skeleton>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </Card.Content>
+                  </Card>
+                ))}
+              </div>
+            ) : visible.length === 0 ? (
+              <Card variant="secondary">
+                <Card.Header>
+                  <Card.Title>{emptyText}</Card.Title>
+                  <Card.Description>
+                    {connected
+                      ? hasFilters
+                        ? 'Try another title or clear your filters.'
+                        : 'Use manual refresh to load postings when it is enabled.'
+                      : 'Connect the local API to browse your postings.'}
+                  </Card.Description>
+                </Card.Header>
+              </Card>
+            ) : (
+              <div className="posting-grid">
+                {visible.map((posting) => {
+                  const deadline = parseDeadline(posting.listing.deadline);
+                  const badge = deadlineBadge(deadline, now);
+                  const exact = exactDeadline(
+                    deadline,
+                    posting.listing.deadline,
+                  );
+                  const title = (
+                    <div className="posting-title">
+                      <Typography
+                        type={compact ? 'h6' : 'h5'}
+                        weight="semibold"
+                        role="heading"
+                        aria-level={3}
+                        id={`posting-${posting.posting_id}`}
+                      >
+                        <Link
+                          id={`job-link-${posting.posting_id}`}
+                          href={jobUrl(
+                            window.location.href,
+                            posting.posting_id,
+                          )}
+                          onClick={(event) => {
+                            if (
+                              !shouldOpenJob(event) ||
+                              !(
+                                event.currentTarget instanceof HTMLAnchorElement
+                              )
+                            )
+                              return;
+                            event.preventDefault();
+                            returnTarget.current = {
+                              element: event.currentTarget,
+                              id: posting.posting_id,
+                              scroll: resultsScroll.current?.scrollTop ?? 0,
+                              windowScroll: window.scrollY,
+                            };
+                            // Store position on the listing entry too, so reload → Back
+                            // restores without depending on an in-memory element ref.
+                            window.history.replaceState(
+                              {
+                                ...window.history.state,
+                                jobBrowsePosition: {
+                                  id: posting.posting_id,
+                                  scroll: returnTarget.current.scroll,
+                                  windowScroll:
+                                    returnTarget.current.windowScroll,
+                                },
+                              },
+                              '',
+                            );
+                            window.history.pushState(
+                              {
+                                ...window.history.state,
+                                jobEntry: true,
+                              },
+                              '',
+                              jobUrl(window.location.href, posting.posting_id),
+                            );
+                            window.dispatchEvent(new PopStateEvent('popstate'));
+                          }}
+                        >
+                          {displayValue(posting.listing.title)}
+                        </Link>
+                      </Typography>
+                    </div>
+                  );
+                  const company = (
+                    <div className="posting-field">
+                      <LuBuilding2
+                        size={16}
+                        color="var(--muted)"
+                        role="img"
+                        aria-label="Company"
+                      />
+                      <Card.Description>
+                        {displayValue(posting.listing.organization)}
+                      </Card.Description>
+                    </div>
+                  );
+                  const deadlineInfo = (
+                    <Tooltip delay={300}>
+                      <Tooltip.Trigger
+                        aria-label={`${badge.label}. Deadline: ${exact}`}
+                      >
+                        {badge.quiet ? (
+                          <Typography
+                            type="body-xs"
+                            color="muted"
+                            weight="normal"
+                          >
+                            {badge.label}
+                          </Typography>
+                        ) : (
+                          <Chip
+                            size="sm"
+                            variant={badge.variant}
+                            color={badge.color}
+                          >
+                            {badge.label}
+                          </Chip>
+                        )}
+                      </Tooltip.Trigger>
+                      <Tooltip.Content showArrow>
+                        <Tooltip.Arrow />
+                        {exact}
+                      </Tooltip.Content>
+                    </Tooltip>
+                  );
+                  const pay = (
+                    <div className="posting-field" aria-label="Compensation">
+                      <LuDollarSign
+                        size={16}
+                        color="var(--muted)"
+                        aria-hidden="true"
+                      />
+                      <Typography type="body-sm" color="muted" weight="normal">
+                        <span
+                          className={`salary-value salary-${presentations.get(posting.posting_id)?.tier ?? 'neutral'}`}
+                        >
+                          {presentations.get(posting.posting_id)?.label ??
+                            '--/--'}
+                        </span>
+                      </Typography>
+                    </div>
+                  );
+                  const location = (
+                    <div className="location-with-arrangement">
+                      <div className="location-field">
+                        <LuMapPin
+                          size={16}
+                          color="var(--muted)"
+                          role="img"
+                          aria-label="Location"
+                        />
+                        {inferredCountryName(posting.country_inference) && (
+                          <img
+                            className="country-flag"
+                            src={countryFlagUrl(
+                              posting.country_inference.country_code,
+                            )}
+                            alt={posting.country_inference.country_name ?? ''}
+                            width={16}
+                          />
+                        )}
+                        <Typography type="body-sm" color="muted">
+                          {displayValue(posting.location)}
+                        </Typography>
+                      </div>
+                      {posting.work_arrangement && (
+                        <Chip size="sm" variant="soft">
+                          {posting.work_arrangement}
+                        </Chip>
+                      )}
+                    </div>
+                  );
+                  const applications = formatCount(
+                    posting.listing.application_count,
+                    'application',
+                  );
+                  const openings = formatCount(
+                    posting.listing.openings,
+                    'opening',
+                  );
+                  return (
+                    <Card
+                      key={posting.posting_id}
+                      role="article"
+                      aria-labelledby={`posting-${posting.posting_id}`}
+                    >
+                      {compact ? (
+                        // Phones: key facts first (title, company, pay with deadline,
+                        // location); ID and counts share one compact caption line.
+                        <>
+                          <Card.Header>
+                            {title}
+                            {company}
+                          </Card.Header>
+                          <Card.Content>
+                            <div className="posting-details">
+                              <div className="posting-key-line">
+                                {pay}
+                                {deadlineInfo}
+                              </div>
+                              {location}
+                              <Typography type="body-xs" color="muted">
+                                #{posting.posting_id} · {applications} ·{' '}
+                                {openings}
+                              </Typography>
+                            </div>
+                          </Card.Content>
+                        </>
+                      ) : (
+                        <>
+                          <Card.Header>
+                            {title}
+                            {company}
+                            <div className="posting-identity">
+                              <div className="posting-field">
+                                <LuHash
+                                  size={16}
+                                  color="var(--muted)"
+                                  role="img"
+                                  aria-label="Posting ID"
+                                />
+                                <Typography type="body-sm" color="muted">
+                                  {posting.posting_id}
+                                </Typography>
+                              </div>
+                              {deadlineInfo}
+                            </div>
+                          </Card.Header>
+                          <Separator />
+                          <Card.Content>
+                            <div className="posting-details">
+                              {pay}
+                              {location}
+                              <div className="posting-field">
+                                <LuUsers
+                                  size={16}
+                                  color="var(--muted)"
+                                  aria-hidden="true"
+                                />
+                                <Typography type="body-sm" color="muted">
+                                  {applications}
+                                </Typography>
+                              </div>
+                              <div className="posting-field">
+                                <LuCalendarDays
+                                  size={16}
+                                  color="var(--muted)"
+                                  aria-hidden="true"
+                                />
+                                <Typography type="body-sm" color="muted">
+                                  {openings}
+                                </Typography>
+                              </div>
+                            </div>
+                          </Card.Content>
+                        </>
+                      )}
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </div>
+  );
 
   return (
     <main className="workspace">
@@ -843,93 +1308,99 @@ const WorkspaceView = memo(function WorkspaceView({
           </Modal.Dialog>
         </Modal.Container>
       </Modal.Backdrop>
-      <ThemeControlContext value={themeControl}>
-        <header className="workspace-header">
-          <div className="stack-small workspace-brand">
+
+      <header className="workspace-header">
+        {compact ? (
+          // Phones: logo mark and a short visible name (the heading keeps
+          // the full name), then icon-only theme and account actions.
+          <>
             <div className="brand-heading">
               <BrandMark active={refreshing || requesting} />
-              <span className="brand-title">
-                <Typography
-                  type={compact ? 'h6' : 'h4'}
-                  truncate={compact}
-                  role="heading"
-                  aria-level={1}
+              <Typography
+                type="h6"
+                role="heading"
+                aria-level={1}
+                aria-label="WaterlooWorks Flash Next"
+              >
+                Flash
+              </Typography>
+            </div>
+            <div className="inline-layout header-actions">
+              {/* One icon button opens the documented single-selection
+                  theme Dropdown, signed in or out. */}
+              <Dropdown>
+                <Button
+                  isIconOnly
+                  size="lg"
+                  variant="ghost"
+                  aria-label="Color theme"
                 >
+                  {theme === 'dark' ? (
+                    <LuMoon aria-hidden="true" />
+                  ) : theme === 'light' ? (
+                    <LuSun aria-hidden="true" />
+                  ) : (
+                    <LuMonitor aria-hidden="true" />
+                  )}
+                </Button>
+                <Dropdown.Popover placement="bottom end">
+                  <Dropdown.Menu aria-label="Color theme">
+                    {themeMenuSection({ theme, setTheme })}
+                  </Dropdown.Menu>
+                </Dropdown.Popover>
+              </Dropdown>
+              {account}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="stack-small">
+              <div className="brand-heading">
+                <BrandMark active={refreshing || requesting} />
+                <Typography type="h4" role="heading" aria-level={1}>
                   WaterlooWorks Flash Next
                 </Typography>
-              </span>
+              </div>
+              <Typography type="body-xs" color="muted">
+                {lastObserved
+                  ? `Updated ${displayTime(lastObserved)}`
+                  : loading
+                    ? '\u00a0'
+                    : 'Find your next role.'}
+              </Typography>
             </div>
-            <Typography type="body-xs" color="muted" truncate={compact}>
-              {lastObserved
-                ? `Updated ${displayTime(lastObserved)}`
-                : loading
-                  ? '\u00a0'
-                  : 'Find your next role.'}
-            </Typography>
-            {compact && refreshUnavailableNote}
-          </div>
-          <div className="stack-small">
-            <div className="inline-layout header-actions">
-              {compact ? (
-                // Phones: signed in, the theme choice lives in the account
-                // menu; signed out, one 44px icon button opens the same
-                // documented single-selection Dropdown section.
-                (account ?? (
-                  <Dropdown>
-                    <Button
-                      isIconOnly
-                      size="lg"
-                      variant="ghost"
-                      aria-label="Color theme"
-                    >
-                      {theme === 'dark' ? (
-                        <LuMoon aria-hidden="true" />
-                      ) : theme === 'light' ? (
-                        <LuSun aria-hidden="true" />
-                      ) : (
-                        <LuMonitor aria-hidden="true" />
-                      )}
-                    </Button>
-                    <Dropdown.Popover placement="bottom end">
-                      <Dropdown.Menu aria-label="Color theme">
-                        {themeMenuSection(themeControl)}
-                      </Dropdown.Menu>
-                    </Dropdown.Popover>
-                  </Dropdown>
-                ))
-              ) : (
-                <>
-                  {account}
-                  <ToggleButtonGroup
-                    aria-label="Color theme"
-                    selectionMode="single"
-                    disallowEmptySelection
-                    size="sm"
-                    selectedKeys={[theme]}
-                    onSelectionChange={(keys) => {
-                      const [key] = keys;
-                      if (isThemeChoice(key)) setTheme(key);
-                    }}
-                  >
-                    <ToggleButton isIconOnly aria-label="System" id="system">
-                      <LuMonitor aria-hidden="true" />
-                    </ToggleButton>
-                    <ToggleButton isIconOnly aria-label="Light" id="light">
-                      <ToggleButtonGroup.Separator />
-                      <LuSun aria-hidden="true" />
-                    </ToggleButton>
-                    <ToggleButton isIconOnly aria-label="Dark" id="dark">
-                      <ToggleButtonGroup.Separator />
-                      <LuMoon aria-hidden="true" />
-                    </ToggleButton>
-                  </ToggleButtonGroup>
-                </>
-              )}
+            <div className="stack-small">
+              <div className="inline-layout header-actions">
+                {account}
+                <ToggleButtonGroup
+                  aria-label="Color theme"
+                  selectionMode="single"
+                  disallowEmptySelection
+                  size="sm"
+                  selectedKeys={[theme]}
+                  onSelectionChange={(keys) => {
+                    const [key] = keys;
+                    if (isThemeChoice(key)) setTheme(key);
+                  }}
+                >
+                  <ToggleButton isIconOnly aria-label="System" id="system">
+                    <LuMonitor aria-hidden="true" />
+                  </ToggleButton>
+                  <ToggleButton isIconOnly aria-label="Light" id="light">
+                    <ToggleButtonGroup.Separator />
+                    <LuSun aria-hidden="true" />
+                  </ToggleButton>
+                  <ToggleButton isIconOnly aria-label="Dark" id="dark">
+                    <ToggleButtonGroup.Separator />
+                    <LuMoon aria-hidden="true" />
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              </div>
+              {refreshUnavailableNote}
             </div>
-            {!compact && refreshUnavailableNote}
-          </div>
-        </header>
-      </ThemeControlContext>
+          </>
+        )}
+      </header>
 
       {(state.status === 'disconnected' || state.status === 'error') && (
         <Alert status="danger">
@@ -1005,71 +1476,132 @@ const WorkspaceView = memo(function WorkspaceView({
         }}
         transition={transition}
       >
-        <motion.div
-          className="browse-search stack"
-          initial={false}
-          inert={detailOpen}
-          aria-hidden={detailOpen}
-          animate={{
-            opacity: detailOpen ? 0 : 1,
-            visibility: detailOpen ? 'hidden' : 'visible',
-          }}
-          transition={{
-            ...transition,
-            visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
-          }}
-        >
-          <div className="postings-heading">
-            <Typography
-              type={compact ? 'h4' : 'h2'}
-              role="heading"
-              aria-level={2}
-            >
-              Postings
-            </Typography>
-            <Button
-              size={compact ? 'lg' : 'sm'}
-              variant={refreshing || requesting ? 'secondary' : 'tertiary'}
-              isDisabled={!canRefresh}
-              isPending={requesting}
-              onPress={async () => {
-                const result = await manualRefresh();
-                if (result === 'cooldown' || result === 'running') {
-                  if (refreshToast.current) toast.close(refreshToast.current);
-                  refreshToast.current = toast.warning(
-                    result === 'running'
-                      ? 'Refresh already running'
-                      : 'Refresh is on cooldown',
-                    {
-                      description:
-                        result === 'running'
-                          ? 'Wait for the current refresh to finish.'
-                          : refreshRetryAfter() > 0
-                            ? `Next refresh allowed in ${refreshWaitText(
-                                refreshRetryAfter(),
-                              )}. Pacing protects the WaterlooWorks account; see Admin settings › Refresh.`
-                            : 'Please wait before refreshing again.',
-                    },
-                  );
-                }
-              }}
-            >
-              <LuRefreshCw
-                aria-hidden="true"
-                color={
-                  refreshing || requesting ? 'currentColor' : 'var(--muted)'
-                }
-              />
-              <Typography
-                type="body-sm"
-                color={refreshing || requesting ? 'default' : 'muted'}
-              >
-                {refreshing ? 'Refreshing…' : 'Refresh postings'}
-              </Typography>
-            </Button>
-          </div>
-          {compact ? (
-            <div className="search-row">
+        {/* Signed-out phones show only the sign-in content. */}
+        {!(compact && signedOut) && (
+          <motion.div
+            className="browse-search stack"
+            initial={false}
+            inert={detailOpen}
+            aria-hidden={detailOpen}
+            animate={{
+              opacity: detailOpen ? 0 : 1,
+              visibility: detailOpen ? 'hidden' : 'visible',
+              ...(compact ? collapsedOnPhone : {}),
+            }}
+            transition={browseTransition}
+          >
+            {!compact && (
+              <div className="postings-heading">
+                <Typography type="h2">Postings</Typography>
+                <Button
+                  size="sm"
+                  variant={refreshing || requesting ? 'secondary' : 'tertiary'}
+                  isDisabled={!canRefresh}
+                  isPending={requesting}
+                  onPress={requestRefresh}
+                >
+                  <LuRefreshCw
+                    aria-hidden="true"
+                    color={
+                      refreshing || requesting ? 'currentColor' : 'var(--muted)'
+                    }
+                  />
+                  <Typography
+                    type="body-sm"
+                    color={refreshing || requesting ? 'default' : 'muted'}
+                  >
+                    {refreshing ? 'Refreshing…' : 'Refresh postings'}
+                  </Typography>
+                </Button>
+              </div>
+            )}
+            {compact ? (
+              <div className="search-row">
+                <SearchField
+                  aria-label="Search titles, companies, locations, and posting IDs"
+                  value={query}
+                  onChange={(value) => {
+                    setQuery(value);
+                    setPagination({ page: 1, query: value });
+                  }}
+                  isDisabled={!connected}
+                >
+                  <SearchField.Group>
+                    <SearchField.SearchIcon />
+                    <SearchField.Input placeholder="Search postings…" />
+                    <SearchField.ClearButton />
+                  </SearchField.Group>
+                </SearchField>
+                {/* Phones: one 44px icon trigger with a count Badge opens the
+                  same filters and options in a documented Drawer. */}
+                <Drawer>
+                  <Badge.Anchor>
+                    <Tooltip delay={300}>
+                      <Button
+                        isIconOnly
+                        size="lg"
+                        variant={activeFilterCount ? 'secondary' : 'tertiary'}
+                        aria-label={
+                          activeFilterCount
+                            ? `Filters (${activeFilterCount})`
+                            : 'Filters'
+                        }
+                        aria-haspopup="dialog"
+                        isDisabled={!connected}
+                      >
+                        <LuFilter aria-hidden="true" />
+                      </Button>
+                      <Tooltip.Content>Filters</Tooltip.Content>
+                    </Tooltip>
+                    {activeFilterCount > 0 && (
+                      <Badge color="accent" size="sm">
+                        {activeFilterCount}
+                      </Badge>
+                    )}
+                  </Badge.Anchor>
+                  <Drawer.Backdrop>
+                    <Drawer.Content placement="bottom">
+                      <Drawer.Dialog>
+                        <Drawer.Handle />
+                        <Drawer.CloseTrigger />
+                        <Drawer.Header>
+                          <Drawer.Heading>Filters</Drawer.Heading>
+                        </Drawer.Header>
+                        <Drawer.Body>{sidebarContent}</Drawer.Body>
+                        <Drawer.Footer>
+                          <Button slot="close">Done</Button>
+                        </Drawer.Footer>
+                      </Drawer.Dialog>
+                    </Drawer.Content>
+                  </Drawer.Backdrop>
+                </Drawer>
+                {compactSort}
+                {showCompactRefresh && (
+                  <Tooltip delay={300}>
+                    <Button
+                      isIconOnly
+                      size="lg"
+                      variant={
+                        refreshing || requesting ? 'secondary' : 'tertiary'
+                      }
+                      aria-label="Refresh postings"
+                      isDisabled={!canRefresh}
+                      isPending={requesting}
+                      onPress={requestRefresh}
+                    >
+                      {refreshing || requesting ? (
+                        <Spinner size="sm" color="current" />
+                      ) : (
+                        <LuRefreshCw aria-hidden="true" />
+                      )}
+                    </Button>
+                    <Tooltip.Content>
+                      {refreshing ? 'Refreshing…' : 'Refresh postings'}
+                    </Tooltip.Content>
+                  </Tooltip>
+                )}
+              </div>
+            ) : (
               <SearchField
                 aria-label="Search titles, companies, locations, and posting IDs"
                 value={query}
@@ -1081,75 +1613,13 @@ const WorkspaceView = memo(function WorkspaceView({
               >
                 <SearchField.Group>
                   <SearchField.SearchIcon />
-                  <SearchField.Input
-                    placeholder={
-                      compact
-                        ? 'Search title, company, ID…'
-                        : 'Search title, company, location, or ID…'
-                    }
-                  />
+                  <SearchField.Input placeholder="Search title, company, location, or ID…" />
                   <SearchField.ClearButton />
                 </SearchField.Group>
               </SearchField>
-              {/* Phones: one 44px icon trigger with a count Badge opens the
-                  same filters, options and sort in a documented Drawer. */}
-              <Drawer>
-                <Badge.Anchor>
-                  <Button
-                    isIconOnly
-                    size="lg"
-                    variant={activeFilterCount ? 'secondary' : 'tertiary'}
-                    aria-label={
-                      activeFilterCount
-                        ? `Filters (${activeFilterCount})`
-                        : 'Filters'
-                    }
-                    aria-haspopup="dialog"
-                    isDisabled={!connected}
-                  >
-                    <LuFilter aria-hidden="true" />
-                  </Button>
-                  {activeFilterCount > 0 && (
-                    <Badge color="accent" size="sm">
-                      {activeFilterCount}
-                    </Badge>
-                  )}
-                </Badge.Anchor>
-                <Drawer.Backdrop>
-                  <Drawer.Content placement="bottom">
-                    <Drawer.Dialog>
-                      <Drawer.Handle />
-                      <Drawer.CloseTrigger />
-                      <Drawer.Header>
-                        <Drawer.Heading>Filters</Drawer.Heading>
-                      </Drawer.Header>
-                      <Drawer.Body>{sidebarContent}</Drawer.Body>
-                      <Drawer.Footer>
-                        <Button slot="close">Done</Button>
-                      </Drawer.Footer>
-                    </Drawer.Dialog>
-                  </Drawer.Content>
-                </Drawer.Backdrop>
-              </Drawer>
-            </div>
-          ) : (
-            <SearchField
-              aria-label="Search titles, companies, locations, and posting IDs"
-              value={query}
-              onChange={(value) => {
-                setQuery(value);
-                setPagination({ page: 1, query: value });
-              }}
-              isDisabled={!connected}
-            >
-              <SearchField.Group>
-                <SearchField.SearchIcon />
-                <SearchField.Input placeholder="Search title, company, location, or ID…" />
-                <SearchField.ClearButton />
-              </SearchField.Group>
-            </SearchField>
-          )}
-        </motion.div>
+            )}
+          </motion.div>
+        )}
         {/* Phones open filters from the search row's Drawer instead. */}
         {!compact && (
           <motion.aside
@@ -1192,438 +1662,70 @@ const WorkspaceView = memo(function WorkspaceView({
           animate={{
             opacity: detailOpen ? 0 : 1,
             visibility: detailOpen ? 'hidden' : 'visible',
+            ...(compact ? collapsedOnPhone : {}),
           }}
-          transition={{
-            ...transition,
-            visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
-          }}
+          transition={browseTransition}
           aria-label="Posting browser"
           aria-busy={loading}
         >
-          <div className="workspace-toolbar">
-            <Typography type="body-sm" color="muted" role="status">
-              {connected
-                ? `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'} · Page ${currentPage}/${pages}${compact ? '' : ` · Showing ${visible.length} on this page`}`
-                : loading
-                  ? 'Loading saved postings…'
-                  : 'Waiting for saved postings'}
-            </Typography>
-            {connected && hasFilters && (
-              <Button
-                size="sm"
-                variant="tertiary"
-                onPress={() => {
-                  setQuery('');
-                  setFilters(emptyFilters);
-                  setPage(1);
-                }}
-              >
-                Clear search and filters
-              </Button>
-            )}
-            {!compact && <div className="sort-control">{sortSelect}</div>}
-          </div>
-          {connected && !paySortAvailable && (
-            <Typography type="body-xs" color="muted">
-              Compensation sorting requires the updated API. It stays disabled
-              until the server can be safely restarted.
-            </Typography>
+          {!compact && (
+            <div className="workspace-toolbar">
+              <Typography type="body-sm" color="muted" role="status">
+                {connected
+                  ? `${countText} · Page ${currentPage}/${pages} · Showing ${visible.length} on this page`
+                  : loading
+                    ? 'Loading saved postings…'
+                    : 'Waiting for saved postings'}
+              </Typography>
+              {connected && hasFilters && (
+                <Button
+                  size="sm"
+                  variant="tertiary"
+                  onPress={() => {
+                    setQuery('');
+                    setFilters(emptyFilters);
+                    setPage(1);
+                  }}
+                >
+                  Clear search and filters
+                </Button>
+              )}
+              {!compact && <div className="sort-control">{sortSelect}</div>}
+            </div>
           )}
-          {payMetric && paySortAvailable && (
-            <Disclosure>
-              <Disclosure.Heading>
-                <Disclosure.Trigger>
-                  <span className="filter-heading">
-                    <Typography type="body-xs" color="muted">
-                      How pay sorting works
-                    </Typography>
-                    <Disclosure.Indicator />
-                  </span>
-                </Disclosure.Trigger>
-              </Disclosure.Heading>
-              <Disclosure.Content>
-                <Disclosure.Body>
-                  <Typography type="body-xs" color="muted">
-                    Highest first within comparable currency / pay-period
-                    groups. Average = (minimum + maximum) ÷ 2; tiers use outer
-                    bounds. Weekly/monthly/yearly pay uses stated hours or
-                    40h/week, with 52 weeks/year. Currency conversion follows
-                    your display setting using dated FX. Unspecified currencies
-                    count as CAD for sorting and colors; * marks that
-                    assumption. Missing salary sorts as zero; unknown units and
-                    disputed pay remain unranked. Colors use maximum CAD/hour
-                    pay.
-                  </Typography>
-                </Disclosure.Body>
-              </Disclosure.Content>
-            </Disclosure>
-          )}
+          {!compact && payNotes}
           {signedOut ? (
             <div className="auth-results">
               <div className="auth-card-layout">{signedOutContent}</div>
             </div>
           ) : (
             <div className="results-scroll">
-              <ScrollShadow
-                size={24}
-                ref={resultsScroll}
-                tabIndex={0}
-                role="region"
-                aria-label="Posting cards"
-                hideScrollBar
-              >
-                <div className="results-scroll-content">
-                  <div className="results-transition">
-                    <AnimatePresence initial={false} mode="sync">
-                      <motion.div
-                        key={loading ? 'loading' : 'loaded'}
-                        className="results-layer"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={transition}
-                      >
-                        {loading ? (
-                          <div
-                            className="posting-grid"
-                            aria-hidden="true"
-                            data-loading-placeholder="true"
-                          >
-                            {Array.from({ length: PAGE_SIZE }, (_, index) => (
-                              <Card key={index} data-posting-skeleton="true">
-                                <Card.Header>
-                                  <div className="posting-title">
-                                    <div className="skeleton-title-block">
-                                      <Skeleton animationType="none">
-                                        <div className="skeleton-title-space" />
-                                      </Skeleton>
-                                      <div className="skeleton-short-title">
-                                        <Skeleton animationType="none">
-                                          <div className="skeleton-title-space" />
-                                        </Skeleton>
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div className="posting-field">
-                                    <Skeleton animationType="none">
-                                      <div className="skeleton-icon-space" />
-                                    </Skeleton>
-                                    <div className="skeleton-text-line skeleton-company-line">
-                                      <Skeleton animationType="none">
-                                        <div className="skeleton-line-space" />
-                                      </Skeleton>
-                                    </div>
-                                  </div>
-                                  <div className="posting-identity">
-                                    <div className="posting-field">
-                                      <Skeleton animationType="none">
-                                        <div className="skeleton-icon-space" />
-                                      </Skeleton>
-                                      <div className="skeleton-text-line skeleton-id-line">
-                                        <Skeleton animationType="none">
-                                          <div className="skeleton-line-space" />
-                                        </Skeleton>
-                                      </div>
-                                    </div>
-                                    <div className="skeleton-text-line skeleton-deadline-line">
-                                      <Skeleton animationType="none">
-                                        <div className="skeleton-line-space" />
-                                      </Skeleton>
-                                    </div>
-                                  </div>
-                                </Card.Header>
-                                <Separator />
-                                <Card.Content>
-                                  <div className="posting-details">
-                                    {[65, 60, 55, 50, 45].map((width) => (
-                                      <div
-                                        className="posting-field"
-                                        key={width}
-                                      >
-                                        <Skeleton animationType="none">
-                                          <div className="skeleton-icon-space" />
-                                        </Skeleton>
-                                        <div
-                                          className="skeleton-text-line"
-                                          style={{ width: `${width}%` }}
-                                        >
-                                          <Skeleton animationType="none">
-                                            <div className="skeleton-line-space" />
-                                          </Skeleton>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </Card.Content>
-                              </Card>
-                            ))}
-                          </div>
-                        ) : visible.length === 0 ? (
-                          <Card variant="secondary">
-                            <Card.Header>
-                              <Card.Title>{emptyText}</Card.Title>
-                              <Card.Description>
-                                {connected
-                                  ? hasFilters
-                                    ? 'Try another title or clear your filters.'
-                                    : 'Use manual refresh to load postings when it is enabled.'
-                                  : 'Connect the local API to browse your postings.'}
-                              </Card.Description>
-                            </Card.Header>
-                          </Card>
-                        ) : (
-                          <div className="posting-grid">
-                            {visible.map((posting) => {
-                              const deadline = parseDeadline(
-                                posting.listing.deadline,
-                              );
-                              const badge = deadlineBadge(deadline, now);
-                              return (
-                                <Card
-                                  key={posting.posting_id}
-                                  role="article"
-                                  aria-labelledby={`posting-${posting.posting_id}`}
-                                >
-                                  <Card.Header>
-                                    <div className="posting-title">
-                                      <Typography
-                                        type="h5"
-                                        weight="semibold"
-                                        role="heading"
-                                        aria-level={3}
-                                        id={`posting-${posting.posting_id}`}
-                                      >
-                                        <Link
-                                          id={`job-link-${posting.posting_id}`}
-                                          href={jobUrl(
-                                            window.location.href,
-                                            posting.posting_id,
-                                          )}
-                                          onClick={(event) => {
-                                            if (
-                                              !shouldOpenJob(event) ||
-                                              !(
-                                                event.currentTarget instanceof
-                                                HTMLAnchorElement
-                                              )
-                                            )
-                                              return;
-                                            event.preventDefault();
-                                            returnTarget.current = {
-                                              element: event.currentTarget,
-                                              id: posting.posting_id,
-                                              scroll:
-                                                resultsScroll.current
-                                                  ?.scrollTop ?? 0,
-                                              windowScroll: window.scrollY,
-                                            };
-                                            // Store position on the listing entry too, so reload → Back
-                                            // restores without depending on an in-memory element ref.
-                                            window.history.replaceState(
-                                              {
-                                                ...window.history.state,
-                                                jobBrowsePosition: {
-                                                  id: posting.posting_id,
-                                                  scroll:
-                                                    returnTarget.current.scroll,
-                                                  windowScroll:
-                                                    returnTarget.current
-                                                      .windowScroll,
-                                                },
-                                              },
-                                              '',
-                                            );
-                                            window.history.pushState(
-                                              {
-                                                ...window.history.state,
-                                                jobEntry: true,
-                                              },
-                                              '',
-                                              jobUrl(
-                                                window.location.href,
-                                                posting.posting_id,
-                                              ),
-                                            );
-                                            window.dispatchEvent(
-                                              new PopStateEvent('popstate'),
-                                            );
-                                          }}
-                                        >
-                                          {displayValue(posting.listing.title)}
-                                        </Link>
-                                      </Typography>
-                                    </div>
-                                    <div className="posting-field">
-                                      <LuBuilding2
-                                        size={16}
-                                        color="var(--muted)"
-                                        role="img"
-                                        aria-label="Company"
-                                      />
-                                      <Card.Description>
-                                        {displayValue(
-                                          posting.listing.organization,
-                                        )}
-                                      </Card.Description>
-                                    </div>
-                                    <div className="posting-identity">
-                                      <div className="posting-field">
-                                        <LuHash
-                                          size={16}
-                                          color="var(--muted)"
-                                          role="img"
-                                          aria-label="Posting ID"
-                                        />
-                                        <Typography
-                                          type="body-sm"
-                                          color="muted"
-                                        >
-                                          {posting.posting_id}
-                                        </Typography>
-                                      </div>
-                                      <Tooltip delay={300}>
-                                        <Tooltip.Trigger
-                                          aria-label={`${badge.label}. Deadline: ${exactDeadline(deadline, posting.listing.deadline)}`}
-                                        >
-                                          {badge.quiet ? (
-                                            <Typography
-                                              type="body-xs"
-                                              color="muted"
-                                              weight="normal"
-                                            >
-                                              {badge.label}
-                                            </Typography>
-                                          ) : (
-                                            <Chip
-                                              size="sm"
-                                              variant={badge.variant}
-                                              color={badge.color}
-                                            >
-                                              {badge.label}
-                                            </Chip>
-                                          )}
-                                        </Tooltip.Trigger>
-                                        <Tooltip.Content showArrow>
-                                          <Tooltip.Arrow />
-                                          {exactDeadline(
-                                            deadline,
-                                            posting.listing.deadline,
-                                          )}
-                                        </Tooltip.Content>
-                                      </Tooltip>
-                                    </div>
-                                  </Card.Header>
-                                  <Separator />
-                                  <Card.Content>
-                                    <div className="posting-details">
-                                      <div
-                                        className="posting-field"
-                                        aria-label="Compensation"
-                                      >
-                                        <LuDollarSign
-                                          size={16}
-                                          color="var(--muted)"
-                                          aria-hidden="true"
-                                        />
-                                        <Typography
-                                          type="body-sm"
-                                          color="muted"
-                                          weight="normal"
-                                        >
-                                          <span
-                                            className={`salary-value salary-${presentations.get(posting.posting_id)?.tier ?? 'neutral'}`}
-                                          >
-                                            {presentations.get(
-                                              posting.posting_id,
-                                            )?.label ?? '--/--'}
-                                          </span>
-                                        </Typography>
-                                      </div>
-                                      <div className="location-with-arrangement">
-                                        <div className="location-field">
-                                          <LuMapPin
-                                            size={16}
-                                            color="var(--muted)"
-                                            role="img"
-                                            aria-label="Location"
-                                          />
-                                          {inferredCountryName(
-                                            posting.country_inference,
-                                          ) && (
-                                            <img
-                                              className="country-flag"
-                                              src={countryFlagUrl(
-                                                posting.country_inference
-                                                  .country_code,
-                                              )}
-                                              alt={
-                                                posting.country_inference
-                                                  .country_name ?? ''
-                                              }
-                                              width={16}
-                                            />
-                                          )}
-                                          <Typography
-                                            type="body-sm"
-                                            color="muted"
-                                          >
-                                            {displayValue(posting.location)}
-                                          </Typography>
-                                        </div>
-                                        {posting.work_arrangement && (
-                                          <Chip size="sm" variant="soft">
-                                            {posting.work_arrangement}
-                                          </Chip>
-                                        )}
-                                      </div>
-                                      <div className="posting-field">
-                                        <LuUsers
-                                          size={16}
-                                          color="var(--muted)"
-                                          aria-hidden="true"
-                                        />
-                                        <Typography
-                                          type="body-sm"
-                                          color="muted"
-                                        >
-                                          {formatCount(
-                                            posting.listing.application_count,
-                                            'application',
-                                          )}
-                                        </Typography>
-                                      </div>
-                                      <div className="posting-field">
-                                        <LuCalendarDays
-                                          size={16}
-                                          color="var(--muted)"
-                                          aria-hidden="true"
-                                        />
-                                        <Typography
-                                          type="body-sm"
-                                          color="muted"
-                                        >
-                                          {formatCount(
-                                            posting.listing.openings,
-                                            'opening',
-                                          )}
-                                        </Typography>
-                                      </div>
-                                    </div>
-                                  </Card.Content>
-                                </Card>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </motion.div>
-                    </AnimatePresence>
-                  </div>
+              {compact ? (
+                // Phones scroll the page, not a nested results box.
+                <div
+                  ref={resultsScroll}
+                  role="region"
+                  aria-label="Posting cards"
+                  className="results-region"
+                >
+                  {resultsContent}
                 </div>
-              </ScrollShadow>
+              ) : (
+                <ScrollShadow
+                  size={24}
+                  ref={resultsScroll}
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Posting cards"
+                  hideScrollBar
+                >
+                  {resultsContent}
+                </ScrollShadow>
+              )}
             </div>
           )}
           {!loading && !signedOut && (
-            <div className="pagination-dock">
+            <div className={compact ? 'pagination-inline' : 'pagination-dock'}>
               <div className="pagination-panel">
                 <div className="horizontal-overflow">
                   <Pagination aria-label="Posting pages" size="sm">
@@ -1670,6 +1772,13 @@ const WorkspaceView = memo(function WorkspaceView({
                   </Pagination>
                 </div>
               </div>
+              {compact && (
+                <Typography type="body-xs" color="muted" role="status">
+                  {connected
+                    ? `${countText} · Page ${currentPage}/${pages}${lastObserved ? ` · Updated ${displayTime(lastObserved)}` : ''}`
+                    : 'Waiting for saved postings'}
+                </Typography>
+              )}
             </div>
           )}
         </motion.section>
