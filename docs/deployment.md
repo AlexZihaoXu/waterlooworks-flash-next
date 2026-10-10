@@ -67,8 +67,22 @@ Before the parent transfers private data or starts any writer:
 1. Confirm collection and extraction are idle. Stop all writers only through the owner-approved procedure; no production restart is authorized by this document. Retain the original source/version and configuration.
 2. Make a **consistent** private SQLite backup via SQLite's backup API or after cleanly stopping all writers and checkpointing WAL. Copying only the main file while WAL is live is not a backup. Back up the independent encryption key separately; a DB-only restore cannot decrypt credentials. Restrict backup access; other SQLite data is not encrypted.
 3. Restore a private offline copy first. Call `open_database(copy_path).close()` with the new backend; verify `PRAGMA user_version=14`, integrity/FKs, exact table counts and source/history reconstruction/reuse equivalence against the backup. Schema14 narrowly rebuilds **only `inference_jobs`** to allow the exact historical/local or fixed OpenAI model/endpoint pairs and adds metadata-only OpenAI ledger tables. The migration checks retained schema/rows, dependencies, FKs and integrity; unknown dependencies abort/roll back. Auth ownership, hashed sessions, encrypted settings, listings/content/observations, append-only compact history and original extraction provenance must survive unchanged. Populated equivalence is a parent gate, not proven by empty tests.
-4. Only after review, migrate the deployed copy via the same explicit primitive or approved API startup. Startup can migrate schema and mark interrupted work but never resumes/collects/normalizes/infers. Ensure ample temporary disk; no automatic VACUUM. Do not run old incompatible binaries against the upgraded DB.
+4. Only after review, migrate the deployed copy via the same explicit primitive or approved API startup. Startup can migrate schema and report (not rewrite) a stale `running` refresh as `interrupted`/`recovery_required`; it never finalizes, resumes, collects, normalizes or infers. Ensure ample temporary disk; no automatic VACUUM. Do not run old incompatible binaries against the upgraded DB.
 5. On failure, stop writers and restore the consistent backup **as a unit** with its matching old application/schema/key/configuration. Keep failed/new evidence private for review; never splice WAL files or run an automatic downgrade. Losing the encryption key requires a separate owner recovery decision, not silent rotation. Never reset users/admin, append-only history or unknown-usage ledger rows as a workaround.
+
+### Interrupted refresh recovery
+
+On SIGTERM the API lifespan sets a cooperative stop flag and waits up to 150 seconds (below `stop_grace_period: 190s`). The refresh worker checks it after authentication, between listing pages, between detail postings and between OpenAI analysis batches; it then finalizes the run as `interrupted` and releases the provider lease. A partial listing pass is saved, completed detail checkpoints remain, and in-flight analysis completions may still checkpoint. Authentication/Duo and an individual paced request are not cut short, so a stop during those steps, a SIGKILL, OOM or power loss can still leave a durable `running` row. After restart the UI status reports `interrupted` with stage `recovery_required`, and new refreshes stay blocked (HTTP 409) until an operator finalizes the row explicitly:
+
+```sh
+docker compose --env-file /operator/private/production.env --profile prod stop backend
+docker compose --env-file /operator/private/production.env --profile prod run --rm --no-deps \
+  --entrypoint /bin/sh backend -c \
+  'umask 077 && exec /opt/venv/bin/python -m waterlooworks_flash_next.refresh recover /app/data/waterlooworks.sqlite3'
+docker compose --env-file /operator/private/production.env --profile prod start backend
+```
+
+The command first takes the provider lease and refuses (exit 1, nothing changed) while any live refresh or OpenAI extraction owns the database. It marks every `running` collection run `interrupted` and its open content/detail attempts `interrupted` with category `cancelled`, then prints only the two counts as JSON. It never logs in, fetches, resumes, normalizes or invokes OpenAI, and the normal 300-second cooldown then applies. An analysis job left `running` by the same crash is reported `interrupted` after its lease expires and still needs an explicit `inference resume` (see the README). Never hand-edit SQLite for this.
 
 ## Staged operator flow (parent gates)
 

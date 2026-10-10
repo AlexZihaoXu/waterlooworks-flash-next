@@ -30,6 +30,7 @@ from waterlooworks_flash_next.database import StoredListing
 from waterlooworks_flash_next.listings import (
     LISTING_URL,
     MAX_RETRY_AFTER_SECONDS,
+    CollectionInterrupted,
     FailureCategory,
     ListingFetchError,
     build_direct_opener,
@@ -40,6 +41,11 @@ from waterlooworks_flash_next.listings import (
 )
 
 MAX_DETAIL_BYTES = 5 * 1024 * 1024
+# Deterministic per-posting response problems: record and move to the next posting.
+# Every other category means the session/transport is unusable and stops the pass.
+ITEM_FAILURE_CATEGORIES = frozenset(
+    {FailureCategory.SCHEMA, FailureCategory.SIZE, FailureCategory.ENCODING}
+)
 
 
 def retry_delay(retry: int) -> int:
@@ -190,6 +196,7 @@ class DetailProgress:
     retries: int
     bursts: int
     wait_seconds: float = 0.0
+    failed: int = 0
 
 
 @dataclass(repr=False)
@@ -261,7 +268,14 @@ class DetailSource:
 
 
 class DetailCollection:
-    """One explicit full-list-derived queue. Each success is a durable checkpoint."""
+    """One explicit list-derived queue. Each success is a durable checkpoint.
+
+    A posting whose own response fails validation is recorded as a failed attempt
+    and skipped; session-level failures, a failed bootstrap, or a run of
+    consecutive item failures (suggesting a broken session) stop the pass.
+    """
+
+    MAX_CONSECUTIVE_ITEM_FAILURES = 10
 
     def __init__(
         self,
@@ -274,8 +288,10 @@ class DetailCollection:
             [StoredListing, Callable[[Callable[[], str]], str]], DetailSource
         ]
         | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.source = source
+        self.should_stop = should_stop
         self.bootstrap = bootstrap
         self.connection = connection
         self.run_id = run_id
@@ -283,6 +299,7 @@ class DetailCollection:
         self.progress = progress
         self.pacer = BurstPacer()
         self.completed = 0
+        self.failed = 0
         self.retries = 0
 
     def _progress(
@@ -297,6 +314,7 @@ class DetailCollection:
                 self.retries,
                 self.pacer.bursts,
                 wait,
+                self.failed,
             )
         )
 
@@ -383,7 +401,11 @@ class DetailCollection:
                 raise DetailFetchError(FailureCategory.STALE)
             self.source.used = True
         self._progress()
+        consecutive = 0
         for posting in self.postings:
+            if self.should_stop is not None and self.should_stop():
+                raise CollectionInterrupted
+            established = self.source is not None
             attempt_id = start_content_attempt(self.connection, self.run_id, posting.id)
             try:
                 content = self._content(attempt_id, posting)
@@ -407,6 +429,16 @@ class DetailCollection:
                     error.category.value,
                     http_status=error.status,
                 )
-                raise error from None
+                consecutive += 1
+                if (
+                    not established
+                    or error.category not in ITEM_FAILURE_CATEGORIES
+                    or consecutive >= self.MAX_CONSECUTIVE_ITEM_FAILURES
+                ):
+                    raise error from None
+                self.failed += 1
+                self._progress()
+                continue
+            consecutive = 0
             self.completed += 1
             self._progress()

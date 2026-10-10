@@ -71,6 +71,7 @@ from waterlooworks_flash_next.refresh import (
     RefreshConflict,
     RefreshService,
     configured_detail_limit,
+    configured_full_refetch,
 )
 from waterlooworks_flash_next.snapshot_cache import SnapshotCache
 from waterlooworks_flash_next.targeted_disciplines import read_targeted_disciplines
@@ -90,7 +91,17 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if database_path is None
         else None
     )
-    service = RefreshService(path, root if enabled else None, detail_limit=detail_limit)
+    full_refetch = (
+        configured_full_refetch(os.environ.get("WW_DETAIL_FULL_REFETCH"))
+        if database_path is None
+        else False
+    )
+    service = RefreshService(
+        path,
+        root if enabled else None,
+        detail_limit=detail_limit,
+        full_refetch=full_refetch,
+    )
 
     # Interactive docs load third-party CDN script on the app origin and expose
     # the API surface unauthenticated, so they are opt-in for local work only.
@@ -109,6 +120,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Cooperative stop: the worker finalizes its run as interrupted at the
+            # next page/posting/analysis-batch checkpoint before SIGKILL.
+            await asyncio.to_thread(service.request_stop)
             verifier.close()
             workspace_cache.close()
             keyword_cache.close()

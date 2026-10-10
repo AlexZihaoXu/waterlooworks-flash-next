@@ -380,9 +380,15 @@ def test_current_challenge_is_admin_only_and_never_in_refresh_events(
     services: list[RefreshService] = []
 
     def capture_service(
-        path: Path, root: Path | None, *, detail_limit: int | None = None
+        path: Path,
+        root: Path | None,
+        *,
+        detail_limit: int | None = None,
+        full_refetch: bool = False,
     ) -> RefreshService:
-        service = RefreshService(path, root, detail_limit=detail_limit)
+        service = RefreshService(
+            path, root, detail_limit=detail_limit, full_refetch=full_refetch
+        )
         services.append(service)
         return service
 
