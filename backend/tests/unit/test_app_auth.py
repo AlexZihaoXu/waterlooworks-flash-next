@@ -1,6 +1,7 @@
 """Empty SQLite/session primitives only; no provider responses or key material."""
 
 import base64
+import hashlib
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -263,3 +264,42 @@ def test_absolute_session_lifetime_requires_fresh_google_login(
     for auth_time in (near_end - SESSION_ABSOLUTE_LIFETIME, near_end + 1):
         with pytest.raises(AuthError):
             store.issue(fresh, "uid", near_end + 60, auth_time=auth_time, now=near_end)
+
+
+def test_prepare_evicts_oldest_anonymous_rows_instead_of_refusing(
+    tmp_path: Path,
+) -> None:
+    import secrets
+
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="uid"))
+    signed_in = store.issue(
+        store.prepare(None, now=100), "uid", 5000, auth_time=100, now=100
+    )
+    oldest = "0" * 64
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO app_sessions VALUES (?, NULL, ?)", (oldest, 101)
+        )
+        connection.executemany(
+            "INSERT INTO app_sessions VALUES (?, NULL, ?)",
+            [(secrets.token_hex(32), 200 + index) for index in range(999)],
+        )
+    cookie = store.prepare(None, now=100)
+    with sqlite3.connect(path) as connection:
+        anonymous = connection.execute(
+            "SELECT count(*) FROM app_sessions WHERE uid IS NULL"
+        ).fetchone()[0]
+        assert anonymous == 1000
+        digest = hashlib.sha256(cookie.encode()).hexdigest()
+        assert connection.execute(
+            "SELECT 1 FROM app_sessions WHERE token_hash=?", (digest,)
+        ).fetchone()
+        assert (
+            connection.execute(
+                "SELECT 1 FROM app_sessions WHERE token_hash=?", (oldest,)
+            ).fetchone()
+            is None
+        )
+    assert store.lookup(signed_in.cookie, now=150) == signed_in.identity

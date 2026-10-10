@@ -36,6 +36,7 @@ SESSION_ABSOLUTE_LIFETIME = 12 * 3600
 # A renewed session's replaced value stays valid this long for in-flight
 # requests and concurrent tabs. A prepared (pre-login) value gets no grace.
 ROTATION_GRACE_SECONDS = 30
+MAX_PREPARED = 1000  # Live anonymous reservations; the oldest are evicted.
 SESSION_COOKIE = APIKeyCookie(name=COOKIE, auto_error=False, scheme_name="AppSession")
 
 
@@ -280,13 +281,18 @@ class SessionStore:
                     "DELETE FROM app_sessions WHERE expires_at<=? OR token_hash=?",
                     (now, _digest(previous)),
                 )
-                if (
+                # Bound anonymous reservations by evicting the oldest instead of
+                # refusing, so a prepare flood cannot block every new sign-in.
+                anonymous = connection.execute(
+                    "SELECT count(*) FROM app_sessions WHERE uid IS NULL"
+                ).fetchone()[0]
+                if anonymous >= MAX_PREPARED:
                     connection.execute(
-                        "SELECT count(*) FROM app_sessions WHERE uid IS NULL"
-                    ).fetchone()[0]
-                    >= 1000
-                ):
-                    raise AuthError("Authentication is temporarily unavailable.")
+                        "DELETE FROM app_sessions WHERE token_hash IN ("
+                        "SELECT token_hash FROM app_sessions WHERE uid IS NULL "
+                        "ORDER BY expires_at LIMIT ?)",
+                        (anonymous - MAX_PREPARED + 1,),
+                    )
                 connection.execute(
                     "INSERT INTO app_sessions VALUES (?, NULL, ?)",
                     (_digest(cookie), now + 300),

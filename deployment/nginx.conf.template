@@ -18,6 +18,17 @@ http {
     fastcgi_temp_path /tmp/fastcgi_temp;
     uwsgi_temp_path /tmp/uwsgi_temp;
     scgi_temp_path /tmp/scgi_temp;
+    # Anonymous auth endpoints (prepare/exchange) get a request-rate bound;
+    # every other URI maps to an empty key, which limit_req never limits.
+    # Behind the operator TLS terminator all clients may share one peer
+    # address, so this is an aggregate backend guard: per-client limits
+    # belong at the terminator (see docs/deployment.md).
+    map $uri $ww_auth_limit_key {
+        ~^/api/auth/ $binary_remote_addr;
+        default "";
+    }
+    limit_req_zone $ww_auth_limit_key zone=ww_auth:1m rate=5r/s;
+    limit_req_status 429;
     server {
         listen 8080;
         server_name ${WW_PUBLIC_HOST};
@@ -26,6 +37,7 @@ http {
         add_header X-Content-Type-Options nosniff always;
         add_header Referrer-Policy no-referrer always;
         location ~ ^/(api|doc)(/|$) {
+            limit_req zone=ww_auth burst=20 nodelay;
             proxy_pass http://backend:8787;
             proxy_http_version 1.1;
             proxy_set_header Connection "";

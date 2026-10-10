@@ -409,3 +409,22 @@ def test_current_challenge_is_admin_only_and_never_in_refresh_events(
         service.auth_challenge.clear("current")
         client.post("/api/auth/logout", json={})
         assert client.get("/api/admin/refresh-auth").status_code == 401
+
+
+def test_auth_storage_overload_is_503_with_retry_after(tmp_path: Path) -> None:
+    path = tmp_path / "db.sqlite3"
+    with session_client(path) as client:
+        blocker = sqlite3.connect(path, isolation_level=None)
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+            response = client.post("/api/auth/prepare", json={})
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+        assert response.status_code == 503
+        assert response.headers["retry-after"] == "2"
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json() == {
+            "detail": "Authentication is busy. Try again shortly."
+        }
+        assert client.post("/api/auth/prepare", json={}).status_code == 200

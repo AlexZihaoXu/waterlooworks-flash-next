@@ -1,6 +1,7 @@
 """Authentication transport and bounded public session endpoints."""
 
 import asyncio
+import sqlite3
 import threading
 import time
 from typing import Annotated, cast
@@ -24,6 +25,13 @@ from waterlooworks_flash_next.app_auth import (
     require_firebase_ready,
     require_session,
 )
+
+
+class AuthBusy(Exception):
+    """True overload: storage contention or saturated verification slots."""
+
+
+BUSY_RETRY_AFTER_SECONDS = "2"
 
 
 def install_auth(
@@ -91,6 +99,17 @@ def install_auth(
             status_code=401, content={"detail": "Authentication was not accepted."}
         )
 
+    @app.exception_handler(AuthBusy)
+    async def authentication_busy(request: Request, error: AuthBusy) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Authentication is busy. Try again shortly."},
+            headers={
+                "Retry-After": BUSY_RETRY_AFTER_SECONDS,
+                "Cache-Control": "no-store",
+            },
+        )
+
     @app.exception_handler(BootstrapRefused)
     async def bootstrap_refused(
         request: Request, error: BootstrapRefused
@@ -121,7 +140,10 @@ def install_auth(
     def prepare(
         request: Request, response: Response, body: RefreshRequest
     ) -> dict[str, bool]:
-        cookie = sessions.prepare(request.cookies.get(COOKIE))
+        try:
+            cookie = sessions.prepare(request.cookies.get(COOKIE))
+        except sqlite3.OperationalError:
+            raise AuthBusy from None  # e.g. database locked past its timeout.
         set_cookie(request, response, cookie, MAX_TTL)
         return {"ready": True}
 
@@ -138,7 +160,7 @@ def install_auth(
         if not cookie or not sessions.prepared(cookie):
             raise HTTPException(401, "Prepare sign-in first.")
         if not verification_slots.acquire(blocking=False):
-            raise HTTPException(429, "Authentication is busy. Try again later.")
+            raise AuthBusy
         try:
             verified = verifier.verify(body.id_token)
             issued = sessions.issue(
@@ -148,6 +170,8 @@ def install_auth(
                 auth_time=verified.auth_time,
                 email=verified.email,
             )
+        except sqlite3.OperationalError:
+            raise AuthBusy from None
         finally:
             verification_slots.release()
         # Always a freshly minted value: login and renewal both rotate.

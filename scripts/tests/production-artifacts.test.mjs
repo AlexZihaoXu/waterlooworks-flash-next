@@ -138,6 +138,22 @@ test('nginx exact-host TLS boundary strips forwarding, disables SSE buffering an
   assert.match(nginx, /access_log off/);
 });
 
+test('nginx rate-limits the anonymous auth endpoints', () => {
+  const nginx = read('deployment/nginx.conf.template');
+  // Only /api/auth/ gets a non-empty key; empty keys are never limited.
+  assert.match(
+    nginx,
+    /map \$uri \$ww_auth_limit_key \{\s+~\^\/api\/auth\/ \$binary_remote_addr;\s+default "";\s+\}/,
+  );
+  assert.match(
+    nginx,
+    /limit_req_zone \$ww_auth_limit_key zone=ww_auth:\d+m rate=\d+r\/s;/,
+  );
+  assert.match(nginx, /limit_req_status 429;/);
+  const api = nginx.split(/location ~ \^\/\(?api/)[1].split('}')[0];
+  assert.match(api, /limit_req zone=ww_auth burst=\d+ nodelay;/);
+});
+
 test('build context excludes private input and secret-bearing files', () => {
   const exclusions = read('.dockerignore').split(/\r?\n/);
   for (const item of [
