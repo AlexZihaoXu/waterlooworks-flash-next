@@ -76,6 +76,7 @@ from waterlooworks_flash_next.refresh import (
     configured_detail_limit,
     configured_full_refetch,
 )
+from waterlooworks_flash_next.shutdown import ShutdownNotice
 from waterlooworks_flash_next.snapshot_cache import SnapshotCache
 from waterlooworks_flash_next.targeted_disciplines import read_targeted_disciplines
 from waterlooworks_flash_next.work_arrangement import read_work_arrangements
@@ -114,6 +115,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     workspace_cache = SnapshotCache[tuple[bytes, bytes]](path)
     keyword_cache = SnapshotCache[tuple[bytes, str]](path)
     event_streams = StreamLimiter()
+    shutdown = ShutdownNotice()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -121,9 +123,14 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         app.state.transport = AuthTransport.from_environment()
         open_database(path).close()
         service.restore()
+        # uvicorn runs the lifespan shutdown only after open responses finish, and
+        # SSE streams never finish on their own: flag the worker and end streams as
+        # soon as the signal arrives instead.
+        uninstall = shutdown.install(lambda: service.request_stop(timeout=0))
         try:
             yield
         finally:
+            uninstall()
             # Cooperative stop: the worker finalizes its run as interrupted at the
             # next page/posting/analysis-batch checkpoint before SIGKILL.
             await asyncio.to_thread(service.request_stop)
@@ -530,7 +537,14 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 headers={"Retry-After": "5", "Cache-Control": "no-store"},
             )
         return StreamingResponse(
-            session_event_stream(request, service, sessions, once=once, lease=lease),
+            session_event_stream(
+                request,
+                service,
+                sessions,
+                once=once,
+                lease=lease,
+                shutdown=shutdown,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
             # Idempotent backstop for a response whose body never starts.
@@ -549,6 +563,7 @@ async def session_event_stream(
     *,
     once: bool = False,
     lease: StreamLease | None = None,
+    shutdown: ShutdownNotice | None = None,
 ) -> AsyncGenerator[str, None]:
     """Recheck the persisted session before every SSE emission, not only connection.
 
@@ -559,6 +574,8 @@ async def session_event_stream(
     previous = ""
     try:
         while not await request.is_disconnected():
+            if shutdown is not None and shutdown.is_set():
+                break
             if await asyncio.to_thread(sessions.lookup, cookie) is None:
                 break
             payload = await asyncio.to_thread(_snapshot_json, service)
