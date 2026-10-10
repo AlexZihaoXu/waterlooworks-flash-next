@@ -39,6 +39,7 @@ import { googlePhotoUrl, type AccountProfile } from '../lib/accountProfile';
 import { useAccountProfile } from '../lib/useAccountProfile';
 import type { AuthState } from '../lib/authLifecycle';
 import { useAppAuth } from '../lib/useAppAuth';
+import { useCompactLayout } from '../lib/useCompactLayout';
 import { App } from './App';
 import { AdminSettingsDialog } from './AdminSettingsDialog';
 import { AISettingsPanel } from './AISettingsPanel';
@@ -254,6 +255,8 @@ export function AuthGate({
 }
 
 // Documented HeroUI composition; native spans only lay out the account text.
+// Phones show the avatar alone; name and email move into the menu header
+// (the documented Dropdown "Custom Trigger" composition).
 export function AccountMenu({
   profile,
   signOut,
@@ -268,43 +271,68 @@ export function AccountMenu({
   /** Admin only: lets workspace notices open Admin settings. */
   settingsRef?: Ref<AdminSettingsHandle>;
 }) {
+  const compact = useCompactLayout();
   const photo = googlePhotoUrl(profile?.photo_url);
-  const content = (
+  const name = profile?.display_name || 'Account';
+  const avatar = (
+    <Avatar size="sm">
+      {photo && (
+        <Avatar.Image src={photo} alt="" referrerPolicy="no-referrer" />
+      )}
+      <Avatar.Fallback>
+        <LuUserRound aria-hidden="true" />
+      </Avatar.Fallback>
+    </Avatar>
+  );
+  const content = compact ? (
+    avatar
+  ) : (
     <>
-      <Avatar size="sm">
-        {photo && (
-          <Avatar.Image src={photo} alt="" referrerPolicy="no-referrer" />
-        )}
-        <Avatar.Fallback>
-          <LuUserRound aria-hidden="true" />
-        </Avatar.Fallback>
-      </Avatar>
+      {avatar}
       <span className="account-text">
-        <span className="account-name">
-          {profile?.display_name || 'Account'}
-        </span>
+        <span className="account-name">{name}</span>
         {profile?.email && (
           <span className="account-email">{profile.email}</span>
         )}
       </span>
     </>
   );
+  const identity = compact && (
+    <div className="account-identity">
+      <Typography type="body-sm" weight="medium">
+        {name}
+      </Typography>
+      {profile?.email && (
+        <Typography type="body-xs" color="muted">
+          {profile.email}
+        </Typography>
+      )}
+    </div>
+  );
   if (role === 'admin')
     return (
       <AdminAccountMenu
         key={uid}
         uid={uid}
+        compact={compact}
         content={content}
+        identity={identity}
         signOut={signOut}
         settingsRef={settingsRef}
       />
     );
   return (
     <Dropdown>
-      <Button aria-label="Account menu" variant="ghost" size="lg">
+      <Button
+        aria-label="Account menu"
+        variant="ghost"
+        size="lg"
+        isIconOnly={compact}
+      >
         {content}
       </Button>
       <Dropdown.Popover placement="bottom end">
+        {identity}
         <Dropdown.Menu
           aria-label="Account actions"
           onAction={(key) => {
@@ -325,12 +353,16 @@ export type AdminSettingsHandle = { open: () => void };
 // Official v3 content in the owner-approved bounded native dialog shell.
 function AdminAccountMenu({
   uid,
+  compact,
   content,
+  identity,
   signOut,
   settingsRef,
 }: {
   uid: string;
+  compact: boolean;
   content: ReactNode;
+  identity: ReactNode;
   signOut: () => void;
   settingsRef?: Ref<AdminSettingsHandle>;
 }) {
@@ -367,19 +399,50 @@ function AdminAccountMenu({
     }
     setSelectedTab(key);
   };
+  const openSettings = () => {
+    setSelectedTab('credentials');
+    settings.setOpen(true);
+  };
   return (
     <>
-      <Button
-        aria-label="Account menu"
-        variant="ghost"
-        size="lg"
-        onPress={() => {
-          setSelectedTab('credentials');
-          settings.setOpen(true);
-        }}
-      >
-        {content}
-      </Button>
+      {compact ? (
+        <Dropdown>
+          <Button
+            aria-label="Account menu"
+            variant="ghost"
+            size="lg"
+            isIconOnly
+          >
+            {content}
+          </Button>
+          <Dropdown.Popover placement="bottom end">
+            {identity}
+            <Dropdown.Menu
+              aria-label="Account actions"
+              onAction={(key) => {
+                if (key === 'settings') openSettings();
+                if (key === 'sign-out') signOut();
+              }}
+            >
+              <Dropdown.Item id="settings" textValue="Admin settings">
+                <Label>Admin settings</Label>
+              </Dropdown.Item>
+              <Dropdown.Item id="sign-out" textValue="Sign out">
+                <Label>Sign out</Label>
+              </Dropdown.Item>
+            </Dropdown.Menu>
+          </Dropdown.Popover>
+        </Dropdown>
+      ) : (
+        <Button
+          aria-label="Account menu"
+          variant="ghost"
+          size="lg"
+          onPress={openSettings}
+        >
+          {content}
+        </Button>
+      )}
       {settings.isOpen && (
         <AdminSettingsDialog
           onDismiss={() => closeSettings(false)}

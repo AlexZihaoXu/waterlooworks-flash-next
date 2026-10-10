@@ -50,9 +50,13 @@ it.each([1440, 320])(
       width > 896 ? '16rem minmax(0, 1fr)' : 'minmax(0, 1fr)',
     );
     expect(layout.style.columnGap).toBe('1.5rem');
+    // Phones open filters from the search row, so no sidebar is mounted.
+    expect(container.querySelector('.filter-sidebar') === null).toBe(
+      width <= 640,
+    );
     for (const selector of [
       '.browse-search',
-      '.filter-sidebar',
+      ...(width > 640 ? ['.filter-sidebar'] : []),
       '.posting-results',
     ]) {
       expect(
@@ -99,7 +103,7 @@ it.each([1440, 320])(
     expect(layout.style.columnGap).toBe('0rem');
     for (const selector of [
       '.browse-search',
-      '.filter-sidebar',
+      ...(width > 640 ? ['.filter-sidebar'] : []),
       '.posting-results',
     ]) {
       const wrapper = container.querySelector<HTMLElement>(selector)!;

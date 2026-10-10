@@ -19,12 +19,11 @@ it('moves filters into a HeroUI Drawer on phone widths with full trigger text', 
   vi.stubGlobal('innerWidth', 320);
   window.history.replaceState(null, '', '/?city=Waterloo&organization=Acme');
   render(<App state={empty} />);
-  const sidebar = screen.getByRole('complementary', { name: 'Filters' });
-  // Only one compact trigger inline; the filter grid is not squeezed in.
+  // Only one compact trigger beside search; the filter grid is not squeezed in.
   expect(
-    within(sidebar).queryByRole('button', { name: /^City/ }),
+    screen.queryByRole('button', { name: /^City/ }),
   ).not.toBeInTheDocument();
-  const open = within(sidebar).getByRole('button', { name: 'Filters (2)' });
+  const open = screen.getByRole('button', { name: 'Filters (2)' });
   expect(open).toHaveAttribute('aria-haspopup', 'dialog');
   fireEvent.click(open);
   const drawer = await screen.findByRole('dialog', { name: 'Filters' });

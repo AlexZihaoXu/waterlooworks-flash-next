@@ -76,6 +76,17 @@ body {
 .brand-icon {
   flex: none;
 }
+.brand-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Phone search field and 44px filter trigger share one native row. */
+.search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
 /* Native account content only; HeroUI trigger/avatar/menu remain unmodified. */
 .account-text {
   display: flex;
@@ -99,6 +110,14 @@ body {
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 400;
+}
+/* Native identity block inside the documented Dropdown popover (phones). */
+.account-identity {
+  display: grid;
+  gap: 0.125rem;
+  max-width: min(18rem, calc(100vw - 2rem));
+  padding: 0.75rem 0.75rem 0.25rem;
+  overflow-wrap: anywhere;
 }
 .workspace-header,
 .workspace-toolbar,
@@ -459,17 +478,36 @@ body {
   .pagination-word {
     display: none;
   }
+  /* Safe areas apply with viewport-fit=cover; 0.75rem is the floor. */
   .workspace {
     --workspace-gap: 0.75rem;
-    padding: 0.75rem;
+    padding: max(0.75rem, env(safe-area-inset-top))
+      max(0.75rem, env(safe-area-inset-right))
+      max(0.75rem, env(safe-area-inset-bottom))
+      max(0.75rem, env(safe-area-inset-left));
+    overflow-x: hidden;
     overflow-y: auto;
   }
-  /* Results fill the remaining viewport; filters collapse into one Drawer
-     trigger. A modest floor keeps results usable when notices stack. */
+  /* One header row: brand truncates beside the theme and account buttons. */
+  .workspace-header {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+  .workspace-brand {
+    flex: 1 1 auto;
+  }
+  .header-actions {
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+  }
+  /* Results fill the remaining viewport; filters live in the search row's
+     Drawer. A modest floor keeps results usable when notices stack. */
   .browser-layout {
     gap: 0.75rem;
     flex-shrink: 0;
     min-height: 24rem;
+    grid-template-areas: 'search' 'results';
+    grid-template-rows: auto minmax(0, 1fr);
   }
 }
 

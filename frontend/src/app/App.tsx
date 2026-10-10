@@ -32,12 +32,14 @@ import {
 } from 'react-icons/lu';
 import {
   Alert,
+  Badge,
   Breadcrumbs,
   Button,
   Card,
   Chip,
   Disclosure,
   Drawer,
+  Dropdown,
   Label,
   ListBox,
   Link,
@@ -92,6 +94,7 @@ import { jobUrl, readJobId, shouldOpenJob } from '../lib/jobDetail';
 import { useJobDetail } from '../lib/useJobDetail';
 import { useSimilarJobs } from '../lib/useSimilarJobs';
 import { useLiveReducedMotion } from '../lib/useLiveReducedMotion';
+import { useCompactLayout } from '../lib/useCompactLayout';
 import { JobDetailContent } from './JobDetail';
 
 const PAGE_SIZE = 18;
@@ -281,12 +284,7 @@ const WorkspaceView = memo(function WorkspaceView({
     window.addEventListener('popstate', restore);
     return () => window.removeEventListener('popstate', restore);
   }, []);
-  const [compact, setCompact] = useState(() => window.innerWidth <= 640);
-  useEffect(() => {
-    const resize = () => setCompact(window.innerWidth <= 640);
-    window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
-  }, []);
+  const compact = useCompactLayout();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const update = () => setNow(Date.now());
@@ -512,8 +510,65 @@ const WorkspaceView = memo(function WorkspaceView({
     (count, values) => count + values.length,
     0,
   );
+  const sortSelect = (
+    <Select
+      fullWidth
+      value={sort}
+      disabledKeys={
+        paySortAvailable
+          ? []
+          : [
+              'compensation-average',
+              'compensation-minimum',
+              'compensation-maximum',
+            ]
+      }
+      isDisabled={!connected}
+      onChange={(value) => {
+        if (typeof value === 'string' && Object.hasOwn(sortLabels, value)) {
+          setSort(value as PostingSort);
+          setPage(1);
+        }
+      }}
+    >
+      {compact ? (
+        <>
+          <Label>Sort by</Label>
+          <Select.Trigger>
+            <Select.Value />
+            <Select.Indicator />
+          </Select.Trigger>
+        </>
+      ) : (
+        <div className="sort-layout">
+          <Label>Sort by</Label>
+          <Select.Trigger>
+            <Select.Value />
+            <Select.Indicator />
+          </Select.Trigger>
+        </div>
+      )}
+      <Select.Popover>
+        <ListBox>
+          {(Object.entries(sortLabels) as [PostingSort, string][]).map(
+            ([key, label]) => (
+              <ListBox.Item key={key} id={key} textValue={label}>
+                {label}
+                <ListBox.ItemIndicator />
+              </ListBox.Item>
+            ),
+          )}
+        </ListBox>
+      </Select.Popover>
+    </Select>
+  );
   const sidebarContent = (
     <div className="sidebar-content">
+      {compact && (
+        <Card>
+          <Card.Content>{sortSelect}</Card.Content>
+        </Card>
+      )}
       <Card>
         <Card.Header>
           <div className="workspace-toolbar">
@@ -705,6 +760,14 @@ const WorkspaceView = memo(function WorkspaceView({
     </div>
   );
 
+  const refreshUnavailableNote = connected &&
+    state.status === 'ready' &&
+    !state.manual_refresh_available && (
+      <Typography type="body-xs" color="muted">
+        Manual refresh is unavailable for this account or server.
+      </Typography>
+    );
+
   return (
     <main className="workspace">
       <Toast.Provider placement="top" maxVisibleToasts={1} />
@@ -778,56 +841,112 @@ const WorkspaceView = memo(function WorkspaceView({
         </Modal.Container>
       </Modal.Backdrop>
       <header className="workspace-header">
-        <div className="stack-small">
+        <div className="stack-small workspace-brand">
           <div className="brand-heading">
             <BrandMark active={refreshing || requesting} />
-            <Typography type="h4" role="heading" aria-level={1}>
-              WaterlooWorks Flash Next
-            </Typography>
+            <span className="brand-title">
+              <Typography
+                type={compact ? 'h6' : 'h4'}
+                truncate={compact}
+                role="heading"
+                aria-level={1}
+              >
+                WaterlooWorks Flash Next
+              </Typography>
+            </span>
           </div>
-          <Typography type="body-xs" color="muted">
+          <Typography type="body-xs" color="muted" truncate={compact}>
             {lastObserved
               ? `Updated ${displayTime(lastObserved)}`
               : loading
                 ? '\u00a0'
                 : 'Find your next role.'}
           </Typography>
+          {compact && refreshUnavailableNote}
         </div>
         <div className="stack-small">
-          <div className="inline-layout">
-            {account}
-            <ToggleButtonGroup
-              aria-label="Color theme"
-              selectionMode="single"
-              disallowEmptySelection
-              size="sm"
-              selectedKeys={[theme]}
-              onSelectionChange={(keys) => {
-                const [key] = keys;
-                if (key === 'system' || key === 'light' || key === 'dark')
-                  setTheme(key);
-              }}
-            >
-              <ToggleButton isIconOnly aria-label="System" id="system">
-                <LuMonitor aria-hidden="true" />
-              </ToggleButton>
-              <ToggleButton isIconOnly aria-label="Light" id="light">
-                <ToggleButtonGroup.Separator />
-                <LuSun aria-hidden="true" />
-              </ToggleButton>
-              <ToggleButton isIconOnly aria-label="Dark" id="dark">
-                <ToggleButtonGroup.Separator />
-                <LuMoon aria-hidden="true" />
-              </ToggleButton>
-            </ToggleButtonGroup>
-          </div>
-          {connected &&
-            state.status === 'ready' &&
-            !state.manual_refresh_available && (
-              <Typography type="body-xs" color="muted">
-                Manual refresh is unavailable for this account or server.
-              </Typography>
+          <div className="inline-layout header-actions">
+            {compact ? (
+              // Phones: one 44px icon button opens the documented single-
+              // selection Dropdown instead of a three-button toggle group.
+              <Dropdown>
+                <Button
+                  isIconOnly
+                  size="lg"
+                  variant="ghost"
+                  aria-label="Color theme"
+                >
+                  {theme === 'dark' ? (
+                    <LuMoon aria-hidden="true" />
+                  ) : theme === 'light' ? (
+                    <LuSun aria-hidden="true" />
+                  ) : (
+                    <LuMonitor aria-hidden="true" />
+                  )}
+                </Button>
+                <Dropdown.Popover placement="bottom end">
+                  <Dropdown.Menu
+                    aria-label="Color theme"
+                    selectionMode="single"
+                    disallowEmptySelection
+                    selectedKeys={[theme]}
+                    onSelectionChange={(keys) => {
+                      if (keys === 'all') return;
+                      const [key] = keys;
+                      if (key === 'system' || key === 'light' || key === 'dark')
+                        setTheme(key);
+                    }}
+                  >
+                    <Dropdown.Item id="system" textValue="System">
+                      <LuMonitor aria-hidden="true" />
+                      <Label>System</Label>
+                      <Dropdown.ItemIndicator />
+                    </Dropdown.Item>
+                    <Dropdown.Item id="light" textValue="Light">
+                      <LuSun aria-hidden="true" />
+                      <Label>Light</Label>
+                      <Dropdown.ItemIndicator />
+                    </Dropdown.Item>
+                    <Dropdown.Item id="dark" textValue="Dark">
+                      <LuMoon aria-hidden="true" />
+                      <Label>Dark</Label>
+                      <Dropdown.ItemIndicator />
+                    </Dropdown.Item>
+                  </Dropdown.Menu>
+                </Dropdown.Popover>
+              </Dropdown>
+            ) : (
+              <>
+                {account}
+                <ToggleButtonGroup
+                  aria-label="Color theme"
+                  selectionMode="single"
+                  disallowEmptySelection
+                  size="sm"
+                  selectedKeys={[theme]}
+                  onSelectionChange={(keys) => {
+                    const [key] = keys;
+                    if (key === 'system' || key === 'light' || key === 'dark')
+                      setTheme(key);
+                  }}
+                >
+                  <ToggleButton isIconOnly aria-label="System" id="system">
+                    <LuMonitor aria-hidden="true" />
+                  </ToggleButton>
+                  <ToggleButton isIconOnly aria-label="Light" id="light">
+                    <ToggleButtonGroup.Separator />
+                    <LuSun aria-hidden="true" />
+                  </ToggleButton>
+                  <ToggleButton isIconOnly aria-label="Dark" id="dark">
+                    <ToggleButtonGroup.Separator />
+                    <LuMoon aria-hidden="true" />
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              </>
             )}
+            {compact && account}
+          </div>
+          {!compact && refreshUnavailableNote}
         </div>
       </header>
 
@@ -920,9 +1039,15 @@ const WorkspaceView = memo(function WorkspaceView({
           }}
         >
           <div className="postings-heading">
-            <Typography type="h2">Postings</Typography>
+            <Typography
+              type={compact ? 'h4' : 'h2'}
+              role="heading"
+              aria-level={2}
+            >
+              Postings
+            </Typography>
             <Button
-              size="sm"
+              size={compact ? 'lg' : 'sm'}
               variant={refreshing || requesting ? 'secondary' : 'tertiary'}
               isDisabled={!canRefresh}
               isPending={requesting}
@@ -962,77 +1087,113 @@ const WorkspaceView = memo(function WorkspaceView({
               </Typography>
             </Button>
           </div>
-          <SearchField
-            aria-label="Search titles, companies, locations, and posting IDs"
-            value={query}
-            onChange={(value) => {
-              setQuery(value);
-              setPagination({ page: 1, query: value });
-            }}
-            isDisabled={!connected}
-          >
-            <SearchField.Group>
-              <SearchField.SearchIcon />
-              <SearchField.Input placeholder="Search title, company, location, or ID…" />
-              <SearchField.ClearButton />
-            </SearchField.Group>
-          </SearchField>
-        </motion.div>
-        <motion.aside
-          className="filter-sidebar"
-          initial={false}
-          aria-label="Filters"
-          inert={detailOpen}
-          aria-hidden={detailOpen}
-          animate={{
-            opacity: detailOpen ? 0 : 1,
-            x: detailOpen ? -10 : 0,
-            visibility: detailOpen ? 'hidden' : 'visible',
-            ...(narrow
-              ? {
-                  height: detailOpen ? 0 : 'auto',
-                  paddingTop: detailOpen ? 0 : 4,
-                  paddingBottom: detailOpen ? 0 : 12,
-                }
-              : {}),
-          }}
-          transition={{
-            ...transition,
-            visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
-          }}
-        >
           {compact ? (
-            // Phones: one full-width trigger opens the same filters and
-            // options in a documented HeroUI Drawer, with full value text.
-            <Drawer>
-              <Button
-                fullWidth
-                variant={activeFilterCount ? 'secondary' : 'tertiary'}
-                aria-haspopup="dialog"
+            <div className="search-row">
+              <SearchField
+                aria-label="Search titles, companies, locations, and posting IDs"
+                value={query}
+                onChange={(value) => {
+                  setQuery(value);
+                  setPagination({ page: 1, query: value });
+                }}
                 isDisabled={!connected}
               >
-                <LuFilter aria-hidden="true" />
-                {activeFilterCount
-                  ? `Filters (${activeFilterCount})`
-                  : 'Filters'}
-              </Button>
-              <Drawer.Backdrop>
-                <Drawer.Content placement="bottom">
-                  <Drawer.Dialog>
-                    <Drawer.Handle />
-                    <Drawer.CloseTrigger />
-                    <Drawer.Header>
-                      <Drawer.Heading>Filters</Drawer.Heading>
-                    </Drawer.Header>
-                    <Drawer.Body>{sidebarContent}</Drawer.Body>
-                    <Drawer.Footer>
-                      <Button slot="close">Done</Button>
-                    </Drawer.Footer>
-                  </Drawer.Dialog>
-                </Drawer.Content>
-              </Drawer.Backdrop>
-            </Drawer>
+                <SearchField.Group>
+                  <SearchField.SearchIcon />
+                  <SearchField.Input
+                    placeholder={
+                      compact
+                        ? 'Search title, company, ID…'
+                        : 'Search title, company, location, or ID…'
+                    }
+                  />
+                  <SearchField.ClearButton />
+                </SearchField.Group>
+              </SearchField>
+              {/* Phones: one 44px icon trigger with a count Badge opens the
+                  same filters, options and sort in a documented Drawer. */}
+              <Drawer>
+                <Badge.Anchor>
+                  <Button
+                    isIconOnly
+                    size="lg"
+                    variant={activeFilterCount ? 'secondary' : 'tertiary'}
+                    aria-label={
+                      activeFilterCount
+                        ? `Filters (${activeFilterCount})`
+                        : 'Filters'
+                    }
+                    aria-haspopup="dialog"
+                    isDisabled={!connected}
+                  >
+                    <LuFilter aria-hidden="true" />
+                  </Button>
+                  {activeFilterCount > 0 && (
+                    <Badge color="accent" size="sm">
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Badge.Anchor>
+                <Drawer.Backdrop>
+                  <Drawer.Content placement="bottom">
+                    <Drawer.Dialog>
+                      <Drawer.Handle />
+                      <Drawer.CloseTrigger />
+                      <Drawer.Header>
+                        <Drawer.Heading>Filters</Drawer.Heading>
+                      </Drawer.Header>
+                      <Drawer.Body>{sidebarContent}</Drawer.Body>
+                      <Drawer.Footer>
+                        <Button slot="close">Done</Button>
+                      </Drawer.Footer>
+                    </Drawer.Dialog>
+                  </Drawer.Content>
+                </Drawer.Backdrop>
+              </Drawer>
+            </div>
           ) : (
+            <SearchField
+              aria-label="Search titles, companies, locations, and posting IDs"
+              value={query}
+              onChange={(value) => {
+                setQuery(value);
+                setPagination({ page: 1, query: value });
+              }}
+              isDisabled={!connected}
+            >
+              <SearchField.Group>
+                <SearchField.SearchIcon />
+                <SearchField.Input placeholder="Search title, company, location, or ID…" />
+                <SearchField.ClearButton />
+              </SearchField.Group>
+            </SearchField>
+          )}
+        </motion.div>
+        {/* Phones open filters from the search row's Drawer instead. */}
+        {!compact && (
+          <motion.aside
+            className="filter-sidebar"
+            initial={false}
+            aria-label="Filters"
+            inert={detailOpen}
+            aria-hidden={detailOpen}
+            animate={{
+              opacity: detailOpen ? 0 : 1,
+              x: detailOpen ? -10 : 0,
+              visibility: detailOpen ? 'hidden' : 'visible',
+              ...(narrow
+                ? {
+                    height: detailOpen ? 0 : 'auto',
+                    paddingTop: detailOpen ? 0 : 4,
+                    paddingBottom: detailOpen ? 0 : 12,
+                  }
+                : {}),
+            }}
+            transition={{
+              ...transition,
+              visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
+            }}
+          >
             <ScrollShadow
               hideScrollBar
               tabIndex={0}
@@ -1040,8 +1201,8 @@ const WorkspaceView = memo(function WorkspaceView({
             >
               {sidebarContent}
             </ScrollShadow>
-          )}
-        </motion.aside>
+          </motion.aside>
+        )}
         <motion.section
           className="posting-results stack"
           initial={false}
@@ -1061,7 +1222,7 @@ const WorkspaceView = memo(function WorkspaceView({
           <div className="workspace-toolbar">
             <Typography type="body-sm" color="muted" role="status">
               {connected
-                ? `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'} · Page ${currentPage}/${pages} · Showing ${visible.length} on this page`
+                ? `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'} · Page ${currentPage}/${pages}${compact ? '' : ` · Showing ${visible.length} on this page`}`
                 : loading
                   ? 'Loading saved postings…'
                   : 'Waiting for saved postings'}
@@ -1079,51 +1240,7 @@ const WorkspaceView = memo(function WorkspaceView({
                 Clear search and filters
               </Button>
             )}
-            <div className="sort-control">
-              <Select
-                fullWidth
-                value={sort}
-                disabledKeys={
-                  paySortAvailable
-                    ? []
-                    : [
-                        'compensation-average',
-                        'compensation-minimum',
-                        'compensation-maximum',
-                      ]
-                }
-                isDisabled={!connected}
-                onChange={(value) => {
-                  if (
-                    typeof value === 'string' &&
-                    Object.hasOwn(sortLabels, value)
-                  ) {
-                    setSort(value as PostingSort);
-                    setPage(1);
-                  }
-                }}
-              >
-                <div className="sort-layout">
-                  <Label>Sort by</Label>
-                  <Select.Trigger>
-                    <Select.Value />
-                    <Select.Indicator />
-                  </Select.Trigger>
-                </div>
-                <Select.Popover>
-                  <ListBox>
-                    {(
-                      Object.entries(sortLabels) as [PostingSort, string][]
-                    ).map(([key, label]) => (
-                      <ListBox.Item key={key} id={key} textValue={label}>
-                        {label}
-                        <ListBox.ItemIndicator />
-                      </ListBox.Item>
-                    ))}
-                  </ListBox>
-                </Select.Popover>
-              </Select>
-            </div>
+            {!compact && <div className="sort-control">{sortSelect}</div>}
           </div>
           {connected && !paySortAvailable && (
             <Typography type="body-xs" color="muted">

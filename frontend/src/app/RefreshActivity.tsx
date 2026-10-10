@@ -236,7 +236,7 @@ function CompactRefreshStatus({
                     ))}
                   </ul>
                   <div className="stack-small">
-                    <Typography type="h6" render={(props) => <h3 {...props} />}>
+                    <Typography type="h6" role="heading" aria-level={3}>
                       Log · newest first
                     </Typography>
                     <div
