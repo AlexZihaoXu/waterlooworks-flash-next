@@ -1,4 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from 'react';
 import { FcGoogle } from 'react-icons/fc';
 import { LuUserRound } from 'react-icons/lu';
 import {
@@ -133,11 +140,14 @@ export function AccountMenu({
   signOut,
   role = 'member',
   uid = '',
+  settingsRef,
 }: {
   profile: AccountProfile | null;
   signOut: () => void;
   role?: 'admin' | 'member';
   uid?: string;
+  /** Admin only: lets workspace notices open Admin settings. */
+  settingsRef?: Ref<AdminSettingsHandle>;
 }) {
   const photo = googlePhotoUrl(profile?.photo_url);
   const content = (
@@ -167,6 +177,7 @@ export function AccountMenu({
         uid={uid}
         content={content}
         signOut={signOut}
+        settingsRef={settingsRef}
       />
     );
   return (
@@ -190,15 +201,19 @@ export function AccountMenu({
   );
 }
 
+export type AdminSettingsHandle = { open: () => void };
+
 // Official v3 content in the owner-approved bounded native dialog shell.
 function AdminAccountMenu({
   uid,
   content,
   signOut,
+  settingsRef,
 }: {
   uid: string;
   content: ReactNode;
   signOut: () => void;
+  settingsRef?: Ref<AdminSettingsHandle>;
 }) {
   const [selectedTab, setSelectedTab] = useState('credentials');
   const settings = useAdminCredentials(uid);
@@ -207,6 +222,15 @@ function AdminAccountMenu({
     uid,
   );
   const refresh = useAdminRefreshStatus(settings.isOpen, uid);
+  // Workspace Duo notice: open straight to the Refresh tab. Never reopen an
+  // open dialog, because opening clears and rereads credential state.
+  useImperativeHandle(settingsRef, () => ({
+    open: () => {
+      if (settings.isOpen) return;
+      setSelectedTab('refresh');
+      settings.setOpen(true);
+    },
+  }));
   const closeSettings = (open: boolean) => {
     refresh.clear();
     openai.hide();
@@ -644,17 +668,26 @@ export function AuthenticatedApp() {
       ? state.session
       : null;
   const profile = useAccountProfile(session?.uid ?? null);
+  const adminSettings = useRef<AdminSettingsHandle>(null);
+  const openAdminSettings = useCallback(
+    () => adminSettings.current?.open(),
+    [],
+  );
   return (
     <AuthGate state={state} signIn={signIn}>
       {session && (
         <App
           key={session.uid}
+          onOpenAdminSettings={
+            session.role === 'admin' ? openAdminSettings : undefined
+          }
           account={
             <AccountMenu
               profile={profile}
               signOut={signOut}
               role={session.role}
               uid={session.uid}
+              settingsRef={adminSettings}
             />
           }
         />

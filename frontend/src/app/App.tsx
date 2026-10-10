@@ -119,12 +119,15 @@ export function App({
   refresh: suppliedRefresh = null,
   signedOutContent,
   account,
+  onOpenAdminSettings,
 }: {
   state?: WorkspaceState;
   /** Presentation input for a supplied state; live mode uses the SSE stream. */
   refresh?: RefreshSnapshot | null;
   signedOutContent?: ReactNode;
   account?: ReactNode;
+  /** Admin only: opens Admin settings (Refresh tab) from workspace notices. */
+  onOpenAdminSettings?: () => void;
 }) {
   const signedOut = signedOutContent !== undefined;
   const live = suppliedState === undefined;
@@ -146,6 +149,10 @@ export function App({
         refreshKey={`${refresh?.run_id ?? ''}:${refresh?.status ?? ''}`}
         refreshing={refreshRunning(refresh)}
         interruption={refreshInterruption(refresh)}
+        authenticating={
+          refreshRunning(refresh) && refresh?.stage === 'authentication'
+        }
+        onOpenAdminSettings={onOpenAdminSettings}
         requesting={remote.requesting}
         streamConnected={remote.streamConnected}
         streamInterrupted={remote.streamInterrupted}
@@ -164,6 +171,7 @@ const WorkspaceView = memo(function WorkspaceView({
   refreshKey,
   refreshing,
   interruption,
+  authenticating,
   requesting,
   streamConnected,
   streamInterrupted,
@@ -171,12 +179,14 @@ const WorkspaceView = memo(function WorkspaceView({
   manualRefresh,
   signedOutContent,
   account,
+  onOpenAdminSettings,
 }: {
   state: WorkspaceState;
   live: boolean;
   refreshKey: string;
   refreshing: boolean;
   interruption: ReturnType<typeof refreshInterruption>;
+  authenticating: boolean;
   requesting: boolean;
   streamConnected: boolean;
   streamInterrupted: boolean;
@@ -184,6 +194,7 @@ const WorkspaceView = memo(function WorkspaceView({
   manualRefresh: ReturnType<typeof useWorkspace>['manualRefresh'];
   signedOutContent?: ReactNode;
   account?: ReactNode;
+  onOpenAdminSettings?: () => void;
 }) {
   const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
@@ -846,6 +857,22 @@ const WorkspaceView = memo(function WorkspaceView({
                 : 'It stopped before finishing, so saved postings may be incomplete. A new refresh can be started.'}
             </Alert.Description>
           </Alert.Content>
+        </Alert>
+      )}
+      {authenticating && onOpenAdminSettings && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Duo approval may be required</Alert.Title>
+            <Alert.Description>
+              The refresh is signing in to WaterlooWorks. Authentication expires
+              within 3 minutes; open Admin settings to see the verification code
+              and approve only the refresh you requested.
+            </Alert.Description>
+          </Alert.Content>
+          <Button size="sm" variant="secondary" onPress={onOpenAdminSettings}>
+            Open Admin settings
+          </Button>
         </Alert>
       )}
       <LiveRefreshActivity />
