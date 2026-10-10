@@ -6,6 +6,7 @@ run only on the explicit admin actions that name them.
 """
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Literal
 
@@ -86,6 +87,8 @@ def install_ai_settings(app: FastAPI, path: Path) -> None:
     app.state.ai_custom_resolver = None
     app.state.ai_custom_transport = None
     app.state.ai_catalog = catalog
+    # Each catalog read spawns a short-lived sidecar; bound concurrent spawns.
+    app.state.ai_catalog_slots = threading.BoundedSemaphore(2)
     admin = [Depends(require_admin)]
 
     def logins(request: Request) -> LoginManager:
@@ -181,10 +184,15 @@ def install_ai_settings(app: FastAPI, path: Path) -> None:
         provider: Literal["openai", "openai-codex"] = (
             "openai-codex" if mode == "codex_device" else "openai"
         )
+        slots: threading.BoundedSemaphore = request.app.state.ai_catalog_slots
+        if not slots.acquire(blocking=False):
+            raise HTTPException(429, "Model catalog is busy. Try again shortly.")
         try:
             entries = await asyncio.to_thread(request.app.state.ai_catalog, provider)
         except SidecarError:
             raise HTTPException(503, "Model catalog is unavailable.") from None
+        finally:
+            slots.release()
         return ModelList(
             models=[
                 ModelOption(

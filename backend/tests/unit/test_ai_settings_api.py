@@ -265,3 +265,25 @@ def test_missing_credentials_key_is_a_fixed_503(
                 "detail": "AI settings unavailable; check the backend key."
             }
             assert response.headers["cache-control"] == "no-store"
+
+
+def test_catalog_spawns_are_bounded(path: Path) -> None:
+    app = create_app(path)
+    spawned: list[str] = []
+
+    def catalog(provider: str) -> list[object]:
+        spawned.append(provider)
+        return []
+
+    app.state.ai_catalog = catalog
+    with session_client(path, app=app) as client:
+        slots = app.state.ai_catalog_slots
+        assert slots.acquire(blocking=False) and slots.acquire(blocking=False)
+        busy = client.get("/api/admin/ai/models?mode=openai_api_key")
+        assert busy.status_code == 429 and spawned == []
+        slots.release()
+        assert client.get("/api/admin/ai/models?mode=openai_api_key").json() == {
+            "models": []
+        }
+        assert spawned == ["openai"]
+        assert slots.acquire(blocking=False)  # the slot was returned
