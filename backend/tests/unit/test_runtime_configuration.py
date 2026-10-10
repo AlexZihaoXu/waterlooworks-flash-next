@@ -113,6 +113,7 @@ def test_real_app_trusts_only_exact_peer_proto_host_and_origin(
 ) -> None:
     monkeypatch.setenv("WW_AUTH_ORIGINS", "https://example.invalid")
     monkeypatch.setenv("WW_AUTH_TRUSTED_PROXY", "172.30.87.2")
+    monkeypatch.setenv("WW_API_DOCS", "1")  # Docs serve as a plain GET probe.
     app = create_app(tmp_path / "empty.sqlite3")
     with TestClient(
         app, base_url="http://example.invalid", client=("172.30.87.2", 1234)

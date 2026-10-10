@@ -133,7 +133,8 @@ test('nginx exact-host TLS boundary strips forwarding, disables SSE buffering an
     assert.match(nginx, new RegExp(`proxy_set_header ${header} ""`));
   assert.match(nginx, /proxy_buffering off/);
   assert.match(nginx, /proxy_cache off/);
-  assert.match(nginx, /location ~ \^\/\(api\|doc\)/);
+  assert.match(nginx, /location ~ \^\/api\(\/\|\$\)/);
+  assert.doesNotMatch(nginx, /location[^{]*doc/);
   assert.match(nginx, /try_files \$uri \$uri\/ \/index.html/);
   assert.match(nginx, /access_log off/);
 });

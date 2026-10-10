@@ -20,12 +20,12 @@ WW_ENABLE_REFRESH=1 uv run --project backend --locked uvicorn waterlooworks_flas
 
 Run only one of these commands. Do not enable reload while a collection is active. Chromium must already be installed through Playwright. `WW_DATABASE` optionally selects a database path; `WW_PROJECT_ROOT` selects the repository containing the backend-only `.env` and private browser profile. Defaults assume the repository root working directory.
 
-- **Human documentation:** <http://127.0.0.1:8787/doc> (Swagger UI).
-- **Machine schema:** <http://127.0.0.1:8787/doc/openapi.json>.
+- **Human documentation:** <http://127.0.0.1:8787/doc> (Swagger UI), **only when the process environment sets `WW_API_DOCS=1`** (for example `WW_API_DOCS=1 uv run ... uvicorn ...`). It is off by default and must stay off in production.
+- **Machine schema:** <http://127.0.0.1:8787/doc/openapi.json>, under the same flag.
 - **Tracked schema:** [`openapi.json`](openapi.json), generated from the same FastAPI models.
 - **Generated frontend types:** `frontend/src/lib/api.generated.ts`.
 
-Swagger UI's Execute button is a real API call. Protected operations require the app cookie; mutations additionally require an allowed Origin, JSON and `X-WW-Request: 1`. Executing the refresh operation starts collection only when enabled; it obeys exactly the same lock/cooldown as the frontend. Swagger UI assets currently use FastAPI's default CDN.
+Swagger UI's Execute button is a real API call. Protected operations require the app cookie; mutations additionally require an allowed Origin, JSON and `X-WW-Request: 1`. Executing the refresh operation starts collection only when enabled; it obeys exactly the same lock/cooldown as the frontend. Swagger UI assets use FastAPI's default third-party CDN and run on the app origin, which is why the docs are opt-in and never proxied by production nginx.
 
 ## Routes
 

@@ -3,7 +3,7 @@ import { inferredCountryName } from './countryInference';
 import { groupNumber } from './numberFormat';
 import { matchesSelection, matchesAnySelection } from './filterSelection';
 
-// API types are generated from the same OpenAPI served at /doc/openapi.json.
+// API types are generated from the same OpenAPI tracked in docs/openapi.json.
 export type Posting = components['schemas']['PostingResponse'];
 export type ListingSnapshot = components['schemas']['StoredListing'];
 export type ListingRevision = components['schemas']['ListingRevision'];

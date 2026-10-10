@@ -36,7 +36,7 @@ http {
         root /usr/share/nginx/html;
         add_header X-Content-Type-Options nosniff always;
         add_header Referrer-Policy no-referrer always;
-        location ~ ^/(api|doc)(/|$) {
+        location ~ ^/api(/|$) {
             limit_req zone=ww_auth burst=20 nodelay;
             proxy_pass http://backend:8787;
             proxy_http_version 1.1;

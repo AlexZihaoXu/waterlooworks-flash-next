@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from auth_support import session_client
+from fastapi import FastAPI
 
 from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 from waterlooworks_flash_next.refresh import RefreshConflict, claim_refresh
@@ -12,8 +13,12 @@ from waterlooworks_flash_next.refresh import RefreshConflict, claim_refresh
 def test_empty_workspace_and_sse_are_real_responses(tmp_path: Path) -> None:
     with session_client(tmp_path / "db.sqlite3") as client:
         assert client.get("/api/health").json()["schema_version"] == SCHEMA_VERSION
-        assert client.get("/doc").status_code == 200
-        spec = client.get("/doc/openapi.json").json()
+        # Interactive docs are off by default; the schema is still generated.
+        assert client.get("/doc").status_code == 404
+        assert client.get("/doc/openapi.json").status_code == 404
+        app = client.app
+        assert isinstance(app, FastAPI)
+        spec = app.openapi()
         assert spec["paths"]["/api/refresh"]["post"]["operationId"] == "startRefresh"
         assert (
             spec["paths"]["/api/postings/{posting_id}/analysis"]["get"]["operationId"]
@@ -72,3 +77,28 @@ def test_refresh_claim_blocks_concurrency_and_enforces_cooldown(tmp_path: Path) 
         claim_refresh(path)
     assert cooldown.value.status_code == 429
     assert cooldown.value.retry_after > 0
+
+
+def test_api_docs_require_explicit_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from waterlooworks_flash_next.api import create_app
+
+    for value in (None, "0", "true"):
+        if value is None:
+            monkeypatch.delenv("WW_API_DOCS", raising=False)
+        else:
+            monkeypatch.setenv("WW_API_DOCS", value)
+        with TestClient(
+            create_app(tmp_path / "db.sqlite3"), base_url="https://localhost"
+        ) as client:
+            assert client.get("/doc").status_code == 404
+            assert client.get("/doc/openapi.json").status_code == 404
+    monkeypatch.setenv("WW_API_DOCS", "1")
+    with TestClient(
+        create_app(tmp_path / "db.sqlite3"), base_url="https://localhost"
+    ) as client:
+        assert client.get("/doc").status_code == 200
+        assert "openapi" in client.get("/doc/openapi.json").json()
