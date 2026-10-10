@@ -4,6 +4,8 @@ import asyncio
 import json
 import re
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -21,14 +23,21 @@ MAX_BODY_BYTES = 1024 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 120
 MAX_OUTPUT_TOKENS = 4096
+# Bounded retries for the ledger write after a dispatch; persistent failure keeps
+# the attempt unfinalized (unknown usage, never assumed free).
+FINALIZE_RETRY_DELAYS: tuple[float, ...] = (0.25, 1.0)
+# Rejected-request statuses that are worth continuing past at known zero cost.
+TRANSIENT_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _slots = threading.BoundedSemaphore(4)
 _active_lock = threading.Lock()
 _active_attempts: set[str] = set()
 
 
 class ProviderError(Exception):
-    def __init__(self, category: str) -> None:
+    def __init__(self, category: str, *, transient: bool = False) -> None:
         self.category = category
+        # Only a known-zero-cost rejection that later requests may not repeat.
+        self.transient = transient
         super().__init__(category)
 
 
@@ -149,6 +158,35 @@ def response_text(payload: dict[str, Any]) -> str:
     return str(texts[0])
 
 
+def is_error_envelope(status: int, payload: dict[str, Any]) -> bool:
+    """A non-2xx OpenAI error body without usage is a known zero-cost rejection."""
+    return (
+        not 200 <= status < 300
+        and isinstance(payload.get("error"), dict)
+        and "usage" not in payload
+    )
+
+
+def _transient(status: int, payload: dict[str, Any]) -> bool:
+    error = payload.get("error")
+    exhausted = isinstance(error, dict) and "insufficient_quota" in (
+        error.get("code"),
+        error.get("type"),
+    )
+    return status in TRANSIENT_STATUSES and not exhausted
+
+
+def _record(write: Callable[[], None]) -> None:
+    for delay in (*FINALIZE_RETRY_DELAYS, None):
+        try:
+            write()
+            return
+        except Exception:
+            if delay is None:
+                raise
+            time.sleep(delay)
+
+
 def _metadata(value: object) -> str | None:
     return (
         value
@@ -255,21 +293,38 @@ class ResponsesProvider:
                         _dispatch(body, key.get_secret_value())
                     )
                 except Exception:
-                    self.ledger.finalize(
-                        attempt, UsageCounters(), model=None, service_tier=None
-                    )
+                    try:
+                        _record(
+                            lambda: self.ledger.finalize(
+                                attempt, UsageCounters(), model=None, service_tier=None
+                            )
+                        )
+                    except Exception:
+                        pass  # Unfinalized attempt remains unknown, never free.
                     raise
                 # Paid unsuccessful and rejected results count BEFORE any output or
                 # evidence checks. Actual model/tier govern pricing, not our request.
-                self.ledger.finalize(
-                    attempt,
-                    usage_from_response(payload),
-                    model=_metadata(payload.get("model")),
-                    service_tier=_metadata(payload.get("service_tier")),
-                )
+                envelope = is_error_envelope(status, payload)
+                try:
+                    if envelope:
+                        _record(
+                            lambda: self.ledger.finalize_error_envelope(attempt, status)
+                        )
+                    else:
+                        _record(
+                            lambda: self.ledger.finalize(
+                                attempt,
+                                usage_from_response(payload),
+                                model=_metadata(payload.get("model")),
+                                service_tier=_metadata(payload.get("service_tier")),
+                            )
+                        )
+                except Exception:
+                    raise ProviderError("ledger") from None
                 if not 200 <= status < 300:
                     raise ProviderError(
-                        "http_client" if status < 500 else "http_server"
+                        "http_client" if status < 500 else "http_server",
+                        transient=envelope and _transient(status, payload),
                     )
                 return response_text(payload)
             finally:

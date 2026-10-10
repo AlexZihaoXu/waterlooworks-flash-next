@@ -1,12 +1,14 @@
 """Provider contract checks use empty databases and structural primitives only."""
 
 import json
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from waterlooworks_flash_next import openai_provider
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.openai_ledger import (
     AttemptLedger,
@@ -194,3 +196,151 @@ def test_missing_provider_key_fails_without_reservation(
     connection = open_database(path)
     assert connection.execute("SELECT count(*) FROM openai_attempts").fetchone()[0] == 0
     connection.close()
+
+
+def _ready_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[openai_provider.ResponsesProvider, str]:
+    """Empty database plus random key primitive; no provider is contacted."""
+    import secrets
+
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    from waterlooworks_flash_next.openai_settings import OpenAIKey, OpenAISettingsStore
+
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    monkeypatch.setenv("WW_CREDENTIALS_KEY", Fernet.generate_key().decode())
+    OpenAISettingsStore(path).save(
+        OpenAIKey(api_key=SecretStr(secrets.token_urlsafe()))
+    )
+    provider = openai_provider.ResponsesProvider(path)
+    run = str(uuid4())
+    provider.ledger.create_run(run, BudgetLimits())
+    return provider, run
+
+
+def _empty_call(
+    provider: openai_provider.ResponsesProvider, run: str, operation: str
+) -> str:
+    return provider.complete(
+        run, operation * 64, [], "empty", {"type": "object", "properties": {}}
+    )
+
+
+# Envelope shapes below are structural primitives (no message text, no output):
+# the documented error body of a rejected request, which carries no usage.
+@pytest.mark.parametrize(
+    ("status", "envelope", "category", "transient"),
+    [
+        (429, {"error": {"code": "rate_limit_exceeded"}}, "http_client", True),
+        (503, {"error": {}}, "http_server", True),
+        (429, {"error": {"code": "insufficient_quota"}}, "http_client", False),
+        (401, {"error": {}}, "http_client", False),
+    ],
+)
+def test_usage_less_error_envelope_is_known_zero_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    envelope: dict[str, object],
+    category: str,
+    transient: bool,
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+
+    async def rejected(*_args: object) -> tuple[int, dict[str, object]]:
+        return status, envelope
+
+    monkeypatch.setattr(openai_provider, "_dispatch", rejected)
+    with pytest.raises(ProviderError, match=f"^{category}$") as raised:
+        _empty_call(provider, run, "0")
+    assert raised.value.transient is transient
+    summary = provider.ledger.summary(run)
+    assert (summary.attempts, summary.unpriced_attempts) == (1, 0)
+    assert summary.total_usd == Decimal(0)
+    provider.ledger.require_resumable(run)
+    connection = open_database(provider.path)
+    marker = connection.execute(
+        "SELECT pricing_version,finalized_at FROM openai_attempts"
+    ).fetchone()
+    connection.close()
+    assert marker[0] == f"error-envelope-http-{status}"
+    assert marker[1] is not None
+    with pytest.raises(ProviderError):
+        _empty_call(provider, run, "1")
+    assert provider.ledger.summary(run).attempts == 2
+
+
+def test_non_envelope_failure_status_remains_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+
+    async def opaque(*_args: object) -> tuple[int, dict[str, object]]:
+        return 502, {}
+
+    monkeypatch.setattr(openai_provider, "_dispatch", opaque)
+    with pytest.raises(ProviderError, match="^http_server$") as raised:
+        _empty_call(provider, run, "0")
+    assert raised.value.transient is False
+    assert provider.ledger.summary(run).unpriced_attempts == 1
+    with pytest.raises(BudgetStopped):
+        provider.ledger.require_resumable(run)
+
+
+def test_post_dispatch_finalize_is_retried_then_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+    monkeypatch.setattr(openai_provider, "FINALIZE_RETRY_DELAYS", (0, 0))
+
+    async def rejected(*_args: object) -> tuple[int, dict[str, object]]:
+        return 429, {"error": {}}
+
+    monkeypatch.setattr(openai_provider, "_dispatch", rejected)
+    original = provider.ledger.finalize_error_envelope
+    failures = 1
+
+    def flaky(attempt_id: str, status: int) -> None:
+        nonlocal failures
+        if failures:
+            failures -= 1
+            raise sqlite3.OperationalError("database is locked")
+        original(attempt_id, status)
+
+    monkeypatch.setattr(provider.ledger, "finalize_error_envelope", flaky)
+    with pytest.raises(ProviderError, match="^http_client$"):
+        _empty_call(provider, run, "0")
+    assert provider.ledger.summary(run).unpriced_attempts == 0
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(provider.ledger, "finalize_error_envelope", broken)
+    with pytest.raises(ProviderError, match="^ledger$"):
+        _empty_call(provider, run, "1")
+    # The outcome could not be recorded: unknown, never free.
+    assert provider.ledger.summary(run).unpriced_attempts == 1
+    with pytest.raises(BudgetStopped):
+        _empty_call(provider, run, "2")
+
+
+def test_dispatch_failure_survives_unrecordable_finalize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+    monkeypatch.setattr(openai_provider, "FINALIZE_RETRY_DELAYS", (0,))
+
+    async def unavailable(*_args: object) -> tuple[int, dict[str, object]]:
+        raise ProviderError("connection")
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(openai_provider, "_dispatch", unavailable)
+    monkeypatch.setattr(provider.ledger, "finalize", broken)
+    with pytest.raises(ProviderError, match="^connection$"):
+        _empty_call(provider, run, "0")
+    assert provider.ledger.summary(run).unpriced_attempts == 1

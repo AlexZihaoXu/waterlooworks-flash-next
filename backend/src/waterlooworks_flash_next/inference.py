@@ -53,6 +53,9 @@ TIMEOUT_SECONDS = 120
 LEASE_SECONDS = TIMEOUT_SECONDS + 60
 MAX_JOB_POSTINGS = 10_000
 MAX_BODY_BYTES = 4 * 1024 * 1024
+# Known-$0 transient rejections (429/5xx) fail one item; this many in a row halt
+# the job so a sustained outage cannot drain the queue.
+TRANSIENT_HALT_THRESHOLD = 8
 JobStatus = Literal[
     "pending", "running", "stopping", "completed", "failed", "interrupted"
 ]
@@ -176,6 +179,9 @@ def _complete(item: _Item, path: Path) -> ValidatedExtraction:
     except CredentialError:
         raise _ProviderError("configuration", halt=True) from None
     except ProviderError as error:
+        if error.transient:
+            # Known $0 rejection (rate limit/server busy): fail only this item.
+            raise _ProviderError(error.category, retryable=True) from None
         category = (
             error.category
             if error.category
@@ -188,6 +194,8 @@ def _complete(item: _Item, path: Path) -> ValidatedExtraction:
                 "response_size",
                 "response_schema",
             )
+            else "internal"
+            if error.category == "ledger"
             else "evidence_rejected"
             if error.category == "refusal"
             else "response_schema"
@@ -195,6 +203,9 @@ def _complete(item: _Item, path: Path) -> ValidatedExtraction:
         raise _ProviderError(category, halt=category != "evidence_rejected") from None
     except (ModelOutputError, ValidationError, ValueError):
         raise _ProviderError("evidence_rejected") from None
+    except Exception:
+        # Storage or programming failure: stop issuing and terminate the job.
+        raise _ProviderError("internal", halt=True) from None
 
 
 def _source(
@@ -831,6 +842,7 @@ def _run_inference_job(
         if on_progress is not None:
             on_progress()
         return
+    transient_streak = 0
     while True:
         try:
             with connection:
@@ -902,8 +914,18 @@ def _run_inference_job(
                 for future in done:
                     item_row, item = futures[future]
                     try:
-                        result = future.result()
+                        try:
+                            result = future.result()
+                        except _ProviderError:
+                            raise
+                        except Exception:
+                            raise _ProviderError("internal", halt=True) from None
                     except _ProviderError as error:
+                        transient_streak = (
+                            transient_streak + 1 if error.retryable else 0
+                        )
+                        if transient_streak >= TRANSIENT_HALT_THRESHOLD:
+                            error.halt = True
                         try:
                             with connection:
                                 connection.execute("BEGIN IMMEDIATE")
@@ -941,6 +963,7 @@ def _run_inference_job(
                         except _OwnershipLost:
                             return
                     else:
+                        transient_streak = 0
                         try:
                             lease = _checkpoint_accept(
                                 connection, job_id, item_row, result, lease

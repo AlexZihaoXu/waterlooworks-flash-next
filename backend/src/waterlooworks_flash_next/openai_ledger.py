@@ -17,6 +17,8 @@ from waterlooworks_flash_next.openai_usage import (
     summarize_costs,
 )
 
+ERROR_ENVELOPE_PRICING = "error-envelope-http"
+
 
 class BudgetStopped(Exception):
     """No new dispatch; prior usage may be unknown, never assumed free."""
@@ -225,6 +227,42 @@ class AttemptLedger:
                         service_tier,
                         usage.model_dump_json(),
                         None if cost is None else str(cost),
+                        attempt_id,
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def finalize_error_envelope(self, attempt_id: str, status: int) -> None:
+        """Record a usage-less non-2xx OpenAI error body as a known $0 attempt.
+
+        Rejected requests are not billed and report zero tokens. The marker in
+        `pricing_version` distinguishes these from priced completions. Timeouts and
+        transport loss never use this path; they stay unknown.
+        """
+        if type(status) is not int or not 300 <= status <= 599:
+            raise ValueError("Error envelope status is invalid.")
+        zero = UsageCounters(
+            input_tokens=0,
+            cached_tokens=0,
+            cache_write_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+        )
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(
+                    (
+                        "UPDATE openai_attempts SET "
+                        "finalized_at=?,model=NULL,service_tier=NULL,usage_json=?,"
+                        "known_usd='0',pricing_version=? "
+                        "WHERE attempt_id=? AND finalized_at IS NULL"
+                    ),
+                    (
+                        datetime.now(UTC).isoformat(),
+                        zero.model_dump_json(),
+                        f"{ERROR_ENVELOPE_PRICING}-{status}",
                         attempt_id,
                     ),
                 )
