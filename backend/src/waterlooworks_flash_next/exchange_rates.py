@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 
@@ -49,24 +50,79 @@ def parse_rates(value: object, today: date) -> dict[str, object]:
     return {"as_of": observed.isoformat(), "cad_per_unit": rates}
 
 
-class ExchangeRates:
+class ExchangeRatesUnavailable(Exception):
+    """Fixed-message failure; never carries upstream response or error details."""
+
     def __init__(self) -> None:
+        super().__init__("Reference exchange rates are unavailable.")
+
+
+def fetch_rates() -> dict[str, object]:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(URL, timeout=8) as response:
+        raw = response.read(262145)
+    if len(raw) > 262144:
+        raise ValueError("Exchange-rate response too large")
+    return parse_rates(json.loads(raw), date.today())
+
+
+class ExchangeRates:
+    """Single-flight reader: one network fetch at a time, outside the state lock.
+
+    Successes are reused for an hour and failures for a minute, so an outage
+    answers immediately instead of queueing every caller behind the timeout.
+    """
+
+    SUCCESS_TTL = 3600.0
+    FAILURE_TTL = 60.0
+    FOLLOWER_WAIT = 15.0
+
+    def __init__(
+        self,
+        fetch: Callable[[], dict[str, object]] = fetch_rates,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._fetch = fetch
+        self._clock = clock
         self._lock = threading.Lock()
         self._cached: dict[str, object] | None = None
         self._expires = 0.0
+        self._failed_until = 0.0
+        self._inflight: threading.Event | None = None
 
     def read(self) -> dict[str, object]:
-        with self._lock:
-            if self._cached is not None and time.monotonic() < self._expires:
-                return self._cached
-            opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({}), _NoRedirect()
-            )
-            with opener.open(URL, timeout=8) as response:
-                raw = response.read(262145)
-            if len(raw) > 262144:
-                raise ValueError("Exchange-rate response too large")
-            result = parse_rates(json.loads(raw), date.today())
-            self._cached = result
-            self._expires = time.monotonic() + 3600
+        while True:
+            with self._lock:
+                now = self._clock()
+                if self._cached is not None and now < self._expires:
+                    return self._cached
+                if now < self._failed_until:
+                    raise ExchangeRatesUnavailable
+                pending = self._inflight
+                if pending is None:
+                    pending = self._inflight = threading.Event()
+                    leader = True
+                else:
+                    leader = False
+            if not leader:
+                if not pending.wait(self.FOLLOWER_WAIT):
+                    raise ExchangeRatesUnavailable
+                continue
+            failed = True
+            try:
+                result = self._fetch()
+                failed = False
+            except Exception:
+                raise ExchangeRatesUnavailable from None
+            finally:
+                with self._lock:
+                    now = self._clock()
+                    if failed:
+                        self._failed_until = now + self.FAILURE_TTL
+                    else:
+                        self._cached = result
+                        self._expires = now + self.SUCCESS_TTL
+                        self._failed_until = 0.0
+                    self._inflight = None
+                pending.set()
             return result
