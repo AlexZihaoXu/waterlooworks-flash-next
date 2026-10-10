@@ -392,6 +392,50 @@ body {
   min-width: 100%;
   padding-block: 0.125rem;
 }
+/* Phone refresh status and its Drawer details: native wrappers only. */
+.refresh-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+.refresh-details {
+  overflow-wrap: anywhere;
+}
+.refresh-stats,
+.refresh-log-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.refresh-stats {
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  gap: 0.75rem;
+}
+.refresh-stat {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+.refresh-log-list {
+  gap: 0.75rem;
+}
+.refresh-log-item {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.refresh-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.refresh-log-message {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 56rem) {
   .browser-layout {
     grid-template-columns: minmax(0, 1fr);

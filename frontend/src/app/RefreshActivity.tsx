@@ -2,12 +2,17 @@ import { memo, useMemo, useState, type ReactNode } from 'react';
 import {
   Button,
   Card,
+  Chip,
   Disclosure,
+  Drawer,
   Label,
   ProgressBar,
   Typography,
 } from '@heroui/react';
-import { LuTerminal } from 'react-icons/lu';
+import { LuChevronUp, LuTerminal } from 'react-icons/lu';
+import { logPresentation } from '../lib/logPresentation';
+import { refreshShortStatus, refreshStats } from '../lib/refreshSummary';
+import { useCompactLayout } from '../lib/useCompactLayout';
 import { RefreshLogEntry } from './RefreshLogEntry';
 import { RefreshPanel } from './RefreshPanel';
 import {
@@ -121,11 +126,199 @@ export const RefreshConsole = memo(function RefreshConsole({
   );
 });
 
+const LOG_STEP = 20;
+
+type Progress = ReturnType<typeof refreshProgress>;
+
+// Phones: one HeroUI ProgressBar row; details open in a documented bottom
+// Drawer with wrapped, newest-first log text instead of a truncated console.
+function CompactRefreshStatus({
+  refresh,
+  running,
+  progress,
+  etaLabel,
+}: {
+  refresh: RefreshSnapshot;
+  running: boolean;
+  progress: Progress;
+  etaLabel: string;
+}) {
+  const [limit, setLimit] = useState(LOG_STEP);
+  const stageLabel = refreshStageLabel(
+    refresh.stage,
+    refresh.analysis_provider,
+  );
+  const stop = refreshStopLabel(refresh.pacing_stop);
+  const shown = refresh.logs.slice(-limit).reverse();
+  const older = refresh.logs.length - shown.length;
+  return (
+    <div className="refresh-status-row">
+      {running ? (
+        <ProgressBar
+          aria-label={progress.label}
+          size="sm"
+          value={progress.value}
+          maxValue={progress.maxValue}
+          isIndeterminate={progress.isIndeterminate}
+        >
+          <Label>{refreshShortStatus(refresh)}</Label>
+          <ProgressBar.Output />
+          <ProgressBar.Track>
+            <ProgressBar.Fill />
+          </ProgressBar.Track>
+        </ProgressBar>
+      ) : (
+        <Typography type="body-sm" color="muted" truncate role="status">
+          Refresh · {refreshStageLabel(refresh.stage)}
+          {stop ? ' · stopped early' : ''}
+        </Typography>
+      )}
+      <Drawer>
+        <Button
+          isIconOnly
+          size="lg"
+          variant="tertiary"
+          aria-label="Refresh details"
+          aria-haspopup="dialog"
+        >
+          <LuChevronUp aria-hidden="true" />
+        </Button>
+        <Drawer.Backdrop>
+          <Drawer.Content placement="bottom">
+            <Drawer.Dialog>
+              <Drawer.Handle />
+              <Drawer.CloseTrigger />
+              <Drawer.Header>
+                <Drawer.Heading>Refresh progress</Drawer.Heading>
+              </Drawer.Header>
+              <Drawer.Body>
+                <div className="stack refresh-details">
+                  <div className="stack-small">
+                    <Typography type="body-sm" weight="medium">
+                      {stageLabel}
+                    </Typography>
+                    {running && (
+                      <Typography type="body-xs" color="muted">
+                        {etaLabel}
+                      </Typography>
+                    )}
+                    {stop && (
+                      <Typography type="body-xs" color="muted">
+                        {stop}
+                      </Typography>
+                    )}
+                  </div>
+                  {running && (
+                    <ProgressBar
+                      aria-label={progress.label}
+                      value={progress.value}
+                      maxValue={progress.maxValue}
+                      isIndeterminate={progress.isIndeterminate}
+                    >
+                      <ProgressBar.Output />
+                      <ProgressBar.Track>
+                        <ProgressBar.Fill />
+                      </ProgressBar.Track>
+                    </ProgressBar>
+                  )}
+                  <ul className="refresh-stats" aria-label="Refresh counters">
+                    {refreshStats(refresh).map((stat) => (
+                      <li key={stat.label}>
+                        <div className="refresh-stat">
+                          <Typography type="body-xs" color="muted">
+                            {stat.label}
+                          </Typography>
+                          <Typography type="body-sm" weight="semibold">
+                            {stat.value}
+                          </Typography>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="stack-small">
+                    <Typography type="h6" render={(props) => <h3 {...props} />}>
+                      Log · newest first
+                    </Typography>
+                    <div
+                      role="log"
+                      aria-label="Refresh log"
+                      aria-live="polite"
+                      aria-relevant="additions"
+                    >
+                      {shown.length ? (
+                        <ol className="refresh-log-list">
+                          {shown.map((log) => {
+                            const style = logPresentation[log.level];
+                            return (
+                              <li
+                                key={`${refresh.run_id}-${log.sequence}`}
+                                className="refresh-log-item"
+                              >
+                                <span className="refresh-log-meta">
+                                  <Typography type="body-xs" color="muted">
+                                    {new Date(log.at).toLocaleTimeString(
+                                      'en-GB',
+                                    )}
+                                  </Typography>
+                                  {style.muted ? (
+                                    <Typography type="body-xs" color="muted">
+                                      {log.level.toUpperCase()}
+                                    </Typography>
+                                  ) : (
+                                    <Chip
+                                      size="sm"
+                                      variant={style.variant}
+                                      color={style.color}
+                                    >
+                                      {log.level.toUpperCase()}
+                                    </Chip>
+                                  )}
+                                </span>
+                                <span className="refresh-log-message">
+                                  <Typography
+                                    type="body-sm"
+                                    color={style.muted ? 'muted' : 'default'}
+                                  >
+                                    {log.message}
+                                  </Typography>
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      ) : (
+                        <Typography type="body-sm" color="muted">
+                          Waiting for refresh progress.
+                        </Typography>
+                      )}
+                    </div>
+                    {older > 0 && (
+                      <Button
+                        fullWidth
+                        size="lg"
+                        variant="tertiary"
+                        onPress={() => setLimit((value) => value + LOG_STEP)}
+                      >
+                        Show {Math.min(older, LOG_STEP)} older entries
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Drawer.Body>
+            </Drawer.Dialog>
+          </Drawer.Content>
+        </Drawer.Backdrop>
+      </Drawer>
+    </div>
+  );
+}
+
 export function RefreshActivity({
   refresh,
 }: {
   refresh: RefreshSnapshot | null;
 }) {
+  const compact = useCompactLayout();
   const running = refreshRunning(refresh);
   const runId = refresh?.run_id ?? null;
   const eta = useRefreshEta(
@@ -179,6 +372,18 @@ export function RefreshActivity({
         : displayedEta === 0
           ? 'Updating ETA…'
           : `ETA ~${Math.floor(displayedEta / 60)}m ${displayedEta % 60}s`;
+  if (compact)
+    return (
+      <RefreshPanel visible={visible}>
+        <CompactRefreshStatus
+          key={runId}
+          refresh={refresh}
+          running={running}
+          progress={progress}
+          etaLabel={etaLabel}
+        />
+      </RefreshPanel>
+    );
   return (
     <>
       <RefreshPanel visible={running}>
