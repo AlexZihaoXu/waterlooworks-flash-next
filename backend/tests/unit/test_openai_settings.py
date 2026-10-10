@@ -10,7 +10,7 @@ from pydantic import SecretStr
 
 from waterlooworks_flash_next.app_auth import AuthError, BootstrapOwner, SessionStore
 from waterlooworks_flash_next.credentials import CredentialError
-from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 from waterlooworks_flash_next.openai_settings import OpenAIKey, OpenAISettingsStore
 
 
@@ -325,7 +325,7 @@ def test_schema13_preserves_schema12_pair_and_session(
         tuple(row) for row in db.execute("SELECT * FROM waterlooworks_credentials")
     ]
     assert auth == [tuple(row) for row in db.execute("SELECT * FROM app_sessions")]
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert not db.execute("PRAGMA foreign_key_check").fetchall()
     db.close()

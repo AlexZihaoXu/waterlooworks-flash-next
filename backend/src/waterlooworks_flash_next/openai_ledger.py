@@ -18,6 +18,9 @@ from waterlooworks_flash_next.openai_usage import (
 from waterlooworks_flash_next.runtime_secrets import runtime_value
 
 ERROR_ENVELOPE_PRICING = "error-envelope-http"
+# Upper bound on simultaneously reserved (unfinalized) attempts per run; equals
+# the largest configurable number of parallel Pi streams.
+MAX_IN_FLIGHT = 8
 
 
 class BudgetStopped(Exception):
@@ -211,7 +214,7 @@ class AttemptLedger:
                         "OpenAI usage is unknown; review before an explicit new run."
                     )
                 if (
-                    len(unknown) >= 4
+                    len(unknown) >= MAX_IN_FLIGHT
                     or summary.attempts >= limits[0]
                     or summary.known_usd >= Decimal(limits[1])
                 ):
@@ -286,6 +289,47 @@ class AttemptLedger:
                         service_tier,
                         usage.model_dump_json(),
                         None if cost is None else str(cost),
+                        attempt_id,
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def finalize_priced(
+        self,
+        attempt_id: str,
+        usage: UsageCounters,
+        *,
+        model: str | None,
+        known_usd: Decimal | None,
+        pricing_version: str,
+    ) -> None:
+        """Record usage with an explicitly determined cost (or unknown).
+
+        Subscription and custom modes record a known $0 with their own pricing
+        version; API-key models outside the local price table use pi-ai's
+        catalog estimate. `None` keeps the attempt unknown, never assumed free.
+        """
+        if known_usd is not None and (not known_usd.is_finite() or known_usd < 0):
+            raise ValueError("Known cost is invalid.")
+        if not 1 <= len(pricing_version) <= 64:
+            raise ValueError("Pricing version is invalid.")
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(
+                    (
+                        "UPDATE openai_attempts SET "
+                        "finalized_at=?,model=?,service_tier=NULL,usage_json=?,"
+                        "known_usd=?,pricing_version=? "
+                        "WHERE attempt_id=? AND finalized_at IS NULL"
+                    ),
+                    (
+                        datetime.now(UTC).isoformat(),
+                        model,
+                        usage.model_dump_json(),
+                        None if known_usd is None else str(known_usd),
+                        pricing_version,
                         attempt_id,
                     ),
                 )

@@ -17,7 +17,7 @@ from waterlooworks_flash_next.credentials import (
     CredentialStore,
     initialize_key,
 )
-from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 
 
 def pair() -> CredentialPair:
@@ -258,7 +258,7 @@ def test_schema12_additive_preserves_auth(
         tuple(row)
         for row in connection.execute("SELECT type,name,sql FROM sqlite_master")
     )
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     connection.close()

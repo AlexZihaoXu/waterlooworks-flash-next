@@ -8,11 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 from waterlooworks_flash_next import inference as inference_module
+from waterlooworks_flash_next.ai_settings import AIConfig, AISettingsStore
 from waterlooworks_flash_next.database import SCHEMA_VERSION, open_database
 from waterlooworks_flash_next.inference import (
-    MAX_TOKENS,
     InferenceConfig,
     InferenceError,
+    JobIdentity,
     _checkpoint_accept,
     _OwnershipLost,
     _prepare_resume,
@@ -24,8 +25,13 @@ from waterlooworks_flash_next.inference import (
     resume_inference_job,
 )
 from waterlooworks_flash_next.model_validation import ValidatedExtraction
-from waterlooworks_flash_next.openai_provider import ENDPOINT
-from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
+
+CUSTOM = AIConfig(
+    access_mode="custom",
+    model_id="local-model",
+    custom_base_url="http://100.64.0.10:8000/v1",
+    custom_context_window=32768,
+)
 
 
 def test_v8_migration_creates_empty_durable_queue_without_starting_work(
@@ -45,15 +51,24 @@ def test_v8_migration_creates_empty_durable_queue_without_starting_work(
     connection.close()
 
 
-def test_configuration_is_exact_openai_low_effort_and_bounded() -> None:
-    config = InferenceConfig()
-    assert ENDPOINT == "https://api.openai.com/v1/responses"
-    assert MODEL_ID == "gpt-5.6-luna"
-    assert MAX_TOKENS == 4096
-    assert config.concurrency <= 4
-    for invalid in [{"concurrency": 5}, {"max_attempts": 4}]:
+def test_job_identity_is_derived_from_the_active_pi_configuration() -> None:
+    assert InferenceConfig().concurrency is None
+    for invalid in [{"concurrency": 9}, {"max_attempts": 4}]:
         with pytest.raises(ValidationError):
             InferenceConfig.model_validate(invalid)
+    identity = JobIdentity.from_config(CUSTOM)
+    assert identity.model_id == "pi:custom:local-model"
+    assert identity.endpoint == "http://100.64.0.10:8000/v1"
+    assert identity.template_version.startswith("v9-pi-tools+")
+    assert identity.max_tokens == CUSTOM.max_output_tokens
+    # Any identity-relevant change produces a different cache identity.
+    other = JobIdentity.from_config(
+        CUSTOM.model_copy(update={"reasoning_effort": "low"})
+    )
+    assert other.template_version != identity.template_version
+    api = JobIdentity.from_config(AIConfig(model_id="gpt-5.6-luna"))
+    assert api.endpoint == "https://api.openai.com/v1"
+    assert api.model_id == "pi:openai_api_key:gpt-5.6-luna"
 
 
 def test_heartbeat_renews_only_current_lease_and_resume_rechecks_expiry(
@@ -150,9 +165,15 @@ def test_resume_policy_terminalizes_exhausted_abandoned_running_item() -> None:
 def test_empty_database_operations_are_safe_and_do_not_contact_provider(
     tmp_path: Path,
 ) -> None:
-    connection = open_database(tmp_path / "inference.sqlite3")
+    path = tmp_path / "inference.sqlite3"
+    connection = open_database(path)
     with pytest.raises(InferenceError, match="posting selection"):
         create_inference_job(connection, [])
+    with pytest.raises(InferenceError, match="not activated"):
+        create_inference_job(connection, ["404"])
+    store = AISettingsStore(path)
+    store.save_draft(CUSTOM)
+    store.activate()
     with pytest.raises(InferenceError, match="source"):
         create_inference_job(connection, ["404"])
     for operation in (

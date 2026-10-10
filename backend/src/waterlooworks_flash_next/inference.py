@@ -1,4 +1,4 @@
-"""Explicit bounded Responses extraction for already saved postings."""
+"""Explicit bounded Pi-agent extraction for already saved postings."""
 
 import argparse
 import concurrent.futures
@@ -14,20 +14,24 @@ from uuid import UUID, uuid4
 
 from pydantic import Field, ValidationError
 
+from waterlooworks_flash_next.ai_custom import CustomServerError, validate_base_url
+from waterlooworks_flash_next.ai_settings import AIConfig, AISettingsStore
 from waterlooworks_flash_next.compact_history import revision_snapshot
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.credentials import CredentialError
 from waterlooworks_flash_next.database import open_database
-from waterlooworks_flash_next.inference_prompt import build_responses_prompt
+from waterlooworks_flash_next.inference_prompt import (
+    PiPrompt,
+    build_pi_prompt,
+    job_model_id,
+    job_template_version,
+)
 from waterlooworks_flash_next.model_validation import (
-    EXTRACTION_INSTRUCTIONS,
     INPUT_VERSION,
     VALIDATOR_VERSION,
     ExtractionCandidate,
     ModelOutputError,
     ValidatedExtraction,
-    _reject_constant,
-    _strict_object,
     validate_extraction,
 )
 from waterlooworks_flash_next.normalized_storage import decimal_to_storage
@@ -37,21 +41,19 @@ from waterlooworks_flash_next.openai_ledger import (
     BudgetStopped,
     daily_cost_stop_from_environment,
 )
-from waterlooworks_flash_next.openai_provider import (
-    ENDPOINT,
-    TEMPLATE_VERSION,
-    ProviderError,
-    ResponsesProvider,
-)
-from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
 from waterlooworks_flash_next.parser_models import ParserModel
+from waterlooworks_flash_next.pi_bridge import (
+    ItemResult,
+    PiItem,
+    PiSession,
+    SidecarError,
+    require_sidecar,
+)
 from waterlooworks_flash_next.provider_lease import ProviderLease
 
-MODEL_NAME = MODEL_ID
-MODEL_VERSION = "responses-low-default-v1"
-MAX_TOKENS = 4096
-TIMEOUT_SECONDS = 120
-LEASE_SECONDS = TIMEOUT_SECONDS + 60
+# Heartbeat lease; renewed while items are in flight (each item has its own
+# bounded per-turn and whole-item deadlines inside the sidecar).
+LEASE_SECONDS = 180
 MAX_JOB_POSTINGS = 10_000
 MAX_BODY_BYTES = 4 * 1024 * 1024
 # Known-$0 transient rejections (429/5xx) fail one item; this many in a row halt
@@ -81,8 +83,71 @@ class _ProviderError(Exception):
 
 
 class InferenceConfig(ParserModel):
-    concurrency: int = Field(default=4, ge=1, le=4)
+    concurrency: int | None = Field(default=None, ge=1, le=8)
     max_attempts: int = Field(default=1, ge=1, le=1)
+
+
+@dataclass(frozen=True)
+class JobIdentity:
+    model_id: str
+    endpoint: str
+    template_version: str
+    max_tokens: int
+
+    @classmethod
+    def from_config(cls, config: AIConfig) -> "JobIdentity":
+        return cls(
+            job_model_id(config),
+            config.endpoint,
+            job_template_version(config),
+            config.max_output_tokens,
+        )
+
+    @property
+    def producer_name(self) -> str:
+        return self.model_id[:100]
+
+    def as_tuple(self) -> tuple[str, str, str, str, str, int]:
+        return (
+            self.model_id,
+            self.endpoint,
+            INPUT_VERSION,
+            self.template_version,
+            VALIDATOR_VERSION,
+            self.max_tokens,
+        )
+
+
+def active_config(path: Path) -> AIConfig:
+    """The explicitly activated AI configuration; never the unsaved draft."""
+    try:
+        config = AISettingsStore(path).active()
+    except Exception:
+        config = None
+    if config is None or config.model_id is None:
+        raise InferenceError("AI extraction is not activated.")
+    return config
+
+
+def require_ready(path: Path) -> AIConfig:
+    """Readiness without any model call: active config, credential, sidecar."""
+    try:
+        config = active_config(path)
+    except InferenceError:
+        raise CredentialError("AI extraction is not activated.") from None
+    if config.access_mode != "custom" and not AISettingsStore(path).has_credential(
+        config.access_mode
+    ):
+        raise CredentialError("AI access mode is not connected.")
+    require_sidecar()
+    return config
+
+
+def run_limits(config: AIConfig) -> BudgetLimits:
+    """API-key runs keep the USD stops; $0 modes are bounded by request count."""
+    if config.is_zero_cost:
+        return BudgetLimits(request_limit=config.request_limit_per_run)
+    return BudgetLimits.from_environment()
 
 
 @dataclass(frozen=True)
@@ -102,7 +167,7 @@ class _Item:
     content_hash: str
     input_hash: str
     fields: dict[str, str]
-    prompt: str
+    prompt: PiPrompt | None
     request_compensation: bool
     request_skills: bool
     deterministic_skills: tuple[str, ...]
@@ -131,82 +196,114 @@ def _renew_lease(
     return renewed
 
 
-def _pipeline_version() -> str:
+def _pipeline_version(identity: JobIdentity) -> str:
     value = (
-        f"{MODEL_ID}|{INPUT_VERSION}|{TEMPLATE_VERSION}|"
-        f"{VALIDATOR_VERSION}|{MAX_TOKENS}|{EXTRACTION_INSTRUCTIONS}|"
+        f"{identity.model_id}|{identity.endpoint}|{INPUT_VERSION}|"
+        f"{identity.template_version}|{VALIDATOR_VERSION}|{identity.max_tokens}|"
         f"{json.dumps(ExtractionCandidate.model_json_schema(), sort_keys=True)}"
     )
     return f"{VALIDATOR_VERSION}-{hashlib.sha256(value.encode()).hexdigest()[:12]}"
+
+
+def _job_identity(connection: sqlite3.Connection, job_id: str) -> JobIdentity:
+    row = connection.execute(
+        "SELECT model_id,endpoint,template_version,max_tokens FROM inference_jobs "
+        "WHERE job_id=?",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise InferenceError("Inference job does not exist.")
+    return JobIdentity(row[0], row[1], row[2], row[3])
 
 
 def _database_path(connection: sqlite3.Connection) -> Path:
     return Path(connection.execute("PRAGMA database_list").fetchone()[2])
 
 
-def _complete(item: _Item, provider: ResponsesProvider) -> ValidatedExtraction:
-    schema = ExtractionCandidate.model_json_schema()
-    schema["$defs"]["EvidenceCandidate"]["properties"]["field"] = {
-        "type": "string",
-        "enum": sorted(item.fields),
-    }
+def _validate_submission(
+    item: _Item, payload: dict[str, object]
+) -> ValidatedExtraction:
+    candidate = ExtractionCandidate.model_validate(payload)
+    return validate_extraction(
+        candidate,
+        item.fields,
+        source_hash=item.content_hash,
+        request_compensation=item.request_compensation,
+        request_skills=item.request_skills,
+        deterministic_skills=item.deterministic_skills,
+    )
+
+
+def _check(item: _Item, payload: dict[str, object]) -> tuple[bool, str | None]:
+    """Authoritative in-loop check; hints are fixed text, never source values."""
     try:
-        text = provider.complete(
-            item.job_id,
-            hashlib.sha256(f"{item.posting_id}|{item.input_hash}".encode()).hexdigest(),
-            [
-                {"role": "system", "content": EXTRACTION_INSTRUCTIONS},
-                {"role": "user", "content": item.prompt},
-            ],
-            "posting_extraction",
-            schema,
-            MAX_TOKENS,
+        _validate_submission(item, payload)
+        return True, None
+    except ValidationError:
+        return False, "Rejected: the payload does not match the required schema."
+    except (ModelOutputError, ValueError):
+        return False, (
+            "Rejected: every evidence text must be copied exactly from the named "
+            "section, categories must follow the request flags, and the pay and "
+            "skill rules apply. Fix the evidence or return empty lists."
         )
-        candidate = ExtractionCandidate.model_validate(
-            json.loads(
-                text, object_pairs_hook=_strict_object, parse_constant=_reject_constant
-            )
-        )
-        return validate_extraction(
-            candidate,
-            item.fields,
-            source_hash=item.content_hash,
-            request_compensation=item.request_compensation,
-            request_skills=item.request_skills,
-            deterministic_skills=item.deterministic_skills,
-        )
-    except BudgetStopped:
-        raise _ProviderError("configuration", halt=True) from None
-    except CredentialError:
-        raise _ProviderError("configuration", halt=True) from None
-    except ProviderError as error:
-        if error.transient:
-            # Known $0 rejection (rate limit/server busy): fail only this item.
-            raise _ProviderError(error.category, retryable=True) from None
-        category = (
-            error.category
-            if error.category
-            in (
-                "configuration",
-                "timeout",
-                "connection",
-                "http_client",
-                "http_server",
-                "response_size",
-                "response_schema",
-            )
-            else "internal"
-            if error.category == "ledger"
-            else "evidence_rejected"
-            if error.category == "refusal"
-            else "response_schema"
-        )
-        raise _ProviderError(category, halt=category != "evidence_rejected") from None
+
+
+# Sidecar per-item outcome -> (job category, retryable, halt). Caps and model
+# behaviour fail one posting; credential, budget and ledger problems halt.
+_ITEM_FAILURES: dict[str, tuple[str, bool, bool]] = {
+    "auth": ("configuration", False, True),
+    "budget_stopped": ("configuration", False, True),
+    "credential_unavailable": ("configuration", False, True),
+    "model_unavailable": ("model_unavailable", False, True),
+    "reasoning_unsupported": ("configuration", False, True),
+    "configuration": ("configuration", False, True),
+    "sidecar_unavailable": ("configuration", False, True),
+    "ledger": ("internal", False, True),
+    "internal": ("internal", False, True),
+    "protocol": ("internal", False, True),
+    "rate_limited": ("http_client", True, False),
+    "http_server": ("http_server", True, False),
+    "http_client": ("http_client", False, True),
+    "max_turns": ("response_schema", False, False),
+    "max_tool_calls": ("response_schema", False, False),
+    "no_submission": ("response_schema", False, False),
+    "evidence_rejected": ("evidence_rejected", False, False),
+}
+
+
+def _failure(result: ItemResult, zero_cost: bool) -> "_ProviderError":
+    category = result.category or "internal"
+    if category in ("timeout", "connection"):
+        # Unknown paid usage must halt; $0 modes treat it as one failed posting.
+        return _ProviderError(category, retryable=zero_cost, halt=not zero_cost)
+    mapped, retryable, halt = _ITEM_FAILURES.get(category, ("internal", False, True))
+    return _ProviderError(mapped, retryable=retryable, halt=halt)
+
+
+def _complete(item: _Item, session: PiSession) -> ValidatedExtraction:
+    if item.prompt is None:
+        raise _ProviderError("internal", halt=True)
+    pi_item = PiItem(
+        item_id=f"x-{item.posting_id}",
+        kind="extraction",
+        system=item.prompt.system,
+        user=item.prompt.user,
+        sections=item.prompt.sections,
+        submit_schema=item.prompt.submit_schema,
+        operation_key=f"{item.posting_id}|{item.input_hash}",
+        check=lambda payload: _check(item, payload),
+    )
+    try:
+        result = session.run_item(pi_item)
+    except Exception:
+        raise _ProviderError("internal", halt=True) from None
+    if result.status != "submitted" or result.payload is None:
+        raise _failure(result, session.config.is_zero_cost)
+    try:
+        return _validate_submission(item, result.payload)
     except (ModelOutputError, ValidationError, ValueError):
         raise _ProviderError("evidence_rejected") from None
-    except Exception:
-        # Storage or programming failure: stop issuing and terminate the job.
-        raise _ProviderError("internal", halt=True) from None
 
 
 def _source(
@@ -295,13 +392,16 @@ _Selection = tuple[
 ]
 
 
-def _select(connection: sqlite3.Connection, posting_id: str) -> _Selection:
+def _select(
+    connection: sqlite3.Connection, posting_id: str, ai: AIConfig
+) -> _Selection:
     source = _source(connection, posting_id)
-    _, input_hash = build_responses_prompt(
+    _, input_hash = build_pi_prompt(
         source[4].fields,
         request_compensation=source[5],
         request_skills=source[6],
         deterministic_skills=source[7],
+        config=ai,
     )
     return posting_id, source, input_hash
 
@@ -331,12 +431,14 @@ def create_inference_job(
         except ValueError:
             raise InferenceError("Inference job identity is invalid.") from None
     job_id, created = job_id or str(uuid4()), _now()
+    ai = active_config(_database_path(connection))
+    identity = JobIdentity.from_config(ai)
     try:
         # Expensive per-posting selection reads one WAL snapshot without the write
         # lock, so sign-in/settings/ledger writers are not blocked meanwhile.
         with connection:
             connection.execute("BEGIN")
-            items = [_select(connection, posting_id) for posting_id in posting_ids]
+            items = [_select(connection, posting_id, ai) for posting_id in posting_ids]
         with connection:
             connection.execute("BEGIN IMMEDIATE")
             # Re-validate source identity under the write lock; re-select any
@@ -345,7 +447,7 @@ def create_inference_job(
                 item
                 if _current_source(connection, item[0], item[1][3])
                 == tuple(item[1][:4])
-                else _select(connection, item[0])
+                else _select(connection, item[0], ai)
                 for item in items
             ]
             has_work = any(source[5] or source[6] for _, source, _ in items)
@@ -358,28 +460,28 @@ def create_inference_job(
                 (
                     job_id,
                     "pending" if has_work else "completed",
-                    MODEL_ID,
-                    ENDPOINT,
-                    INPUT_VERSION,
-                    TEMPLATE_VERSION,
-                    VALIDATOR_VERSION,
-                    MAX_TOKENS,
-                    config.concurrency,
+                    *identity.as_tuple(),
+                    config.concurrency or ai.parallel_streams,
                     config.max_attempts,
-                    TIMEOUT_SECONDS,
+                    ai.request_timeout_seconds,
                     created,
                     None if has_work else created,
                 ),
             )
+            # Postings beyond the per-run cap are deferred (not_needed/stopped);
+            # the next explicit run selects them again.
+            budget = ai.postings_per_run
             for ordinal, (posting_id, source, input_hash) in enumerate(items):
                 needed = source[5] or source[6]
+                deferred = needed and budget <= 0
+                budget -= int(needed)
                 connection.execute(
                     """INSERT INTO inference_job_items
                        (job_id,posting_id,ordinal,selected_listing_revision_id,
                         selected_content_revision_id,selected_listing_hash,
                         selected_content_hash,input_hash,request_compensation,
-                        request_skills,status,finished_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        request_skills,status,finished_at,error_category)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         job_id,
                         posting_id,
@@ -391,13 +493,12 @@ def create_inference_job(
                         input_hash,
                         int(source[5]),
                         int(source[6]),
-                        "pending" if needed else "not_needed",
-                        None if needed else created,
+                        "pending" if needed and not deferred else "not_needed",
+                        None if needed and not deferred else created,
+                        "stopped" if deferred else None,
                     ),
                 )
-        AttemptLedger(_database_path(connection)).create_run(
-            job_id, BudgetLimits.from_environment()
-        )
+        AttemptLedger(_database_path(connection)).create_run(job_id, run_limits(ai))
         return job_id
     except InferenceError:
         raise
@@ -470,6 +571,14 @@ def request_inference_stop(connection: sqlite3.Connection, job_id: str) -> None:
             )
 
 
+def _job_config(connection: sqlite3.Connection, job_id: str) -> AIConfig:
+    """Active configuration, required to be the one this job was created with."""
+    ai = active_config(_database_path(connection))
+    if JobIdentity.from_config(ai) != _job_identity(connection, job_id):
+        raise InferenceError("Active AI configuration changed since job creation.")
+    return ai
+
+
 def _prepare_item(connection: sqlite3.Connection, row: sqlite3.Row) -> _Item:
     content = StoredPostingContent.model_validate_json(
         revision_snapshot(connection, "content", row["selected_content_revision_id"])
@@ -487,11 +596,12 @@ def _prepare_item(connection: sqlite3.Connection, row: sqlite3.Row) -> _Item:
             (row["posting_id"],),
         )
     )
-    prompt, input_hash = build_responses_prompt(
+    prompt, input_hash = build_pi_prompt(
         content.fields,
         request_compensation=bool(row["request_compensation"]),
         request_skills=bool(row["request_skills"]),
         deterministic_skills=deterministic,
+        config=_job_config(connection, row["job_id"]),
     )
     if input_hash != row["input_hash"]:
         raise InferenceError("Inference item input identity is inconsistent.")
@@ -528,8 +638,11 @@ def _model_projection(
     connection: sqlite3.Connection,
     posting_id: str,
     source: tuple[int, int, str, str],
+    job_id: str,
 ) -> tuple[int, bool]:
-    version, now = _pipeline_version(), _now()
+    identity = _job_identity(connection, job_id)
+    version, now = _pipeline_version(identity), _now()
+    name, producer_version = identity.producer_name, identity.template_version[:100]
     inserted = connection.execute(
         """INSERT INTO analysis_projections
            (posting_id,listing_revision_id,content_revision_id,listing_hash,
@@ -538,14 +651,14 @@ def _model_projection(
            VALUES(?,?,?,?,?,'model',?,?,?,?)
            ON CONFLICT(posting_id,listing_revision_id,content_revision_id,
              producer_kind,producer_name,producer_version,parser_version) DO NOTHING""",
-        (*((posting_id,) + source), MODEL_NAME, MODEL_VERSION, version, now),
+        (*((posting_id,) + source), name, producer_version, version, now),
     )
     row = connection.execute(
         """SELECT projection_id FROM analysis_projections WHERE posting_id=?
            AND listing_revision_id=? AND content_revision_id=?
            AND producer_kind='model' AND producer_name=? AND producer_version=?
            AND parser_version=?""",
-        (posting_id, source[0], source[1], MODEL_NAME, MODEL_VERSION, version),
+        (posting_id, source[0], source[1], name, producer_version, version),
     ).fetchone()
     if row is None:
         raise InferenceError("Model projection identity was not retained.")
@@ -651,6 +764,7 @@ def _copy_result(
 
 
 def _cache(connection: sqlite3.Connection, row: sqlite3.Row) -> sqlite3.Row | None:
+    identity = _job_identity(connection, row["job_id"])
     result = connection.execute(
         """SELECT cache_id,projection_id FROM inference_cache WHERE input_hash=?
            AND content_hash=? AND model_id=? AND input_version=?
@@ -658,11 +772,11 @@ def _cache(connection: sqlite3.Connection, row: sqlite3.Row) -> sqlite3.Row | No
         (
             row["input_hash"],
             row["selected_content_hash"],
-            MODEL_ID,
+            identity.model_id,
             INPUT_VERSION,
-            TEMPLATE_VERSION,
+            identity.template_version,
             VALIDATOR_VERSION,
-            MAX_TOKENS,
+            identity.max_tokens,
         ),
     ).fetchone()
     return cast(sqlite3.Row | None, result)
@@ -709,7 +823,9 @@ def _accept(
             (_now(), row["job_id"], row["posting_id"]),
         )
         return
-    projection_id, created = _model_projection(connection, row["posting_id"], source)
+    projection_id, created = _model_projection(
+        connection, row["posting_id"], source, row["job_id"]
+    )
     if cached is not None:
         if created:
             _copy_result(connection, cached["projection_id"], projection_id)
@@ -720,6 +836,7 @@ def _accept(
     if created:
         _insert_result(connection, projection_id, result)
     now = _now()
+    identity = _job_identity(connection, row["job_id"])
     connection.execute(
         """INSERT INTO inference_cache
            (input_hash,content_hash,model_id,input_version,template_version,
@@ -728,11 +845,11 @@ def _accept(
         (
             row["input_hash"],
             row["selected_content_hash"],
-            MODEL_ID,
+            identity.model_id,
             INPUT_VERSION,
-            TEMPLATE_VERSION,
+            identity.template_version,
             VALIDATOR_VERSION,
-            MAX_TOKENS,
+            identity.max_tokens,
             projection_id,
             now,
         ),
@@ -845,12 +962,19 @@ def _run_inference_job(
         on_progress()
     try:
         path = _database_path(connection)
+        ai = _job_config(connection, job_id)
         ledger = AttemptLedger(path)
-        ledger.create_run(job_id, BudgetLimits.from_environment())
+        ledger.create_run(job_id, run_limits(ai))
         ledger.require_resumable(job_id)
         daily_cost_stop_from_environment()
-        ResponsesProvider(path).require_ready()
-    except (CredentialError, BudgetStopped):
+        session = _open_session(path, ai, job_id)
+    except (
+        CredentialError,
+        BudgetStopped,
+        InferenceError,
+        SidecarError,
+        CustomServerError,
+    ):
         try:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -865,11 +989,21 @@ def _run_inference_job(
         if on_progress is not None:
             on_progress()
         return
-    provider = ResponsesProvider(path)
     try:
-        _drive(connection, job_id, lease, provider, on_progress=on_progress)
+        _drive(connection, job_id, lease, session, on_progress=on_progress)
     finally:
-        provider.close()
+        session.close()
+
+
+def _open_session(path: Path, ai: AIConfig, job_id: str) -> PiSession:
+    """Readiness checks, then one sidecar for the whole run (no model call yet)."""
+    require_ready(path)
+    endpoint = (
+        validate_base_url(ai.custom_base_url or "")
+        if ai.access_mode == "custom"
+        else None
+    )
+    return PiSession(path, ai, job_id, endpoint=endpoint).start()
 
 
 def _claim(
@@ -916,7 +1050,7 @@ def _drive(
     connection: sqlite3.Connection,
     job_id: str,
     lease: str,
-    provider: ResponsesProvider,
+    provider: PiSession,
     *,
     on_progress: Callable[[], None] | None,
 ) -> None:
@@ -1094,14 +1228,13 @@ def _prepare_resume(connection: sqlite3.Connection, job_id: str) -> bool:
             ),
             (job_id,),
         ).fetchone()
-        if tuple(identity) != (
-            MODEL_ID,
-            ENDPOINT,
-            INPUT_VERSION,
-            TEMPLATE_VERSION,
-            VALIDATOR_VERSION,
-            MAX_TOKENS,
-        ):
+        try:
+            current = JobIdentity.from_config(
+                active_config(_database_path(connection))
+            ).as_tuple()
+        except InferenceError:
+            current = None
+        if tuple(identity) != current:
             raise InferenceError(
                 "Historical inference configuration cannot resume with this provider."
             )
@@ -1180,7 +1313,8 @@ def start_inference_job(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Explicit saved-posting OpenAI extraction (paid; bounded run)"
+        description="Explicit saved-posting extraction with the active Pi AI "
+        "configuration (bounded run; API-key mode may be paid)"
     )
     parser.add_argument("database", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1188,7 +1322,7 @@ def main() -> None:
     selection = start.add_mutually_exclusive_group(required=True)
     selection.add_argument("--posting-id", action="append")
     selection.add_argument("--all", action="store_true", dest="all_postings")
-    start.add_argument("--concurrency", type=int, default=4)
+    start.add_argument("--concurrency", type=int, default=None)
     start.add_argument("--max-attempts", type=int, default=1)
     for name in ("resume", "stop", "status"):
         commands.add_parser(name).add_argument("job_id")

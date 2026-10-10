@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import { OPENAI_MODEL, OPENAI_PROFILE } from './openai-bridge.mjs';
 import { createHash } from 'node:crypto';
 import { currentModel, localRequest } from './lm-client.mjs';
 import { chooseReasoning, parseFinal } from './benchmark-lib.mjs';
@@ -54,8 +53,7 @@ export function withinContextBudget(body, maxTokens, contextLength) {
 export const hash = (value) => createHash('sha256').update(value).digest('hex');
 export const MODEL = 'unsloth/gemma-4-26b-a4b-it';
 export async function loadEngine({
-  provider = 'openai-responses',
-  bridge,
+  provider = 'local-benchmark',
   maxTokens = 4096,
   timeout = 300,
   concurrency = 4,
@@ -63,58 +61,8 @@ export async function loadEngine({
   modelId,
   sharedJobPrefix = false,
 } = {}) {
-  if (provider === 'openai-responses') {
-    if (
-      !bridge ||
-      maxTokens !== 4096 ||
-      !Number.isInteger(concurrency) ||
-      concurrency < 1 ||
-      concurrency > 4
-    )
-      throw new Error('OpenAI engine configuration is invalid');
-    const prompts = {};
-    for (const mode of ['salary', 'keywords'])
-      prompts[mode] = await fs.readFile(
-        new URL(`../benchmarks/optimized/v7-${mode}.txt`, import.meta.url),
-        'utf8',
-      );
-    const codeHashes = {};
-    for (const name of [
-      'extraction-lib.mjs',
-      'benchmark-lib.mjs',
-      'extraction-engine.mjs',
-      'extraction-store.mjs',
-      'openai-bridge.mjs',
-      'shared-job-prompt.mjs',
-    ])
-      codeHashes[name] = hash(
-        await fs.readFile(new URL(name, import.meta.url)),
-      );
-    const configuration = {
-      version: EXTRACTOR_VERSION,
-      ...extractionProfile(sharedJobPrefix),
-      provider,
-      providerVersion: OPENAI_PROFILE,
-      model: { id: OPENAI_MODEL },
-      reasoning: 'low',
-      serviceTier: 'default',
-      maxTokens,
-      timeout: 120,
-      concurrency,
-      structuredOutput: true,
-      codeHashes,
-      promptHashes: Object.fromEntries(
-        Object.entries(prompts).map(([key, value]) => [key, hash(value)]),
-      ),
-      reusePolicy: 'compatible-origin-v1',
-    };
-    return {
-      configuration,
-      configurationHash: hash(JSON.stringify(configuration)),
-      prompts,
-      bridge,
-    };
-  }
+  // The paid OpenAI Responses provider was removed with its Python bridge;
+  // production extraction runs through the Pi sidecar (docs/pi-inference.md).
   if (provider !== 'local-benchmark')
     throw new Error('Unsupported extraction provider');
   const model = await currentModel(strictModel ? MODEL : modelId);
@@ -194,11 +142,9 @@ export function extractionParts(fields, mode = 'both') {
   ];
 }
 export async function extractPart(engine, fields, mode, part, operationHash) {
-  const openai = engine.configuration.provider === 'openai-responses';
   if (
-    !openai &&
     JSON.stringify(await currentModel(engine.configuration.model.id)) !==
-      JSON.stringify(engine.configuration.model)
+    JSON.stringify(engine.configuration.model)
   )
     throw new Error('model-changed');
   const all = sourceFields(fields, mode);
@@ -235,7 +181,6 @@ export async function extractPart(engine, fields, mode, part, operationHash) {
     },
   };
   if (
-    !openai &&
     !withinContextBudget(
       body,
       engine.configuration.maxTokens,
@@ -253,15 +198,7 @@ export async function extractPart(engine, fields, mode, part, operationHash) {
   let text;
   let choice;
   let usage = {};
-  if (openai) {
-    text = await engine.bridge.complete(
-      operationHash,
-      body.messages,
-      `extract_${mode}`,
-      schema,
-      engine.configuration.maxTokens,
-    );
-  } else {
+  {
     const response = await localRequest(
       '/v1/chat/completions',
       body,
@@ -290,12 +227,12 @@ export async function extractPart(engine, fields, mode, part, operationHash) {
     },
     seconds: (performance.now() - start) / 1000,
   };
-  if (!openai && choice?.finish_reason !== 'stop') {
+  if (choice?.finish_reason !== 'stop') {
     result.rejected.push('incomplete-output');
     return result;
   }
   try {
-    const answer = openai ? JSON.parse(text) : parseFinal(text);
+    const answer = parseFinal(text);
     result.jsonValid = true;
     result.answer = answer;
     const validated = validateSpans(answer, selected, mode);

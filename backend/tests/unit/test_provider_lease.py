@@ -59,6 +59,14 @@ def test_refresh_busy_admission_has_no_claim_or_cooldown_and_releases_failed_cla
     OpenAISettingsStore(path).save(
         OpenAIKey(api_key=SecretStr(secrets.token_urlsafe()))
     )
+    from waterlooworks_flash_next import inference
+    from waterlooworks_flash_next.ai_settings import AIConfig, AISettingsStore
+
+    settings = AISettingsStore(path)
+    settings.save_draft(AIConfig(model_id="gpt-5.6-luna"))
+    settings.activate()
+    # Readiness only checks the installed sidecar; nothing is spawned here.
+    monkeypatch.setattr(inference, "require_sidecar", lambda: None)
     service = RefreshService(path, tmp_path)
     with ProviderLease(path):
         with pytest.raises(RefreshConflict) as busy:

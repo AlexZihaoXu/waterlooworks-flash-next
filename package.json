@@ -20,7 +20,9 @@
     "extract": "node scripts/extract.mjs",
     "country": "node scripts/country.mjs",
     "benchmark:test": "node --test scripts/tests/*.test.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run sidecar:check",
+    "sidecar:install": "npm --prefix inference-sidecar ci --ignore-scripts",
+    "sidecar:check": "npm --prefix inference-sidecar run check"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0",

@@ -21,6 +21,10 @@ def _hash(value: str) -> str:
 def _configuration_valid(config: dict[str, Any], raw: str, digest: str) -> bool:
     if config.get("provider") == "openai-responses":
         return configuration_valid(raw, digest, "country")
+    if config.get("provider") == "pi":
+        from waterlooworks_flash_next.country_runner import pi_configuration_valid
+
+        return _hash(raw) == digest and pi_configuration_valid(config)
     model = config.get("model", {})
     return (
         _hash(raw) == digest

@@ -40,6 +40,7 @@ def test_schema14_preserves_legacy_rows_and_all_dependent_objects(
         )
     ]
     connection.close()
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 14)
     connection = open_database(path)
     assert before == [
         tuple(row) for row in connection.execute("SELECT * FROM inference_jobs")

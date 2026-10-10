@@ -238,6 +238,13 @@ export async function runItem(
             cache_write: counter(usage.cacheWrite),
             reasoning: counter((usage as { reasoning?: unknown }).reasoning),
           },
+          // pi-ai catalog estimate; the backend decides whether it applies.
+          cost_usd:
+            typeof usage.cost?.total === 'number' &&
+            Number.isFinite(usage.cost.total) &&
+            usage.cost.total >= 0
+              ? usage.cost.total
+              : null,
         });
       })
       .catch(() => {

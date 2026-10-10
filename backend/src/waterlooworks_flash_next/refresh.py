@@ -63,7 +63,7 @@ SHUTDOWN_JOIN_SECONDS = 150.0
 
 
 class RefreshAnalysisError(Exception):
-    """Saved collection survives an unsuccessful OpenAI analysis phase."""
+    """Saved collection survives an unsuccessful AI analysis phase."""
 
 
 def configured_detail_limit(value: str | None) -> int | None:
@@ -466,11 +466,10 @@ class RefreshService:
             if self.project_root is None:
                 raise RuntimeError("Manual refresh is disabled.")
             CredentialStore(self.path).require_ready()
-            from waterlooworks_flash_next.openai_ledger import BudgetLimits
-            from waterlooworks_flash_next.openai_provider import ResponsesProvider
+            from waterlooworks_flash_next.inference import require_ready, run_limits
 
-            ResponsesProvider(self.path).require_ready()
-            BudgetLimits.from_environment()
+            # Active Pi AI configuration, credential and sidecar; no model call.
+            run_limits(require_ready(self.path))
             lease = ProviderLease(self.path)
             try:
                 lease.acquire()
@@ -572,7 +571,7 @@ class RefreshService:
                 "Refresh completed with the server detail cap; "
                 "remaining details were not requested."
                 if self.state.detail_limited
-                else "Collection and OpenAI extraction completed."
+                else "Collection and AI extraction completed."
                 if self.state.analysis_job_id is not None
                 else "Listing and detail-content refresh completed."
             )
@@ -624,7 +623,7 @@ class RefreshService:
             self.state.analysis_cache_hits = cache_hits
         if log and previous != (completed, cache_hits):
             self.emit(
-                f"OpenAI extraction: {completed}/{total} processed; "
+                f"AI extraction: {completed}/{total} processed; "
                 f"{accepted} accepted, {rejected} rejected, {failed} failed, "
                 f"{skipped} skipped; {cache_hits} cache hits."
             )
@@ -681,7 +680,7 @@ class RefreshService:
                     skipped=total - len(ids) if index == 0 else 0,
                 )
             self.emit(
-                "OpenAI extraction completed. Rejected or unavailable facts remain "
+                "AI extraction completed. Rejected or unavailable facts remain "
                 "unknown; no model reasoning or posting content was logged.",
                 "warning" if rejected else "info",
             )
@@ -689,11 +688,11 @@ class RefreshService:
             raise
         except Exception:
             self.emit(
-                "OpenAI analysis failed; saved collection is preserved. "
+                "AI analysis failed; saved collection is preserved. "
                 "Diagnostics suppressed.",
                 "error",
             )
-            raise RefreshAnalysisError("OpenAI analysis failed.") from None
+            raise RefreshAnalysisError("AI analysis failed.") from None
         finally:
             connection.close()
 
@@ -710,25 +709,25 @@ class RefreshService:
         """Run one bounded extraction job; return whether any item was rejected."""
         from waterlooworks_flash_next.inference import (
             InferenceConfig,
+            active_config,
             create_inference_job,
             inference_job_status,
             request_inference_stop,
             run_inference_job,
         )
         from waterlooworks_flash_next.inference_schema import _ERROR_CATEGORIES
-        from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
 
-        job_id = create_inference_job(
-            connection, ids, InferenceConfig(concurrency=4), job_id=job_id
-        )
+        ai = active_config(self.path)
+        job_id = create_inference_job(connection, ids, InferenceConfig(), job_id=job_id)
         with self.lock:
             self.state.stage = "analysis"
             self.state.analysis_total = total
             self.state.analysis_job_id = job_id
         self.emit(
-            f"OpenAI extraction job {job_id}{label}: {len(ids)} saved postings "
-            f"queued; {skipped} without saved details skipped. Model {MODEL_ID}; "
-            "at most 4 simultaneous requests; validated cache reused."
+            f"Extracting with {ai.label()} (job {job_id}{label}): {len(ids)} saved "
+            f"postings queued; {skipped} without saved details skipped; "
+            f"at most {ai.parallel_streams} parallel streams; validated cache "
+            "reused."
         )
         stopping = False
 
@@ -759,23 +758,23 @@ class RefreshService:
         ):
             if reason in _ERROR_CATEGORIES:
                 self.emit(
-                    f"OpenAI extraction outcome: {reason}; {count} postings.",
+                    f"AI extraction outcome: {reason}; {count} postings.",
                     "warning",
                 )
         if status.error_category in _ERROR_CATEGORIES:
             self.emit(
-                f"OpenAI extraction failure category: {status.error_category}.",
+                f"AI extraction failure category: {status.error_category}.",
                 "error",
             )
         if status.persisted_status != "completed":
             self.emit(
-                "OpenAI extraction did not complete. Saved collection and accepted "
-                "checkpoints are preserved. Check OpenAI usage, budget "
+                "AI extraction did not complete. Saved collection and accepted "
+                "checkpoints are preserved. Check AI usage, budget "
                 "and the saved job "
                 "status; no automatic resume.",
                 "error",
             )
-            raise RefreshAnalysisError("OpenAI analysis did not complete.")
+            raise RefreshAnalysisError("AI analysis did not complete.")
         return bool(status.counts.get("rejected"))
 
     def _save_partial_listings(
