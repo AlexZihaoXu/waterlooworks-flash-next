@@ -1984,6 +1984,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "429": {
+            "description": "Per-session or server-wide live stream cap reached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

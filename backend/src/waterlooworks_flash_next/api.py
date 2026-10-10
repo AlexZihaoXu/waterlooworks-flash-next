@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from fastapi import Path as ApiPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.middleware.gzip import GZipMiddleware
 
 from waterlooworks_flash_next.analysis_read import (
@@ -63,6 +64,11 @@ from waterlooworks_flash_next.database import (
     StoredListing,
     open_database,
 )
+from waterlooworks_flash_next.event_streams import (
+    StreamLease,
+    StreamLimiter,
+    session_key,
+)
 from waterlooworks_flash_next.exchange_rates import ExchangeRates
 from waterlooworks_flash_next.keyword_index import read_keyword_index
 from waterlooworks_flash_next.openai_settings_api import install_openai_settings
@@ -96,6 +102,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     sessions = SessionStore(path)
     workspace_cache = SnapshotCache[bytes](path)
     keyword_cache = SnapshotCache[tuple[bytes, str]](path)
+    event_streams = StreamLimiter()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -510,17 +517,31 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 ),
                 "content": {"text/event-stream": {"schema": {"type": "string"}}},
                 "x-event-payload": {"$ref": "#/components/schemas/RefreshSnapshot"},
-            }
+            },
+            429: {
+                "model": ErrorResponse,
+                "description": "Per-session or server-wide live stream cap reached.",
+            },
         },
     )
     async def events(request: Request, once: bool = False) -> StreamingResponse:
+        lease = event_streams.acquire(session_key(request.cookies.get(COOKIE)))
+        if lease is None:
+            raise HTTPException(
+                429,
+                "Too many live update streams are open; close another tab and retry.",
+                headers={"Retry-After": "5", "Cache-Control": "no-store"},
+            )
         return StreamingResponse(
-            session_event_stream(request, service, sessions, once=once),
+            session_event_stream(request, service, sessions, once=once, lease=lease),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            # Idempotent backstop for a response whose body never starts.
+            background=BackgroundTask(lease.release),
         )
 
     app.include_router(protected)
+    app.state.event_streams = event_streams
     return app
 
 
@@ -530,18 +551,32 @@ async def session_event_stream(
     sessions: SessionStore,
     *,
     once: bool = False,
-) -> AsyncIterator[str]:
-    """Recheck the persisted session before every SSE emission, not only connection."""
+    lease: StreamLease | None = None,
+) -> AsyncGenerator[str, None]:
+    """Recheck the persisted session before every SSE emission, not only connection.
+
+    SQLite session reads and the refresh-state lock run in worker threads so a
+    slow lock holder never stalls the event loop for every other request.
+    """
+    cookie = request.cookies.get(COOKIE)
     previous = ""
-    while not await request.is_disconnected():
-        if sessions.lookup(request.cookies.get(COOKIE)) is None:
-            break
-        payload = service.snapshot().model_dump_json()
-        if payload != previous:
-            yield "event: refresh\ndata: " + payload + "\n\n"
-            previous = payload
-        else:
-            yield ": keep-alive\n\n"
-        if once:
-            break
-        await asyncio.sleep(1)
+    try:
+        while not await request.is_disconnected():
+            if await asyncio.to_thread(sessions.lookup, cookie) is None:
+                break
+            payload = await asyncio.to_thread(_snapshot_json, service)
+            if payload != previous:
+                yield "event: refresh\ndata: " + payload + "\n\n"
+                previous = payload
+            else:
+                yield ": keep-alive\n\n"
+            if once:
+                break
+            await asyncio.sleep(1)
+    finally:
+        if lease is not None:
+            lease.release()
+
+
+def _snapshot_json(service: RefreshService) -> str:
+    return service.snapshot().model_dump_json()
