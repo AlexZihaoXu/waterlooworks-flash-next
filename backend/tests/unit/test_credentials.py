@@ -1,5 +1,6 @@
 """Random secret primitives and empty databases only; no browser/provider I/O."""
 
+import os
 import secrets
 import sqlite3
 import time
@@ -370,6 +371,7 @@ def test_runtime_environment_debug_guard_runs_before_login(
     (tmp_path / ".env").write_text("PWDEBUG=1\n")
     with pytest.raises(LoginFlowError, match="Disable DEBUG and PWDEBUG"):
         start_login(tmp_path / "absent.sqlite3", project_root=tmp_path)
+    assert "PWDEBUG" not in os.environ
     assert not (tmp_path / "absent.sqlite3").exists()
     assert not (tmp_path / ".experiment").exists()
 

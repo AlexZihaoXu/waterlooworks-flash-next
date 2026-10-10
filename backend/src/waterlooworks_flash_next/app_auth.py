@@ -4,7 +4,6 @@ import base64
 import hashlib
 import ipaddress
 import json
-import os
 import re
 import secrets
 import sqlite3
@@ -16,14 +15,17 @@ from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
 
 import firebase_admin  # type: ignore[import-untyped]
-from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyCookie
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, ConfigDict, Field
 
 from waterlooworks_flash_next.account_profile import AccountProfile
-from waterlooworks_flash_next.runtime_secrets import read_runtime_secret
+from waterlooworks_flash_next.runtime_secrets import (
+    load_local_environment,
+    read_runtime_secret,
+    runtime_value,
+)
 
 PROJECT_ID = "alex-xu-central"
 COOKIE = "ww_session"
@@ -71,30 +73,40 @@ class FirebaseVerifier:
     def __init__(self, root: Path) -> None:
         self.root = root
         self._app: Any = None
+        self._loaded = False
         self._lock = threading.Lock()
 
     def load_environment(self) -> None:
+        """Parse the ignored local .env once into a private lookup.
+
+        Never exports values into os.environ; changes need a restart.
+        """
         try:
-            load_dotenv(self.root / ".env", override=False)
+            load_local_environment(self.root / ".env")
+            self._loaded = True
         except Exception:
             raise AuthError("Authentication configuration unavailable.") from None
 
     def ensure_ready(self) -> None:
+        if self._app is not None:
+            return  # Initialized once; no per-request file I/O or global lock.
         with self._lock:
             try:
-                # Only runtime authentication code may load the user-managed file.
-                self.load_environment()
-                if os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
+                if self._app is not None:
+                    return
+                if not self._loaded:
+                    # Only runtime authentication code may load the user file.
+                    self.load_environment()
+                if runtime_value("FIREBASE_AUTH_EMULATOR_HOST"):
                     raise ValueError
-                if self._app is None:
-                    data = decode_service_account(
-                        read_runtime_secret("FIREBASE_SERVICE_ACCOUNT", max_bytes=32768)
-                    )
-                    self._app = firebase_admin.initialize_app(
-                        credentials.Certificate(data),
-                        {"projectId": PROJECT_ID, "httpTimeout": 10},
-                        name="ww-" + secrets.token_hex(16),
-                    )
+                data = decode_service_account(
+                    read_runtime_secret("FIREBASE_SERVICE_ACCOUNT", max_bytes=32768)
+                )
+                self._app = firebase_admin.initialize_app(
+                    credentials.Certificate(data),
+                    {"projectId": PROJECT_ID, "httpTimeout": 10},
+                    name="ww-" + secrets.token_hex(16),
+                )
             except Exception:
                 raise AuthError("Authentication configuration unavailable.") from None
 
@@ -312,11 +324,12 @@ class AuthTransport:
     @classmethod
     def from_environment(cls) -> "AuthTransport":
         try:
+            configured = runtime_value("WW_AUTH_ORIGINS")
             origins = frozenset(
-                os.environ.get("WW_AUTH_ORIGINS", "https://localhost").split(",")
+                ("https://localhost" if configured is None else configured).split(",")
             )
-            allow_http = os.environ.get("WW_AUTH_ALLOW_LOOPBACK_HTTP") == "1"
-            proxy = os.environ.get("WW_AUTH_TRUSTED_PROXY")
+            allow_http = runtime_value("WW_AUTH_ALLOW_LOOPBACK_HTTP") == "1"
+            proxy = runtime_value("WW_AUTH_TRUSTED_PROXY")
             if proxy is not None:
                 address = ipaddress.ip_address(proxy)
                 proxy = str(address)

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from dotenv import load_dotenv
 from playwright.sync_api import (
     BrowserContext,
     Page,
@@ -21,6 +20,10 @@ from playwright.sync_api import (
 
 from waterlooworks_flash_next.credentials import CredentialStore
 from waterlooworks_flash_next.logging import stage_logger
+from waterlooworks_flash_next.runtime_secrets import (
+    load_local_environment,
+    runtime_value,
+)
 
 STEP_DELAY_MS = 250
 TYPING_DELAY_MS = 60_000 / (120 * 1.5 * 2 * 5)  # 360 words/min, 5 characters/word.
@@ -75,13 +78,33 @@ class BrowserSettings:
 
 def browser_settings() -> BrowserSettings:
     """Explicit private profile; headed mode is an opt-in local operator setting."""
-    mode = os.environ.get("WW_BROWSER_HEADLESS", "1")
-    profile = os.environ.get("WW_BROWSER_PROFILE")
+    configured_mode = runtime_value("WW_BROWSER_HEADLESS")
+    mode = "1" if configured_mode is None else configured_mode
+    profile = runtime_value("WW_BROWSER_PROFILE")
     if mode not in {"0", "1"} or not profile or not Path(profile).is_absolute():
         raise LoginFlowError(
             "Configure browser mode and an absolute private profile path."
         )
     return BrowserSettings(mode == "1", Path(profile))
+
+
+_BROWSER_DENIED_PREFIXES = ("WW_", "FIREBASE_", "OPENAI", "GOOGLE_")
+_BROWSER_DENIED_PARTS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL")
+
+
+def browser_environment() -> dict[str, str | float | bool]:
+    """Explicit Playwright launch env: process env minus backend secrets/paths.
+
+    Chromium renders untrusted third-party pages, so it never inherits the
+    credential key, service account, OpenAI settings or any *_FILE path.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.upper().startswith(_BROWSER_DENIED_PREFIXES)
+        and not name.upper().endswith("_FILE")
+        and not any(part in name.upper() for part in _BROWSER_DENIED_PARTS)
+    }
 
 
 def exact_auth_origin(url: str, host: str) -> bool:
@@ -151,10 +174,11 @@ def start_login(
     log = stage_logger("login")
     deadline = deadline or AuthDeadline()
     try:
-        load_dotenv(project_root / ".env", override=False)
+        # Private lookup only; never exported to the driver/browser environment.
+        load_local_environment(project_root / ".env")
     except Exception:
         raise LoginFlowError("Login configuration unavailable.") from None
-    if os.environ.get("DEBUG") or os.environ.get("PWDEBUG"):
+    if runtime_value("DEBUG") or runtime_value("PWDEBUG"):
         log.error("Disable DEBUG and PWDEBUG before entering credentials.")
         raise LoginFlowError("Disable DEBUG and PWDEBUG before entering credentials.")
 
@@ -182,6 +206,7 @@ def start_login(
             timeout=deadline.remaining_ms(),
             no_viewport=True,
             service_workers=service_worker_policy(block_service_workers),
+            env=browser_environment(),
         )
         page = context.pages[0] if context.pages else context.new_page()
         deadline.bound_page(page)

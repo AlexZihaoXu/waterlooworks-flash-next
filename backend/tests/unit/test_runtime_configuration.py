@@ -215,3 +215,68 @@ def test_proxy_cookie_remains_secure_without_authentication_or_paid_calls(
             ).status_code
             == 403
         )
+
+
+def test_local_env_file_is_a_private_lookup_never_exported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from waterlooworks_flash_next.runtime_secrets import runtime_value
+
+    names = ("WW_TEST_LOCAL_SECRET", "WW_TEST_LOCAL_SETTING", "WW_TEST_PRECEDENCE")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    (tmp_path / ".env").write_text(
+        "WW_TEST_LOCAL_SECRET=primitive\n"
+        "WW_TEST_LOCAL_SETTING=1\n"
+        "WW_TEST_PRECEDENCE=file\n"
+    )
+    monkeypatch.setenv("WW_TEST_PRECEDENCE", "process")
+    FirebaseVerifier(tmp_path).load_environment()
+    assert not {"WW_TEST_LOCAL_SECRET", "WW_TEST_LOCAL_SETTING"} & set(os.environ)
+    assert read_runtime_secret("WW_TEST_LOCAL_SECRET", max_bytes=16) == "primitive"
+    assert runtime_value("WW_TEST_LOCAL_SETTING") == "1"
+    assert runtime_value("WW_TEST_PRECEDENCE") == "process"
+    # A value and its _FILE form stay ambiguous across process env and file.
+    monkeypatch.setenv("WW_TEST_LOCAL_SECRET_FILE", str(tmp_path / "absent"))
+    with pytest.raises(RuntimeSecretError):
+        read_runtime_secret("WW_TEST_LOCAL_SECRET", max_bytes=16)
+
+
+def test_initialized_verifier_never_rereads_local_env_per_request(
+    tmp_path: Path,
+) -> None:
+    verifier = FirebaseVerifier(tmp_path)
+    verifier.load_environment()
+    # Simulate only the already-initialized SDK handle; no provider call occurs.
+    verifier._app = object()
+    (tmp_path / ".env").mkdir()  # Any later parse would now fail closed.
+    verifier.ensure_ready()
+    verifier._app = None
+
+
+def test_browser_launch_environment_omits_backend_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from waterlooworks_flash_next.login import browser_environment
+
+    for name in (
+        "WW_CREDENTIALS_KEY",
+        "WW_CREDENTIALS_KEY_FILE",
+        "FIREBASE_SERVICE_ACCOUNT",
+        "FIREBASE_SERVICE_ACCOUNT_FILE",
+        "OPENAI_API_KEY",
+        "WW_BOOTSTRAP_ADMIN_EMAIL",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "ANY_TOKEN",
+    ):
+        monkeypatch.setenv(name, "primitive")
+    monkeypatch.setenv("HOME", "/home/test-user")
+    environment = browser_environment()
+    assert environment["HOME"] == "/home/test-user"
+    assert "PATH" in environment
+    assert not any(
+        name.startswith(("WW_", "FIREBASE_", "OPENAI", "GOOGLE_"))
+        or name.endswith("_FILE")
+        or "TOKEN" in name
+        for name in environment
+    )
