@@ -430,7 +430,32 @@ class PiSession:
                 lock.release()
             self._held.clear()
         self._rpc_pool.shutdown(wait=True, cancel_futures=True)
+        self._abandon_attempts()
         self._cleanup_home()
+
+    def _abandon_attempts(self) -> None:
+        """Settle attempts the sidecar reserved but never finalized (crash/timeout).
+
+        Runs after the child exited and every RPC finished, so no late finalize
+        can race it. Subscription/custom requests are never billed per request:
+        they become known $0. Paid API-key attempts stay unknown for operator
+        review (``python -m waterlooworks_flash_next.openai_ledger``).
+        """
+        with self._state_lock:
+            abandoned, self._active_attempts = self._active_attempts, set()
+        if not self.config.is_zero_cost:
+            return
+        for attempt in abandoned:
+            try:
+                self.ledger.finalize_priced(
+                    attempt,
+                    UsageCounters(),
+                    model=None,
+                    known_usd=Decimal(0),
+                    pricing_version=f"{self.config.pricing_version}-abandoned",
+                )
+            except Exception:
+                pass  # Stays unknown; never assumed free by the ledger.
 
     def _cleanup_home(self) -> None:
         if self._home is None:

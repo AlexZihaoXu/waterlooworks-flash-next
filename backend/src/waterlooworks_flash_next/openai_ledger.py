@@ -1,6 +1,7 @@
 """Durable per-dispatch metadata and conservative known-cost stop thresholds."""
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -371,3 +372,91 @@ class AttemptLedger:
                 )
         finally:
             connection.close()
+
+
+OPERATOR_REVIEWED_PRICING = "operator-reviewed"
+
+
+@dataclass(frozen=True)
+class UnknownAttempt:
+    attempt_id: str
+    run_id: str
+    reserved_at: str
+    finalized: bool
+
+
+def unknown_attempts(path: Path) -> list[UnknownAttempt]:
+    """Every attempt whose USD is unknown (unfinalized or unpriced), oldest first."""
+    connection = AttemptLedger(path)._connect()
+    try:
+        return [
+            UnknownAttempt(row[0], row[1], row[2], row[3] is not None)
+            for row in connection.execute(
+                "SELECT attempt_id,run_id,reserved_at,finalized_at FROM "
+                "openai_attempts WHERE known_usd IS NULL ORDER BY reserved_at"
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def resolve_unknown(path: Path, attempt_id: str, known_usd: Decimal) -> None:
+    """Record an operator-reviewed cost (from provider billing) for one attempt.
+
+    Only an attempt that is still unknown can be resolved; known records are
+    immutable. Run this with the API stopped so no session owns the attempt.
+    """
+    if not known_usd.is_finite() or known_usd < 0 or known_usd > 1000:
+        raise ValueError("Reviewed cost is invalid.")
+    connection = AttemptLedger(path)._connect()
+    try:
+        with connection:
+            changed = connection.execute(
+                "UPDATE openai_attempts SET known_usd=?,pricing_version=?,"
+                "finalized_at=coalesce(finalized_at,?) "
+                "WHERE attempt_id=? AND known_usd IS NULL",
+                (
+                    str(known_usd),
+                    OPERATOR_REVIEWED_PRICING,
+                    datetime.now(UTC).isoformat(),
+                    attempt_id,
+                ),
+            ).rowcount
+    finally:
+        connection.close()
+    if changed != 1:
+        raise ValueError("Attempt is not an unknown-usage record.")
+
+
+def main() -> None:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Review unknown-usage AI attempts after checking provider "
+        "billing (operator only; stop the API first)."
+    )
+    parser.add_argument("database", type=Path)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("unknown", help="List attempts with unknown USD.")
+    resolve = commands.add_parser("resolve", help="Record a reviewed USD cost.")
+    resolve.add_argument("attempt_id")
+    resolve.add_argument("--known-usd", required=True)
+    args = parser.parse_args()
+    if args.command == "unknown":
+        for row in unknown_attempts(args.database):
+            print(
+                f"attempt {row.attempt_id} run {row.run_id} reserved "
+                f"{row.reserved_at} finalized {'yes' if row.finalized else 'no'}"
+            )
+        return
+    try:
+        resolve_unknown(args.database, args.attempt_id, Decimal(args.known_usd))
+    except Exception:
+        print("Attempt was not resolved; check the ID and amount.", file=sys.stderr)
+        raise SystemExit(1) from None
+    print(f"attempt {args.attempt_id} resolved")
+
+
+if __name__ == "__main__":
+    main()

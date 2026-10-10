@@ -81,6 +81,8 @@ def main() -> None:
                     {key: result[key] for key in ("attempt", "lock") if key in result}
                 )
             answers.append(answer)
+        if script.get("crash"):
+            sys.exit(9)  # die mid-item, leaving reserved attempts unfinalized
         send(
             {
                 "type": "item_result",

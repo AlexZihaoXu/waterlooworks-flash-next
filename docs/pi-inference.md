@@ -177,6 +177,21 @@ under the identical active configuration.
   historical runs. Their OpenAI-only `start`/`resume` paths were removed with
   the Responses bridge; the v7 source-span extraction CLI has no Pi port.
 
+## Unknown usage after a crash
+
+If the sidecar dies or times out mid-request, attempts it reserved but never
+finalized are settled when the session closes: subscription and custom modes
+record them as known $0 (`<pricing>-abandoned`); paid API-key attempts stay
+unknown, which blocks resume and the rolling daily stop until reviewed. After
+checking provider billing, with the API stopped:
+
+```sh
+uv run --project backend python -m waterlooworks_flash_next.openai_ledger <database> unknown
+uv run --project backend python -m waterlooworks_flash_next.openai_ledger <database> resolve <attempt-id> --known-usd <amount>
+```
+
+Output is fixed ledger metadata only (attempt/run IDs and timestamps).
+
 ## Admin API (all admin-only, `Cache-Control: no-store`)
 
 | Route                                                                              | Purpose                                                                    |

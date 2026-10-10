@@ -392,3 +392,55 @@ def test_item_failure_categories_pass_through_and_start_validates_mode(
         PiSession(path, CUSTOM, str(uuid4()))  # custom mode needs a validated endpoint
     with pytest.raises(SidecarError):
         PiSession(path, AIConfig(), str(uuid4()))  # no model chosen
+
+
+def _crash_after_reserve(path: Path, config: AIConfig) -> str:
+    session, run_id = _session(path, config)
+    try:
+        result = session.run_item(
+            _item(
+                [{"method": "ledger.reserve", "params": {"item_id": "", "turn": 1}}],
+                crash=True,
+            )
+        )
+        assert result.status == "failed"
+    finally:
+        session.close()
+    return run_id
+
+
+def test_crashed_zero_cost_session_finalizes_abandoned_attempts_as_known_zero(
+    path: Path,
+) -> None:
+    run_id = _crash_after_reserve(path, CUSTOM)
+    rows = (
+        sqlite3.connect(path)
+        .execute(
+            "SELECT known_usd,pricing_version,finalized_at FROM openai_attempts "
+            "WHERE run_id=?",
+            (run_id,),
+        )
+        .fetchall()
+    )
+    assert len(rows) == 1
+    assert rows[0][0] == "0" and rows[0][1] == "custom-free-abandoned"
+    assert rows[0][2] is not None
+    AttemptLedger(path).require_resumable(run_id)  # no unknown usage remains
+
+
+def test_crashed_paid_session_keeps_attempts_unknown_for_operator_review(
+    path: Path,
+) -> None:
+    OpenAISettingsStore(path).save(
+        OpenAIKey(api_key=SecretStr(secrets.token_urlsafe(24)))
+    )
+    run_id = _crash_after_reserve(path, AIConfig(model_id="gpt-5.6-luna"))
+    row = (
+        sqlite3.connect(path)
+        .execute(
+            "SELECT known_usd,finalized_at FROM openai_attempts WHERE run_id=?",
+            (run_id,),
+        )
+        .fetchone()
+    )
+    assert row == (None, None)
