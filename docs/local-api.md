@@ -153,6 +153,10 @@ The modal uses documented HeroUI v3 Modal/Form/TextField/Input/Button compositio
 
 Routine tests use only random secret primitives and empty temporary databases. They do not initialize the real `.env`, read private SQLite, authenticate, claim an actual admin or contact WaterlooWorks.
 
+## AI settings (schema15)
+
+Admin-only, no-store routes under `/api/admin/ai` manage the Pi access mode, model, caps, OAuth connections and custom-server checks; see [the route table and safeguards](pi-inference.md#admin-api-all-admin-only-cache-control-no-store). Saving never calls a model; activation requires `{"confirm": true}`. Secrets are never returned.
+
 ## OpenAI admin controls (schema13)
 
 Additive schema13 creates only `openai_credentials` and `openai_reauth_challenges` plus indexes. Existing schema12 ciphertext, source/history, auth users and sessions remain unchanged. Reuse the existing `WW_CREDENTIALS_KEY`; **do not run key initialization on an already provisioned deployment**. The offline initialization CLI accepts empty schema12/13/14 and refuses if either credential table contains ciphertext. No key creation or rotation occurs on startup, GET or save. Follow the backup-first, idle/stopped-service recipe above; production migration/restart was not performed by the agent. Tests explicitly migrate only empty temporary databases and random secret primitives.

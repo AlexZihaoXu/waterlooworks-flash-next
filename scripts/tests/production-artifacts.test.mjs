@@ -26,6 +26,32 @@ test('production Dockerfiles lock browser/Python/Node and install only at build 
   );
 });
 
+test('backend image builds the pinned Pi sidecar without install scripts', () => {
+  const backend = read('backend/Dockerfile');
+  assert.match(backend, /FROM node AS sidecar/);
+  assert.match(backend, /npm ci --ignore-scripts/);
+  assert.match(backend, /npm prune --omit=dev --ignore-scripts/);
+  assert.match(
+    backend,
+    /COPY --from=sidecar \/sidecar \/app\/inference-sidecar/,
+  );
+  assert.match(backend, /WW_SIDECAR_DIR=\/app\/inference-sidecar/);
+  assert.match(backend, /WW_NODE_BINARY=\/usr\/local\/bin\/node/);
+  const sidecar = JSON.parse(read('inference-sidecar/package.json'));
+  for (const version of Object.values(sidecar.dependencies))
+    assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.deepEqual(Object.keys(sidecar.dependencies).sort(), [
+    '@earendil-works/pi-agent-core',
+    '@earendil-works/pi-ai',
+  ]);
+  const lock = JSON.parse(read('inference-sidecar/package-lock.json'));
+  assert.ok(
+    !Object.keys(lock.packages).some((name) =>
+      name.includes('pi-coding-agent'),
+    ),
+  );
+});
+
 test('frontend permissions work without BuildKit and runtime stays nonroot', () => {
   const dockerfile = read('frontend/Dockerfile');
   assert.doesNotMatch(dockerfile, /COPY --chmod/);

@@ -1,4 +1,6 @@
-# Explicit OpenAI inference (schema14)
+# Explicit OpenAI inference (schema14) — superseded
+
+> Superseded by [Pi inference (schema 15)](pi-inference.md). The Python Responses provider and its Node→Python bridge described below were removed; the ledger, limits and historical-read rules still apply.
 
 The Python manual-refresh analysis worker and normal `npm run extract` / `npm run country` engines now use the shared Python Responses client. They do not require a GPU or discover/load local models. This is provider wiring, **not yet production deployment acceptance**: headless/Duo admin status UI is implemented, and [B3 production artifacts](deployment.md) are implemented; actual Docker deployment and real headless SSO/provider validation remain separate gates.
 

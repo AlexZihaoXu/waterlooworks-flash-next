@@ -1,5 +1,7 @@
 # Inferred work country (schema 10)
 
+> New runs use the Pi-backed backend CLI `python -m waterlooworks_flash_next.country_runner <database> start --all` with the active AI configuration ([Pi inference](pi-inference.md)); `npm run country -- status` still reads historical runs.
+
 Country inference is an **explicit saved-data-only local CLI**, not a refresh or automatic API action. It never reruns or replaces salary/keyword extraction, normalized projections or source facts. The existing listing `country: null` and deterministic detail country values retain their semantics. New `country_inference` metadata appears on workspace postings and saved detail responses.
 
 ## Contract and display
