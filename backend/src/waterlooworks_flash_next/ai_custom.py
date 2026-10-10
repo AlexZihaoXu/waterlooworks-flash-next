@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 import httpx
 from pydantic import BaseModel
@@ -106,9 +106,18 @@ def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
     return None
 
 
-def validate_base_url(
-    raw: str, resolver: Resolver = _system_resolver
-) -> ValidatedEndpoint:
+def validate_structure(raw: str) -> None:
+    """DNS-free checks for saving: scheme/userinfo/query/fragment and literals."""
+    parts, host, _ = _parse(raw)
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    if not address_allowed(str(literal)):
+        raise CustomServerError("blocked_address")
+
+
+def _parse(raw: str) -> tuple[SplitResult, str, int]:
     try:
         parts = urlsplit(raw)
         port = parts.port
@@ -127,7 +136,13 @@ def validate_base_url(
     ):
         raise CustomServerError("invalid_url")
     host = parts.hostname.lower()
-    port = port or (443 if parts.scheme == "https" else 80)
+    return parts, host, port or (443 if parts.scheme == "https" else 80)
+
+
+def validate_base_url(
+    raw: str, resolver: Resolver = _system_resolver
+) -> ValidatedEndpoint:
+    parts, host, port = _parse(raw)
     try:
         literal = ipaddress.ip_address(host)
         addresses = [str(literal)]

@@ -157,3 +157,37 @@ def test_validation_errors_never_echo_input_values() -> None:
             {"type": "oauth", "access": secret, "refresh": 1, "expires": 1}
         )
     assert secret not in str(error.value)
+
+
+def test_custom_base_url_is_validated_on_save_and_on_activation(
+    store: AISettingsStore,
+) -> None:
+    from waterlooworks_flash_next.ai_settings import AISettingsError
+
+    def custom(url: str) -> AIConfig:
+        return AIConfig(
+            access_mode="custom",
+            model_id="m",
+            custom_base_url=url,
+            custom_context_window=32768,
+        )
+
+    for bad in (
+        "http://user:pass@model.example/v1",
+        "ftp://model.example/v1",
+        "http://model.example/v1?x=1",
+        "http://169.254.169.254/latest",
+        "http://127.0.0.1:8000/v1",
+    ):
+        with pytest.raises(AISettingsError) as error:
+            store.save_draft(custom(bad))
+        assert bad not in str(error.value)
+    assert store.read()[0] == AIConfig()  # nothing was saved
+    # Structural checks need no DNS, so a name is accepted at save time ...
+    store.save_draft(custom("http://model.example:8000/v1"))
+    # ... and resolved at activation, where a blocked answer is refused.
+    with pytest.raises(AISettingsError):
+        store.activate(resolver=lambda _host, _port: ["169.254.169.254"])
+    assert store.active() is None
+    store.activate(resolver=lambda _host, _port: ["100.64.0.10"])
+    assert store.active() is not None

@@ -23,6 +23,7 @@ from waterlooworks_flash_next.ai_oauth import LoginManager, LoginStatus, OAuthFl
 from waterlooworks_flash_next.ai_settings import (
     ActivateRequest,
     AIConfig,
+    AISettingsError,
     AISettingsStore,
     AISettingsView,
     CredentialSlot,
@@ -120,7 +121,10 @@ def install_ai_settings(app: FastAPI, path: Path) -> None:
     )
     def save_settings(body: AIConfig, response: Response) -> AISettingsView:
         _no_store(response)
-        store.save_draft(body)
+        try:
+            store.save_draft(body)
+        except AISettingsError as error:
+            raise HTTPException(422, str(error)) from None
         return view()
 
     @app.post(
@@ -129,10 +133,14 @@ def install_ai_settings(app: FastAPI, path: Path) -> None:
         response_model=AISettingsView,
         operation_id="activateAISettings",
     )
-    def activate(body: ActivateRequest, response: Response) -> AISettingsView:
+    def activate(
+        request: Request, body: ActivateRequest, response: Response
+    ) -> AISettingsView:
         _no_store(response)
         try:
-            store.activate()
+            store.activate(request.app.state.ai_custom_resolver)
+        except AISettingsError as error:
+            raise HTTPException(409, str(error)) from None
         except CredentialError:
             raise HTTPException(
                 409, "Settings are incomplete or the access mode is not connected."

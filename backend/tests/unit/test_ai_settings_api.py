@@ -177,15 +177,30 @@ def test_catalog_and_custom_checks_run_only_on_explicit_actions(path: Path) -> N
         }
         assert seen[0].url.host == "100.64.0.10"
         assert seen[0].headers["authorization"] == f"Bearer {token}"
+        metadata = "http://169.254.169.254/"
+        refused = client.put(
+            "/api/admin/ai",
+            json={"access_mode": "custom", "custom_base_url": metadata},
+        )
+        assert refused.status_code == 422
+        assert refused.json() == {"detail": "Custom server base URL is not allowed."}
+        # A name passes structural checks; resolution to a blocked address is
+        # refused when the explicit test runs (and again at activation).
+        app.state.ai_custom_resolver = lambda _host, _port: ["169.254.169.254"]
+        blocked = client.post("/api/admin/ai/custom/test", json={}).json()
+        assert blocked["error_category"] == "blocked_address"
         client.put(
             "/api/admin/ai",
             json={
                 "access_mode": "custom",
-                "custom_base_url": "http://169.254.169.254/",
+                "model_id": "ctx384k",
+                "custom_base_url": "http://strata.lan/v1",
+                "custom_context_window": 393216,
             },
         )
-        blocked = client.post("/api/admin/ai/custom/test", json={}).json()
-        assert blocked["error_category"] == "blocked_address"
+        activation = client.post("/api/admin/ai/activate", json={"confirm": True})
+        assert activation.status_code == 409
+        assert activation.json() == {"detail": "Custom server address is not allowed."}
         assert len(seen) == 2
 
 

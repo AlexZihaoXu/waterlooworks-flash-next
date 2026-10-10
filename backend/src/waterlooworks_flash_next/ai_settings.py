@@ -83,6 +83,10 @@ COMMIT_BUSY_TIMEOUT_SECONDS = 30.0
 COMMIT_RETRY_DELAYS: tuple[float, ...] = (0.5, 2.0)
 
 
+class AISettingsError(Exception):
+    """Fixed message only; never echoes the submitted value."""
+
+
 class AIConfig(BaseModel):
     """Non-secret AI configuration. Validation errors never echo input values."""
 
@@ -305,7 +309,19 @@ class AISettingsStore:
         return self.read()[1]
 
     def save_draft(self, config: AIConfig) -> None:
-        """Persist only; never validates reachability or invokes a model."""
+        """Persist only; structural URL checks, never DNS, reachability or a model."""
+        if config.custom_base_url is not None:
+            from waterlooworks_flash_next.ai_custom import (
+                CustomServerError,
+                validate_structure,
+            )
+
+            try:
+                validate_structure(config.custom_base_url)
+            except CustomServerError:
+                raise AISettingsError(
+                    "Custom server base URL is not allowed."
+                ) from None
         connection = self._connect(writable=True)
         try:
             with connection:
@@ -319,7 +335,7 @@ class AISettingsStore:
         finally:
             connection.close()
 
-    def activate(self) -> AIConfig:
+    def activate(self, resolver: Any = None) -> AIConfig:
         """Explicit admin action: copy a complete draft into the active slot."""
         draft = self.read()[0]
         if draft.model_id is None:
@@ -328,6 +344,19 @@ class AISettingsStore:
             draft.custom_base_url is None or draft.custom_context_window is None
         ):
             raise CredentialError("Custom server settings are incomplete.")
+        if draft.access_mode == "custom":
+            from waterlooworks_flash_next.ai_custom import (
+                CustomServerError,
+                validate_base_url,
+            )
+
+            try:
+                if resolver is None:
+                    validate_base_url(draft.custom_base_url or "")
+                else:
+                    validate_base_url(draft.custom_base_url or "", resolver)
+            except CustomServerError:
+                raise AISettingsError("Custom server address is not allowed.") from None
         if draft.access_mode != "custom" and not self.has_credential(draft.access_mode):
             raise CredentialError("Connect this access mode before activating.")
         connection = self._connect(writable=True)
