@@ -23,6 +23,7 @@ from waterlooworks_flash_next.detail_capture import (
     install_capture_guard,
 )
 from waterlooworks_flash_next.detail_fetch import (
+    ITEM_FAILURE_CATEGORIES,
     DetailCollection,
     DetailProgress,
     DetailSource,
@@ -59,6 +60,66 @@ def configured_detail_limit(value: str | None) -> int | None:
     ):
         raise ValueError("WW_DETAIL_LIMIT must be an integer from 1 to 100000.")
     return int(value)
+
+
+FAILED_SAME_REVISION = "failed_same_revision"
+_ITEM_FAILURES = frozenset(category.value for category in ITEM_FAILURE_CATEGORIES)
+# Latest terminal content attempt and the listing hash observed in that attempt's run.
+_LATEST_ATTEMPT = (
+    "SELECT a.status,a.error_category,r.content_hash "
+    "FROM posting_content_attempts a "
+    "LEFT JOIN posting_observations o ON o.posting_id=a.posting_id "
+    "AND o.run_id=a.run_id "
+    "LEFT JOIN posting_revisions r ON r.revision_id=o.revision_id "
+    "WHERE a.posting_id=? AND a.status<>'running' "
+    "ORDER BY a.rowid DESC LIMIT 1"
+)
+
+
+def detail_skip_reason(
+    current_hash: str,
+    latest_attempt: tuple[str, str | None, str | None] | None,
+) -> str | None:
+    """Why a listed posting needs no detail request this run, or None to fetch it.
+
+    A posting whose own response failed validation on the unchanged listing
+    revision would fail identically again, so it waits for a listing change.
+    """
+    if latest_attempt is not None:
+        status, category, listing_hash = latest_attempt
+        if (
+            status == "failed"
+            and category in _ITEM_FAILURES
+            and listing_hash is not None
+            and listing_hash == current_hash
+        ):
+            return FAILED_SAME_REVISION
+    return None
+
+
+def select_detail_queue(
+    connection: sqlite3.Connection, listings: list[StoredListing]
+) -> tuple[list[StoredListing], dict[str, int]]:
+    """Listing-ordered detail queue and counts of postings skipped per reason."""
+    queue: list[StoredListing] = []
+    skipped: dict[str, int] = {}
+    for listing in listings:
+        current = connection.execute(
+            "SELECT content_hash FROM postings WHERE posting_id=?", (listing.id,)
+        ).fetchone()
+        latest = connection.execute(_LATEST_ATTEMPT, (listing.id,)).fetchone()
+        reason = (
+            detail_skip_reason(
+                str(current[0]), tuple(latest) if latest is not None else None
+            )
+            if current is not None
+            else None
+        )
+        if reason is None:
+            queue.append(listing)
+        else:
+            skipped[reason] = skipped.get(reason, 0) + 1
+    return queue, skipped
 
 
 class RefreshConflict(Exception):
@@ -484,6 +545,7 @@ class RefreshService:
         else:
             self.emit(
                 f"Detail progress: {progress.completed}/{progress.total} saved; "
+                f"{progress.failed} failed validation; "
                 f"{progress.requests} requests; {progress.retries} retries; "
                 f"{progress.bursts} bursts."
             )
@@ -547,12 +609,13 @@ class RefreshService:
                 save_listings(
                     connection, run_id, listings, received_at=collection.received_at
                 )
+                eligible, skipped = select_detail_queue(connection, listings)
                 queue = (
-                    listings
+                    eligible
                     if self.detail_limit is None
-                    else listings[: self.detail_limit]
+                    else eligible[: self.detail_limit]
                 )
-                limited = len(queue) < len(listings)
+                limited = len(queue) < len(eligible)
                 with connection:
                     connection.execute(
                         "UPDATE collection_runs SET pages_completed=?,"
@@ -579,6 +642,13 @@ class RefreshService:
                     "Full listing pass saved. "
                     "Starting sequential detail-content collection."
                 )
+                if skipped.get(FAILED_SAME_REVISION):
+                    self.emit(
+                        f"{skipped[FAILED_SAME_REVISION]} postings skipped: their "
+                        "detail content failed validation on the same listing "
+                        "revision.",
+                        "warning",
+                    )
 
                 def bootstrap(
                     posting: StoredListing, request: Callable[[Callable[[], str]], str]
@@ -617,6 +687,13 @@ class RefreshService:
                     bootstrap=bootstrap,
                 )
                 details.run()
+                if details.failed:
+                    self.emit(
+                        f"{details.failed} postings failed detail-content "
+                        "validation and were skipped; they are retried after "
+                        "their listing changes.",
+                        "warning",
+                    )
             finally:
                 connection.close()
             if session is not None:
