@@ -772,20 +772,6 @@ export interface components {
       /** Entries */
       entries: components['schemas']['KeywordIndexPosting'][];
     };
-    /** ListingRevision */
-    ListingRevision: {
-      /** Revision Id */
-      revision_id: number;
-      /** Content Hash */
-      content_hash: string;
-      /** Hash Version */
-      hash_version: string;
-      /** Observed At */
-      observed_at: string;
-      /** Run Id */
-      run_id: string;
-      snapshot: components['schemas']['StoredListing'];
-    };
     /** OpenAIKey */
     OpenAIKey: {
       /**
@@ -975,8 +961,6 @@ export interface components {
       /** Targeted Disciplines */
       targeted_disciplines: string[];
       compensation_sort: components['schemas']['CompensationSort'] | null;
-      /** Listing Revisions */
-      listing_revisions: components['schemas']['ListingRevision'][];
     };
     /** RefreshAccepted */
     RefreshAccepted: {

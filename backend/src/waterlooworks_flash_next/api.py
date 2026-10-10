@@ -1,7 +1,6 @@
 """Google-authenticated shared API; admin-only explicit collection."""
 
 import asyncio
-import json
 import os
 import sqlite3
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -28,7 +27,6 @@ from waterlooworks_flash_next.api_models import (
     HealthResponse,
     JobDetailResponse,
     KeywordIndexResponse,
-    ListingRevision,
     PostingAnalysisResponse,
     PostingComparisonResponse,
     PostingHistoryResponse,
@@ -48,7 +46,6 @@ from waterlooworks_flash_next.app_auth import (
 )
 from waterlooworks_flash_next.auth_api import install_auth
 from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
-from waterlooworks_flash_next.compact_history import HistoryReader
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.country_inference import read_country_inferences
@@ -100,7 +97,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     verifier = FirebaseVerifier(root if database_path is None else path.parent)
     sessions = SessionStore(path)
-    workspace_cache = SnapshotCache[bytes](path)
+    workspace_cache = SnapshotCache[tuple[bytes, bytes]](path)
     keyword_cache = SnapshotCache[tuple[bytes, str]](path)
     event_streams = StreamLimiter()
 
@@ -233,17 +230,11 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     )
     def workspace(request: Request) -> Response:
         try:
-            # Cache only identity-free data; attach authorization outside the cache.
-            payload = json.loads(
-                workspace_cache.get(
-                    lambda: workspace_snapshot().model_dump_json().encode()
-                )
-            )
-            payload["manual_refresh_available"] = (
-                enabled and request.state.identity.role == "admin"
-            )
+            # Cache identity-free bytes for both capability variants; choose per
+            # request so neither role nor UID enters the shared cache.
+            member, admin = workspace_cache.get(workspace_variants)
             return Response(
-                json.dumps(payload),
+                admin if enabled and request.state.identity.role == "admin" else member,
                 media_type="application/json",
                 headers={"Cache-Control": "no-store"},
             )
@@ -251,6 +242,15 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             raise HTTPException(
                 500, "Stored workspace is unavailable; diagnostics suppressed."
             ) from None
+
+    def workspace_variants() -> tuple[bytes, bytes]:
+        snapshot = workspace_snapshot()
+        return (
+            snapshot.model_dump_json().encode(),
+            snapshot.model_copy(update={"manual_refresh_available": True})
+            .model_dump_json()
+            .encode(),
+        )
 
     def workspace_snapshot() -> WorkspaceResponse:
         connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -263,25 +263,6 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             targeted = read_targeted_disciplines(connection)
             compensation = read_compensation_sorts(connection)
             countries = read_country_inferences(connection)
-            history: dict[str, list[ListingRevision]] = {}
-            history_reader = HistoryReader(connection)
-            for row in connection.execute(
-                "SELECT * FROM posting_revisions ORDER BY revision_id DESC"
-            ):
-                history.setdefault(row["posting_id"], []).append(
-                    ListingRevision(
-                        revision_id=row["revision_id"],
-                        content_hash=row["content_hash"],
-                        hash_version=row["hash_version"],
-                        observed_at=row["observed_at"],
-                        run_id=row["run_id"],
-                        snapshot=StoredListing.model_validate_json(
-                            history_reader.read(
-                                row["payload_id"], row["content_hash"], "listing"
-                            )
-                        ),
-                    )
-                )
             postings = []
             for row in connection.execute(
                 "SELECT * FROM postings ORDER BY last_seen_at DESC, posting_id"
@@ -296,7 +277,6 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                         location=listing.city
                         if isinstance(listing.city, str)
                         else None,
-                        listing_revisions=history.get(row["posting_id"], []),
                         targeted_disciplines=targeted.get(row["posting_id"], []),
                         work_arrangement=arrangements.get(row["posting_id"]),
                         compensation_sort=compensation.get(row["posting_id"]),

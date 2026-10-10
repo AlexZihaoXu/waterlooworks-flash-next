@@ -3,9 +3,8 @@
 import sqlite3
 from decimal import Decimal, localcontext
 
-from waterlooworks_flash_next.analysis_read import read_analysis
-from waterlooworks_flash_next.api_models import CompensationSort
-from waterlooworks_flash_next.source_enrichment import read_source_enrichment
+from waterlooworks_flash_next.analysis_read import read_compensations
+from waterlooworks_flash_next.api_models import CompensationRate, CompensationSort
 
 
 def hourly_amount(
@@ -50,89 +49,82 @@ def compensation_bounds(
     return minimum, maximum, average
 
 
+def compensation_sort_for(
+    rates: list[CompensationRate], *, needs_review: bool
+) -> CompensationSort | None:
+    """Ranking summary of already merged, source-anchored rates; None when unpaid."""
+    if needs_review:
+        return CompensationSort(
+            needs_review=True,
+            source_rates=rates,
+            currency=None,
+            period=None,
+            minimum=None,
+            maximum=None,
+            average=None,
+        )
+    units = {
+        (
+            rate.currency,
+            "hour" if rate.period in ("week", "month", "year") else rate.period,
+        )
+        for rate in rates
+    }
+    if len(units) != 1:
+        if not rates:
+            return None
+        return CompensationSort(
+            currency=None,
+            period=None,
+            minimum=None,
+            maximum=None,
+            average=None,
+            source_rates=rates,
+        )
+    currency, period = next(iter(units))
+    bounds = [
+        (
+            hourly_amount(rate.minimum, rate.period, rate.hours_per_week)
+            if rate.bound_type != "maximum"
+            else None,
+            hourly_amount(
+                rate.minimum if rate.bound_type == "fixed" else rate.maximum,
+                rate.period,
+                rate.hours_per_week,
+            )
+            if rate.bound_type != "minimum"
+            else None,
+        )
+        for rate in rates
+    ]
+    minimum, maximum, average = compensation_bounds(bounds)
+    return CompensationSort(
+        source_rates=rates,
+        currency=currency,
+        period=period,
+        minimum=format(minimum, "f") if minimum is not None else None,
+        maximum=format(maximum, "f") if maximum is not None else None,
+        average=format(average, "f") if average is not None else None,
+        estimated=any(rate.period in ("week", "month", "year") for rate in rates),
+        assumed_hours=any(
+            rate.hours_per_week is None and rate.period in ("week", "month", "year")
+            for rate in rates
+        ),
+        annualized=any(rate.period in ("month", "year") for rate in rates),
+        hours_per_week=sorted(
+            {rate.hours_per_week for rate in rates if rate.hours_per_week is not None},
+            key=Decimal,
+        ),
+    )
+
+
 def read_compensation_sorts(
     connection: sqlite3.Connection,
 ) -> dict[str, CompensationSort]:
+    """Bulk read for the workspace: fixed query count, no per-posting analysis."""
     result: dict[str, CompensationSort] = {}
-    # Load saved extraction evidence once, not once per posting.
-    source = read_source_enrichment(connection)
-    ids = connection.execute(
-        "SELECT DISTINCT a.posting_id FROM analysis_projections a "
-        "JOIN normalized_compensation_rates r USING(projection_id) "
-        "JOIN postings p USING(posting_id)"
-    ).fetchall()
-    candidate_ids = {row[0] for row in ids} | {
-        id_ for id_, entry in source.items() if entry.pay
-    }
-    for posting_id in sorted(candidate_ids):
-        analysis = read_analysis(connection, posting_id, source)
-        rates = analysis.compensation
-        if analysis.compensation_needs_review:
-            result[posting_id] = CompensationSort(
-                needs_review=True,
-                source_rates=rates,
-                currency=None,
-                period=None,
-                minimum=None,
-                maximum=None,
-                average=None,
-            )
-            continue
-        units = {
-            (
-                rate.currency,
-                "hour" if rate.period in ("week", "month", "year") else rate.period,
-            )
-            for rate in rates
-        }
-        if len(units) != 1:
-            if rates:
-                result[posting_id] = CompensationSort(
-                    currency=None,
-                    period=None,
-                    minimum=None,
-                    maximum=None,
-                    average=None,
-                    source_rates=rates,
-                )
-            continue
-        currency, period = next(iter(units))
-        bounds = [
-            (
-                hourly_amount(rate.minimum, rate.period, rate.hours_per_week)
-                if rate.bound_type != "maximum"
-                else None,
-                hourly_amount(
-                    rate.minimum if rate.bound_type == "fixed" else rate.maximum,
-                    rate.period,
-                    rate.hours_per_week,
-                )
-                if rate.bound_type != "minimum"
-                else None,
-            )
-            for rate in rates
-        ]
-        minimum, maximum, average = compensation_bounds(bounds)
-        result[posting_id] = CompensationSort(
-            source_rates=rates,
-            currency=currency,
-            period=period,
-            minimum=format(minimum, "f") if minimum is not None else None,
-            maximum=format(maximum, "f") if maximum is not None else None,
-            average=format(average, "f") if average is not None else None,
-            estimated=any(rate.period in ("week", "month", "year") for rate in rates),
-            assumed_hours=any(
-                rate.hours_per_week is None and rate.period in ("week", "month", "year")
-                for rate in rates
-            ),
-            annualized=any(rate.period in ("month", "year") for rate in rates),
-            hours_per_week=sorted(
-                {
-                    rate.hours_per_week
-                    for rate in rates
-                    if rate.hours_per_week is not None
-                },
-                key=Decimal,
-            ),
-        )
+    for posting_id, (rates, needs_review) in read_compensations(connection).items():
+        summary = compensation_sort_for(rates, needs_review=needs_review)
+        if summary is not None:
+            result[posting_id] = summary
     return result

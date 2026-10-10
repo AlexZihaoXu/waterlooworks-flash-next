@@ -72,3 +72,25 @@ def test_refresh_claim_blocks_concurrency_and_enforces_cooldown(tmp_path: Path) 
         claim_refresh(path)
     assert cooldown.value.status_code == 429
     assert cooldown.value.retry_after > 0
+
+
+def test_workspace_serves_cached_compact_bytes_without_revision_history(
+    tmp_path: Path,
+) -> None:
+    from waterlooworks_flash_next.api_models import PostingResponse
+
+    # Per-posting history stays at /api/postings/{id}/history, not the workspace.
+    assert "listing_revisions" not in PostingResponse.model_fields
+    with session_client(tmp_path / "db.sqlite3") as client:
+        schema = client.get("/doc/openapi.json").json()["components"]["schemas"]
+        assert "listing_revisions" not in schema["PostingResponse"]["properties"]
+        assert "ListingRevision" not in schema
+        first = client.get("/api/workspace")
+        second = client.get("/api/workspace")
+        # Served as the cached serialization, not re-encoded per request.
+        assert first.content == second.content
+        assert first.content == (
+            b'{"status":"ready","postings":[],"manual_refresh_available":false,'
+            b'"details_available":false,"compensation_sort_available":true}'
+        )
+        assert first.headers["cache-control"] == "no-store"

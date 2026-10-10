@@ -1,9 +1,17 @@
-from decimal import Decimal
+"""Primitive rate arithmetic and empty-database reader contracts; no postings."""
 
+import sqlite3
+from decimal import Decimal
+from pathlib import Path
+
+from waterlooworks_flash_next.api_models import CompensationRate
 from waterlooworks_flash_next.compensation_sort import (
     compensation_bounds,
+    compensation_sort_for,
     hourly_amount,
+    read_compensation_sorts,
 )
+from waterlooworks_flash_next.database import open_database
 
 
 def test_hourly_conversion_uses_stated_hours_else_40() -> None:
@@ -42,3 +50,59 @@ def test_open_bounds_do_not_invent_missing_endpoints() -> None:
         None,
     )
     assert compensation_bounds([]) == (None, None, None)
+
+
+def _rate(**update: object) -> CompensationRate:
+    # Primitive numeric rates with empty source fields, not posting fixtures.
+    base = CompensationRate(
+        bound_type="range",
+        minimum="20",
+        maximum="30",
+        minimum_inclusive=True,
+        maximum_inclusive=True,
+        currency="CAD",
+        period="hour",
+        hours_per_week=None,
+        payout_frequency=None,
+        eligibility=None,
+        source_field="",
+        evidence_text="",
+    )
+    return base.model_copy(update=update)
+
+
+def test_sort_summary_is_derived_from_merged_rates_alone() -> None:
+    assert compensation_sort_for([], needs_review=False) is None
+    review = compensation_sort_for([_rate()], needs_review=True)
+    assert review is not None and review.needs_review
+    assert review.currency is None and review.average is None
+    single = compensation_sort_for([_rate()], needs_review=False)
+    assert single is not None
+    assert (single.currency, single.period) == ("CAD", "hour")
+    assert (single.minimum, single.maximum, single.average) == ("20", "30", "25")
+    assert not single.estimated
+    weekly = compensation_sort_for(
+        [_rate(bound_type="fixed", minimum="800", maximum="800", period="week")],
+        needs_review=False,
+    )
+    assert weekly is not None and weekly.period == "hour"
+    assert weekly.average == "20" and weekly.estimated and weekly.assumed_hours
+    mixed = compensation_sort_for([_rate(), _rate(currency="USD")], needs_review=False)
+    assert mixed is not None and mixed.currency is None and mixed.source_rates
+
+
+def test_bulk_reader_uses_fixed_query_count_on_empty_database(
+    tmp_path: Path,
+) -> None:
+    connection = open_database(tmp_path / "empty.sqlite3")
+    connection.row_factory = sqlite3.Row
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+    try:
+        assert read_compensation_sorts(connection) == {}
+    finally:
+        connection.set_trace_callback(None)
+        connection.close()
+    # Bulk reads only: no per-posting analysis lookups such as field evidence.
+    assert not any("normalized_field_evidence" in sql for sql in statements)
+    assert len(statements) <= 12
