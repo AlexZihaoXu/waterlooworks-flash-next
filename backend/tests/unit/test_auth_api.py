@@ -105,11 +105,12 @@ def test_profile_denies_prepared_expired_and_logged_out_sessions(
         cookie = store.prepare(None)
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/auth/profile").status_code == 401
-        store.issue(cookie, "internal-uid", int(time.time()) + 300)
+        now = int(time.time())
+        cookie = store.issue(cookie, "internal-uid", now + 300, auth_time=now).cookie
         store.logout(cookie)
         assert client.get("/api/auth/profile").status_code == 401
         cookie = store.prepare(None, now=100)
-        store.issue(cookie, "internal-uid", 200, now=100)
+        cookie = store.issue(cookie, "internal-uid", 200, auth_time=100, now=100).cookie
         client.cookies.clear()
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/auth/profile").status_code == 401
@@ -120,8 +121,10 @@ def test_member_cannot_mutate_and_logout_invalidates_cookie(tmp_path: Path) -> N
     with session_client(path) as client:
         store = SessionStore(path)
         cookie = store.prepare(None)
-        member = store.issue(cookie, "ordinary-uid", int(time.time()) + 300)
-        assert member.role == "member"
+        now = int(time.time())
+        member = store.issue(cookie, "ordinary-uid", now + 300, auth_time=now)
+        cookie = member.cookie
+        assert member.identity.role == "member"
         client.cookies.clear()
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/workspace").json()["manual_refresh_available"] is False
@@ -142,7 +145,7 @@ def test_member_cannot_mutate_and_logout_invalidates_cookie(tmp_path: Path) -> N
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/workspace").status_code == 401
         with pytest.raises(AuthError):
-            store.issue(cookie, "ordinary-uid", int(time.time()) + 300)
+            store.issue(cookie, "ordinary-uid", now + 300, auth_time=now)
 
 
 def test_csrf_cookie_and_body_bounds(tmp_path: Path) -> None:
@@ -261,7 +264,8 @@ def test_auth_schema_upgrade_is_additive_and_bootstrap_cannot_reset(
     connection.close()
     store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner-uid"))
     cookie = store.prepare(None)
-    store.issue(cookie, "owner-uid", int(time.time()) + 300)
+    now = int(time.time())
+    store.issue(cookie, "owner-uid", now + 300, auth_time=now)
     with sqlite3.connect(path) as connection:
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute("DELETE FROM app_users")
@@ -280,7 +284,10 @@ def test_workspace_cache_never_shares_admin_capability(
         store = SessionStore(path)
         admin_cookie = client.cookies.get(COOKIE)
         member_cookie = store.prepare(None)
-        store.issue(member_cookie, "member-uid", int(time.time()) + 300)
+        now = int(time.time())
+        member_cookie = store.issue(
+            member_cookie, "member-uid", now + 300, auth_time=now
+        ).cookie
         # All provisioning precedes these reads; the global snapshot stays cached.
         for cookie, expected in (
             (admin_cookie, True),

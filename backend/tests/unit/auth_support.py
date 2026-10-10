@@ -35,6 +35,9 @@ def session_client(path: Path, *, app: FastAPI | None = None) -> Iterator[TestCl
             path, bootstrap=BootstrapOwner(uid="internal-session-test")
         )
         cookie = store.prepare(None)
-        store.issue(cookie, "internal-session-test", int(time.time()) + 3600)
+        now = int(time.time())
+        cookie = store.issue(
+            cookie, "internal-session-test", now + 3600, auth_time=now
+        ).cookie
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         yield client

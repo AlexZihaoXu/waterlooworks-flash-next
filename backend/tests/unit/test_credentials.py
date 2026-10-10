@@ -182,7 +182,8 @@ def test_admin_settings_and_secret_validation(
         assert client.post(endpoint, content="").status_code == 415
         store = SessionStore(path)
         cookie = store.prepare(None)
-        store.issue(cookie, "member", int(time.time()) + 300)
+        now = int(time.time())
+        cookie = store.issue(cookie, "member", now + 300, auth_time=now).cookie
         client.cookies.clear()
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get(endpoint).status_code == 403
@@ -191,7 +192,7 @@ def test_admin_settings_and_secret_validation(
         assert client.get(endpoint).status_code == 401
         assert client.post(endpoint, json=body).status_code == 401
         expired = store.prepare(None, now=100)
-        store.issue(expired, "member", 200, now=100)
+        expired = store.issue(expired, "member", 200, auth_time=100, now=100).cookie
         client.cookies.clear()
         client.cookies.set(COOKIE, expired, domain="localhost.local", path="/api")
         assert client.get(endpoint).status_code == 401
@@ -240,7 +241,9 @@ def test_schema12_additive_preserves_auth(
         open_database(path).close()
     store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
     cookie = store.prepare(None)
-    identity = store.issue(cookie, "owner", int(time.time()) + 300)
+    now = int(time.time())
+    issued = store.issue(cookie, "owner", now + 300, auth_time=now)
+    cookie, identity = issued.cookie, issued.identity
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TABLE openai_reauth_challenges")
         connection.execute("DROP TABLE openai_credentials")

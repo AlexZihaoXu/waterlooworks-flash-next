@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
@@ -30,6 +30,12 @@ from waterlooworks_flash_next.runtime_secrets import (
 PROJECT_ID = "alex-xu-central"
 COOKIE = "ww_session"
 MAX_TTL = 3600
+# Absolute app-session bound measured from the Google sign-in (`auth_time`).
+# Renewal never extends past it; afterwards a fresh Google popup is required.
+SESSION_ABSOLUTE_LIFETIME = 12 * 3600
+# A renewed session's replaced value stays valid this long for in-flight
+# requests and concurrent tabs. A prepared (pre-login) value gets no grace.
+ROTATION_GRACE_SECONDS = 30
 SESSION_COOKIE = APIKeyCookie(name=COOKIE, auto_error=False, scheme_name="AppSession")
 
 
@@ -239,6 +245,12 @@ def _digest(cookie: str | None) -> str:
     return hashlib.sha256(cookie.encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class IssuedSession:
+    cookie: str = field(repr=False)
+    identity: SessionIdentity
+
+
 class SessionStore:
     def __init__(self, path: Path, *, bootstrap: BootstrapOwner | None = None) -> None:
         """`bootstrap` defaults to WW_BOOTSTRAP_ADMIN_UID/EMAIL read at issue time."""
@@ -289,20 +301,30 @@ class SessionStore:
         uid: str,
         token_expiry: int,
         *,
+        auth_time: int,
         email: str | None = None,
         now: int | None = None,
-    ) -> SessionIdentity:
+    ) -> IssuedSession:
         """Internal primitive: caller must have verified Google identity first.
 
         `email` is passed only when Google marked it verified. An empty user
         table admits only the pinned owner, as admin; otherwise nobody.
-        Reuse the prepared cookie. Logout deletes its row, so an in-flight token
+        Every call mints a fresh token in the same transaction: a prepared
+        value is deleted (never authenticated), a renewed one keeps only a
+        short grace. Logout deletes the presented row, so an in-flight token
         verification cannot resurrect a logged-out session or bootstrap a user.
         """
         now = int(time.time()) if now is None else now
-        expires = min(token_expiry, now + MAX_TTL)
+        if type(auth_time) is not int or not (
+            now - SESSION_ABSOLUTE_LIFETIME < auth_time <= now
+        ):
+            raise AuthError("Authentication session expired.")
+        expires = min(
+            token_expiry, now + MAX_TTL, auth_time + SESSION_ABSOLUTE_LIFETIME
+        )
         if not 1 <= len(uid) <= 128 or expires <= now:
             raise AuthError("Authentication session expired.")
+        fresh = secrets.token_urlsafe(32)
         connection = self._connect()
         try:
             with connection:
@@ -332,11 +354,27 @@ class SessionStore:
                 else:
                     role = user["role"]
                 connection.execute(
-                    "UPDATE app_sessions SET uid=?, expires_at=? WHERE token_hash=?",
-                    (uid, expires, _digest(cookie)),
+                    "INSERT INTO app_sessions VALUES (?, ?, ?)",
+                    (_digest(fresh), uid, expires),
                 )
-            return SessionIdentity(
-                uid=uid, role=cast(Literal["admin", "member"], role), expires_at=expires
+                if session["uid"] is None:
+                    connection.execute(
+                        "DELETE FROM app_sessions WHERE token_hash=?",
+                        (_digest(cookie),),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE app_sessions SET expires_at=min(expires_at, ?) "
+                        "WHERE token_hash=?",
+                        (now + ROTATION_GRACE_SECONDS, _digest(cookie)),
+                    )
+            return IssuedSession(
+                fresh,
+                SessionIdentity(
+                    uid=uid,
+                    role=cast(Literal["admin", "member"], role),
+                    expires_at=expires,
+                ),
             )
         finally:
             connection.close()

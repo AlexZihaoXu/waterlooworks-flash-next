@@ -141,15 +141,23 @@ def install_auth(
             raise HTTPException(429, "Authentication is busy. Try again later.")
         try:
             verified = verifier.verify(body.id_token)
-            identity = sessions.issue(
-                cookie, verified.uid, verified.expires, email=verified.email
+            issued = sessions.issue(
+                cookie,
+                verified.uid,
+                verified.expires,
+                auth_time=verified.auth_time,
+                email=verified.email,
             )
         finally:
             verification_slots.release()
+        # Always a freshly minted value: login and renewal both rotate.
         set_cookie(
-            request, response, cookie, max(0, identity.expires_at - int(time.time()))
+            request,
+            response,
+            issued.cookie,
+            max(0, issued.identity.expires_at - int(time.time())),
         )
-        return identity
+        return issued.identity
 
     @app.get(
         "/api/auth/session",
