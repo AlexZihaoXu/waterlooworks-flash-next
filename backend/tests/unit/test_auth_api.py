@@ -495,3 +495,68 @@ def test_unhandled_failure_logs_fixed_incident_line_without_secrets(
         "GET /api/test-only-failure/{value}; RuntimeError"
     ]
     assert secret not in caplog.text and secret not in response.text
+
+
+@pytest.mark.parametrize(
+    ("target", "url", "route", "detail"),
+    [
+        (
+            "read_work_arrangements",
+            "/api/workspace",
+            "/api/workspace",
+            "Stored workspace is unavailable; diagnostics suppressed.",
+        ),
+        (
+            "read_keyword_index",
+            "/api/keyword-index",
+            "/api/keyword-index",
+            "Saved keyword index unavailable; diagnostics suppressed.",
+        ),
+        (
+            "read_analysis",
+            "/api/postings/1/analysis",
+            "/api/postings/{posting_id}/analysis",
+            "Stored posting analysis is unavailable; diagnostics suppressed.",
+        ),
+    ],
+)
+def test_route_level_failures_log_one_fixed_incident_line(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    url: str,
+    route: str,
+    detail: str,
+) -> None:
+    import logging
+    import re
+    import secrets
+
+    from waterlooworks_flash_next import api
+
+    secret = secrets.token_urlsafe(16)
+
+    def failing(*args: object, **kwargs: object) -> None:
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(api, target, failing)
+    path = tmp_path / "db.sqlite3"
+    logger = logging.getLogger("api")
+    logger.addHandler(caplog.handler)
+    try:
+        with session_client(path, app=create_app(path)) as client:
+            response = client.get(url)
+    finally:
+        logger.removeHandler(caplog.handler)
+    assert response.status_code == 500
+    match = re.fullmatch(
+        re.escape(detail) + r" Incident ([0-9a-f]{8})\.", response.json()["detail"]
+    )
+    assert match is not None
+    lines = [record.getMessage() for record in caplog.records]
+    assert lines == [
+        f"Suppressed request failure; incident {match.group(1)}; "
+        f"GET {route}; RuntimeError"
+    ]
+    assert secret not in caplog.text and secret not in response.text

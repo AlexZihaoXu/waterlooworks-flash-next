@@ -67,6 +67,7 @@ from waterlooworks_flash_next.event_streams import (
     session_key,
 )
 from waterlooworks_flash_next.exchange_rates import ExchangeRates
+from waterlooworks_flash_next.incidents import suppressed_failure
 from waterlooworks_flash_next.keyword_index import read_keyword_index
 from waterlooworks_flash_next.openai_settings_api import install_openai_settings
 from waterlooworks_flash_next.openai_usage_api import install_openai_usage
@@ -262,9 +263,11 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 media_type="application/json",
                 headers={"Cache-Control": "no-store"},
             )
+        except HTTPException:
+            raise  # workspace_snapshot already recorded its incident.
         except Exception:
-            raise HTTPException(
-                500, "Stored workspace is unavailable; diagnostics suppressed."
+            raise suppressed_failure(
+                "Stored workspace is unavailable; diagnostics suppressed."
             ) from None
 
     def workspace_variants() -> tuple[bytes, bytes]:
@@ -311,8 +314,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 )
             return WorkspaceResponse(postings=postings, manual_refresh_available=False)
         except Exception:
-            raise HTTPException(
-                500, "Stored workspace is unavailable; diagnostics suppressed."
+            raise suppressed_failure(
+                "Stored workspace is unavailable; diagnostics suppressed."
             ) from None
         finally:
             connection.close()
@@ -359,8 +362,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         except HTTPException:
             raise
         except Exception:
-            raise HTTPException(
-                500,
+            raise suppressed_failure(
                 "Stored posting is unavailable; diagnostics suppressed.",
                 headers={"Cache-Control": "no-store"},
             ) from None
@@ -391,8 +393,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         except HTTPException:
             raise
         except Exception:
-            raise HTTPException(
-                500,
+            raise suppressed_failure(
                 "Stored posting analysis is unavailable; diagnostics suppressed.",
                 headers={"Cache-Control": "no-store"},
             ) from None
@@ -453,8 +454,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 return Response(status_code=304, headers=headers)
             return Response(content, media_type="application/json", headers=headers)
         except Exception:
-            raise HTTPException(
-                500, "Saved keyword index unavailable; diagnostics suppressed."
+            raise suppressed_failure(
+                "Saved keyword index unavailable; diagnostics suppressed."
             ) from None
 
     def keyword_snapshot() -> tuple[bytes, str]:
@@ -504,8 +505,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 headers={"Retry-After": str(error.retry_after)},
             ) from None
         except Exception:
-            raise HTTPException(
-                500, "Could not start refresh; diagnostics suppressed."
+            raise suppressed_failure(
+                "Could not start refresh; diagnostics suppressed."
             ) from None
 
     @protected.get(
