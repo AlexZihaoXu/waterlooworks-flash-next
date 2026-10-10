@@ -835,6 +835,19 @@ export interface components {
       /** Runs */
       runs: components['schemas']['OpenAIRunUsage'][];
       /**
+       * Daily Cost Stop Usd
+       * @description Optional rolling 24-hour known-cost stop across runs; null when WW_OPENAI_DAILY_COST_STOP_USD is unset.
+       */
+      daily_cost_stop_usd: string | null;
+      /** Rolling 24H Attempts */
+      rolling_24h_attempts: number;
+      /** Rolling 24H Unpriced Attempts */
+      rolling_24h_unpriced_attempts: number;
+      /** Rolling 24H Known Usd */
+      rolling_24h_known_usd: string;
+      /** Rolling 24H Total Usd */
+      rolling_24h_total_usd: string | null;
+      /**
        * Warning
        * @default Known-cost stop threshold is not a hard monetary cap. In-flight requests can add charges. Unknown usage requires operator review before a new run. Only the 20 most recent runs are listed; older ledger records are retained.
        */

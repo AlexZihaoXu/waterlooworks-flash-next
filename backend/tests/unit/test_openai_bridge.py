@@ -96,3 +96,14 @@ def test_bridge_failed_admission_releases_temporary_database_lock(
         assert not result.stderr
     with ProviderLease(path) as lease:
         lease.require_owner(path)
+
+
+def test_bridge_close_releases_the_shared_provider_client(tmp_path: Path) -> None:
+    from waterlooworks_flash_next.openai_bridge import Bridge
+    from waterlooworks_flash_next.openai_provider import ResponsesProvider
+
+    bridge = Bridge()
+    bridge.provider = ResponsesProvider(tmp_path / "unused.sqlite3")
+    client = bridge.provider._shared_transport().client
+    bridge.close()
+    assert client.is_closed

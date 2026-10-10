@@ -1,12 +1,15 @@
 """Provider contract checks use empty databases and structural primitives only."""
 
 import json
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from waterlooworks_flash_next import openai_provider
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.openai_ledger import (
     AttemptLedger,
@@ -194,3 +197,305 @@ def test_missing_provider_key_fails_without_reservation(
     connection = open_database(path)
     assert connection.execute("SELECT count(*) FROM openai_attempts").fetchone()[0] == 0
     connection.close()
+
+
+def _ready_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[openai_provider.ResponsesProvider, str]:
+    """Empty database plus random key primitive; no provider is contacted."""
+    import secrets
+
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    from waterlooworks_flash_next.openai_settings import OpenAIKey, OpenAISettingsStore
+
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    monkeypatch.setenv("WW_CREDENTIALS_KEY", Fernet.generate_key().decode())
+    OpenAISettingsStore(path).save(
+        OpenAIKey(api_key=SecretStr(secrets.token_urlsafe()))
+    )
+    provider = openai_provider.ResponsesProvider(path)
+    run = str(uuid4())
+    provider.ledger.create_run(run, BudgetLimits())
+    return provider, run
+
+
+def _empty_call(
+    provider: openai_provider.ResponsesProvider, run: str, operation: str
+) -> str:
+    return provider.complete(
+        run, operation * 64, [], "empty", {"type": "object", "properties": {}}
+    )
+
+
+# Envelope shapes below are structural primitives (no message text, no output):
+# the documented error body of a rejected request, which carries no usage.
+@pytest.mark.parametrize(
+    ("status", "envelope", "category", "transient"),
+    [
+        (429, {"error": {"code": "rate_limit_exceeded"}}, "http_client", True),
+        (503, {"error": {}}, "http_server", True),
+        (429, {"error": {"code": "insufficient_quota"}}, "http_client", False),
+        (401, {"error": {}}, "http_client", False),
+    ],
+)
+def test_usage_less_error_envelope_is_known_zero_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    envelope: dict[str, object],
+    category: str,
+    transient: bool,
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+
+    async def rejected(*_args: object) -> tuple[int, dict[str, object]]:
+        return status, envelope
+
+    monkeypatch.setattr(openai_provider, "_dispatch", rejected)
+    with pytest.raises(ProviderError, match=f"^{category}$") as raised:
+        _empty_call(provider, run, "0")
+    assert raised.value.transient is transient
+    summary = provider.ledger.summary(run)
+    assert (summary.attempts, summary.unpriced_attempts) == (1, 0)
+    assert summary.total_usd == Decimal(0)
+    provider.ledger.require_resumable(run)
+    connection = open_database(provider.path)
+    marker = connection.execute(
+        "SELECT pricing_version,finalized_at FROM openai_attempts"
+    ).fetchone()
+    connection.close()
+    assert marker[0] == f"error-envelope-http-{status}"
+    assert marker[1] is not None
+    with pytest.raises(ProviderError):
+        _empty_call(provider, run, "1")
+    assert provider.ledger.summary(run).attempts == 2
+
+
+def test_non_envelope_failure_status_remains_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+
+    async def opaque(*_args: object) -> tuple[int, dict[str, object]]:
+        return 502, {}
+
+    monkeypatch.setattr(openai_provider, "_dispatch", opaque)
+    with pytest.raises(ProviderError, match="^http_server$") as raised:
+        _empty_call(provider, run, "0")
+    assert raised.value.transient is False
+    assert provider.ledger.summary(run).unpriced_attempts == 1
+    with pytest.raises(BudgetStopped):
+        provider.ledger.require_resumable(run)
+
+
+def test_post_dispatch_finalize_is_retried_then_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+    monkeypatch.setattr(openai_provider, "FINALIZE_RETRY_DELAYS", (0, 0))
+
+    async def rejected(*_args: object) -> tuple[int, dict[str, object]]:
+        return 429, {"error": {}}
+
+    monkeypatch.setattr(openai_provider, "_dispatch", rejected)
+    original = provider.ledger.finalize_error_envelope
+    failures = 1
+
+    def flaky(attempt_id: str, status: int) -> None:
+        nonlocal failures
+        if failures:
+            failures -= 1
+            raise sqlite3.OperationalError("database is locked")
+        original(attempt_id, status)
+
+    monkeypatch.setattr(provider.ledger, "finalize_error_envelope", flaky)
+    with pytest.raises(ProviderError, match="^http_client$"):
+        _empty_call(provider, run, "0")
+    assert provider.ledger.summary(run).unpriced_attempts == 0
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(provider.ledger, "finalize_error_envelope", broken)
+    with pytest.raises(ProviderError, match="^ledger$"):
+        _empty_call(provider, run, "1")
+    # The outcome could not be recorded: unknown, never free.
+    assert provider.ledger.summary(run).unpriced_attempts == 1
+    with pytest.raises(BudgetStopped):
+        _empty_call(provider, run, "2")
+
+
+def test_dispatch_failure_survives_unrecordable_finalize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+    monkeypatch.setattr(openai_provider, "FINALIZE_RETRY_DELAYS", (0,))
+
+    async def unavailable(*_args: object) -> tuple[int, dict[str, object]]:
+        raise ProviderError("connection")
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(openai_provider, "_dispatch", unavailable)
+    monkeypatch.setattr(provider.ledger, "finalize", broken)
+    with pytest.raises(ProviderError, match="^connection$"):
+        _empty_call(provider, run, "0")
+    assert provider.ledger.summary(run).unpriced_attempts == 1
+
+
+def test_provider_reuses_one_bounded_client_and_closes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    provider, run = _ready_provider(tmp_path, monkeypatch)
+    clients: list[httpx.AsyncClient] = []
+
+    async def rejected(
+        client: httpx.AsyncClient, *_args: object
+    ) -> tuple[int, dict[str, object]]:
+        clients.append(client)
+        return 429, {"error": {}}
+
+    monkeypatch.setattr(openai_provider, "_dispatch", rejected)
+    for operation in ("0", "1"):
+        with pytest.raises(ProviderError):
+            _empty_call(provider, run, operation)
+    assert len(clients) == 2 and clients[0] is clients[1]
+    client = clients[0]
+    assert client.trust_env is False
+    assert client.follow_redirects is False
+    assert client.timeout == httpx.Timeout(30)
+    assert not client.is_closed
+    provider.close()
+    assert client.is_closed
+    provider.close()
+
+
+# Token-count primitives priced at exactly $0.01 by the dated Standard table.
+CENT = UsageCounters(
+    input_tokens=50_000,
+    cached_tokens=0,
+    cache_write_tokens=0,
+    output_tokens=0,
+    reasoning_tokens=0,
+)
+
+
+def _spend(ledger: AttemptLedger, usage: UsageCounters | None) -> str:
+    run = str(uuid4())
+    ledger.create_run(run, BudgetLimits())
+    attempt = ledger.reserve(run, "a" * 64)
+    if usage is None:
+        ledger.finalize(attempt, UsageCounters(), model=None, service_tier=None)
+    else:
+        ledger.finalize(attempt, usage, model="gpt-5.6-luna", service_tier="default")
+    return attempt
+
+
+def test_daily_cost_stop_is_optional_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from waterlooworks_flash_next.openai_ledger import daily_cost_stop_from_environment
+
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    assert daily_cost_stop_from_environment() is None
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "2.50")
+    assert daily_cost_stop_from_environment() == Decimal("2.50")
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "")
+    assert daily_cost_stop_from_environment() is None
+    for invalid in ("NaN", "Infinity", "0", "-1", "1001", "one"):
+        monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", invalid)
+        with pytest.raises(BudgetStopped) as error:
+            daily_cost_stop_from_environment()
+        assert str(error.value) == "OpenAI budget configuration is invalid."
+
+
+def test_rolling_daily_ceiling_spans_runs_and_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    ledger = AttemptLedger(path)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    spent = _spend(ledger, CENT)
+    fresh = str(uuid4())
+    ledger.create_run(fresh, BudgetLimits())
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "0.01")
+    with pytest.raises(BudgetStopped, match="24-hour"):
+        ledger.reserve(fresh, "b" * 64)
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "0.02")
+    rejected = ledger.reserve(fresh, "b" * 64)
+    ledger.finalize_error_envelope(rejected, 429)
+    connection = open_database(path)
+    with connection:
+        connection.execute(
+            "UPDATE openai_attempts SET reserved_at=? WHERE attempt_id=?",
+            ((datetime.now(UTC) - timedelta(hours=25)).isoformat(), spent),
+        )
+    connection.close()
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "0.01")
+    later = str(uuid4())
+    ledger.create_run(later, BudgetLimits())
+    ledger.reserve(later, "c" * 64)
+
+
+def test_rolling_daily_ceiling_treats_unknown_usage_as_not_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    ledger = AttemptLedger(path)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    _spend(ledger, None)
+    other = str(uuid4())
+    ledger.create_run(other, BudgetLimits())
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "100")
+    with pytest.raises(BudgetStopped, match="unknown"):
+        ledger.reserve(other, "b" * 64)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD")
+    abandoned = ledger.reserve(other, "b" * 64)
+    # An unfinalized attempt this caller does not own is unknown, too.
+    third = str(uuid4())
+    ledger.create_run(third, BudgetLimits())
+    connection = open_database(path)
+    with connection:
+        connection.execute(
+            "UPDATE openai_attempts SET reserved_at=? WHERE known_usd IS NULL "
+            "AND finalized_at IS NOT NULL",
+            ((datetime.now(UTC) - timedelta(days=2)).isoformat(),),
+        )
+    connection.close()
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "100")
+    with pytest.raises(BudgetStopped, match="unknown"):
+        ledger.reserve(third, "c" * 64)
+    ledger.reserve(third, "c" * 64, active_attempts=frozenset({abandoned}))
+
+
+def test_admin_usage_reports_rolling_daily_spend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from waterlooworks_flash_next.openai_usage_api import read_usage
+
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    ledger = AttemptLedger(path)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    empty = read_usage(path)
+    assert empty.daily_cost_stop_usd is None
+    assert (empty.rolling_24h_attempts, empty.rolling_24h_known_usd) == (0, "0")
+    assert empty.rolling_24h_total_usd == "0"
+    _spend(ledger, CENT)
+    _spend(ledger, CENT)
+    _spend(ledger, None)
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "5")
+    usage = read_usage(path)
+    assert usage.daily_cost_stop_usd == "5"
+    assert usage.rolling_24h_attempts == 3
+    assert usage.rolling_24h_unpriced_attempts == 1
+    assert Decimal(usage.rolling_24h_known_usd) == Decimal("0.02")
+    assert usage.rolling_24h_total_usd is None

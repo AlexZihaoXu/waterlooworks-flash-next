@@ -3,10 +3,14 @@
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from waterlooworks_flash_next.app_auth import require_admin
-from waterlooworks_flash_next.openai_ledger import AttemptLedger, BudgetLimits
+from waterlooworks_flash_next.openai_ledger import (
+    AttemptLedger,
+    BudgetLimits,
+    daily_cost_stop_from_environment,
+)
 from waterlooworks_flash_next.openai_usage import PRICING_DATE, UsageCounters
 
 
@@ -30,6 +34,14 @@ class OpenAIUsageStatus(BaseModel):
     default_request_limit: int
     default_known_cost_stop_usd: str
     runs: list[OpenAIRunUsage]
+    daily_cost_stop_usd: str | None = Field(
+        description="Optional rolling 24-hour known-cost stop across runs; null "
+        "when WW_OPENAI_DAILY_COST_STOP_USD is unset."
+    )
+    rolling_24h_attempts: int
+    rolling_24h_unpriced_attempts: int
+    rolling_24h_known_usd: str
+    rolling_24h_total_usd: str | None
     warning: str = (
         "Known-cost stop threshold is not a hard monetary cap. In-flight requests "
         "can add charges. Unknown usage requires operator review before a new run. "
@@ -40,6 +52,7 @@ class OpenAIUsageStatus(BaseModel):
 def read_usage(path: Path) -> OpenAIUsageStatus:
     ledger = AttemptLedger(path)
     limits = BudgetLimits.from_environment()
+    daily_stop = daily_cost_stop_from_environment()
     connection = ledger._connect()
     try:
         # One WAL read snapshot for run selection, prices and all token counters.
@@ -79,10 +92,18 @@ def read_usage(path: Path) -> OpenAIUsageStatus:
                     **totals,
                 )
             )
+        rolling = ledger.rolling_summary(connection)
         return OpenAIUsageStatus(
             default_request_limit=limits.request_limit,
             default_known_cost_stop_usd=str(limits.known_cost_stop_usd),
             runs=runs,
+            daily_cost_stop_usd=None if daily_stop is None else str(daily_stop),
+            rolling_24h_attempts=rolling.attempts,
+            rolling_24h_unpriced_attempts=rolling.unpriced_attempts,
+            rolling_24h_known_usd=str(rolling.known_usd),
+            rolling_24h_total_usd=None
+            if rolling.total_usd is None
+            else str(rolling.total_usd),
         )
     finally:
         connection.close()

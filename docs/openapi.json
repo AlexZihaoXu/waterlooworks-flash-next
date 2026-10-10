@@ -3359,6 +3359,41 @@
             "type": "array",
             "title": "Runs"
           },
+          "daily_cost_stop_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Cost Stop Usd",
+            "description": "Optional rolling 24-hour known-cost stop across runs; null when WW_OPENAI_DAILY_COST_STOP_USD is unset."
+          },
+          "rolling_24h_attempts": {
+            "type": "integer",
+            "title": "Rolling 24H Attempts"
+          },
+          "rolling_24h_unpriced_attempts": {
+            "type": "integer",
+            "title": "Rolling 24H Unpriced Attempts"
+          },
+          "rolling_24h_known_usd": {
+            "type": "string",
+            "title": "Rolling 24H Known Usd"
+          },
+          "rolling_24h_total_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolling 24H Total Usd"
+          },
           "warning": {
             "type": "string",
             "title": "Warning",
@@ -3369,7 +3404,12 @@
         "required": [
           "default_request_limit",
           "default_known_cost_stop_usd",
-          "runs"
+          "runs",
+          "daily_cost_stop_usd",
+          "rolling_24h_attempts",
+          "rolling_24h_unpriced_attempts",
+          "rolling_24h_known_usd",
+          "rolling_24h_total_usd"
         ],
         "title": "OpenAIUsageStatus"
       },

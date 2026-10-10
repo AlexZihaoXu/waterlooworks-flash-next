@@ -17,6 +17,8 @@ from waterlooworks_flash_next.openai_usage import (
 )
 from waterlooworks_flash_next.runtime_secrets import runtime_value
 
+ERROR_ENVELOPE_PRICING = "error-envelope-http"
+
 
 class BudgetStopped(Exception):
     """No new dispatch; prior usage may be unknown, never assumed free."""
@@ -45,6 +47,25 @@ class BudgetLimits(BaseModel):
             )
         except Exception:
             raise BudgetStopped("OpenAI budget configuration is invalid.") from None
+
+
+DAILY_COST_STOP_MAX_USD = Decimal(1000)
+
+
+def daily_cost_stop_from_environment() -> Decimal | None:
+    """Optional rolling 24-hour known-cost stop across all runs; unset disables."""
+    raw = os.environ.get("WW_OPENAI_DAILY_COST_STOP_USD")
+    if raw is None or raw == "":
+        return None  # Empty supports Compose pass-through of an unset value.
+    try:
+        value = Decimal(raw)
+        if not value.is_finite() or not Decimal("0.01") <= value <= (
+            DAILY_COST_STOP_MAX_USD
+        ):
+            raise ValueError
+    except Exception:
+        raise BudgetStopped("OpenAI budget configuration is invalid.") from None
+    return value
 
 
 def migrate_openai_ledger(connection: sqlite3.Connection) -> None:
@@ -121,6 +142,25 @@ class AttemptLedger:
             }
         )
 
+    @staticmethod
+    def _rolling_rows(
+        connection: sqlite3.Connection,
+    ) -> list[tuple[str, str | None, str | None]]:
+        return connection.execute(
+            "SELECT attempt_id,known_usd,finalized_at FROM openai_attempts "
+            "WHERE julianday(reserved_at) >= julianday('now','-1 day')"
+        ).fetchall()
+
+    @classmethod
+    def rolling_summary(cls, connection: sqlite3.Connection) -> CostSummary:
+        """Every attempt reserved in the last 24 hours, across all runs."""
+        return summarize_costs(
+            {
+                row[0]: None if row[1] is None else Decimal(row[1])
+                for row in cls._rolling_rows(connection)
+            }
+        )
+
     def summary(self, run_id: str) -> CostSummary:
         connection = self._connect()
         try:
@@ -141,6 +181,7 @@ class AttemptLedger:
         *,
         active_attempts: frozenset[str] = frozenset(),
     ) -> str:
+        daily_stop = daily_cost_stop_from_environment()
         connection = self._connect()
         try:
             with connection:
@@ -177,6 +218,21 @@ class AttemptLedger:
                     raise BudgetStopped(
                         "OpenAI request limit or known-cost stop threshold reached."
                     )
+                if daily_stop is not None:
+                    rolling = self._rolling_rows(connection)
+                    if any(
+                        known is None
+                        and (finalized is not None or attempt not in active_attempts)
+                        for attempt, known, finalized in rolling
+                    ):
+                        raise BudgetStopped(
+                            "OpenAI usage in the last 24 hours is unknown; review "
+                            "before dispatching under the daily stop threshold."
+                        )
+                    if self.rolling_summary(connection).known_usd >= daily_stop:
+                        raise BudgetStopped(
+                            "OpenAI rolling 24-hour known-cost stop threshold reached."
+                        )
                 if connection.execute(
                     "SELECT 1 FROM openai_attempts WHERE run_id=? AND operation_hash=?",
                     (run_id, operation_hash),
@@ -230,6 +286,42 @@ class AttemptLedger:
                         service_tier,
                         usage.model_dump_json(),
                         None if cost is None else str(cost),
+                        attempt_id,
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def finalize_error_envelope(self, attempt_id: str, status: int) -> None:
+        """Record a usage-less non-2xx OpenAI error body as a known $0 attempt.
+
+        Rejected requests are not billed and report zero tokens. The marker in
+        `pricing_version` distinguishes these from priced completions. Timeouts and
+        transport loss never use this path; they stay unknown.
+        """
+        if type(status) is not int or not 300 <= status <= 599:
+            raise ValueError("Error envelope status is invalid.")
+        zero = UsageCounters(
+            input_tokens=0,
+            cached_tokens=0,
+            cache_write_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+        )
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(
+                    (
+                        "UPDATE openai_attempts SET "
+                        "finalized_at=?,model=NULL,service_tier=NULL,usage_json=?,"
+                        "known_usd='0',pricing_version=? "
+                        "WHERE attempt_id=? AND finalized_at IS NULL"
+                    ),
+                    (
+                        datetime.now(UTC).isoformat(),
+                        zero.model_dump_json(),
+                        f"{ERROR_ENVELOPE_PRICING}-{status}",
                         attempt_id,
                     ),
                 )
