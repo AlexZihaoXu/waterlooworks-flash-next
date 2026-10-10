@@ -239,6 +239,11 @@ function AdminAccountMenu({
       {settings.isOpen && (
         <AdminSettingsDialog
           onDismiss={() => closeSettings(false)}
+          dirty={
+            settings.username !== '' ||
+            settings.password !== '' ||
+            openai.draft !== ''
+          }
           notification={
             refresh.challenge?.approval_required && (
               <div className="flex flex-wrap items-center gap-4">
@@ -263,8 +268,9 @@ function AdminAccountMenu({
               </div>
             )
           }
-          footer={
+          footer={(requestDismiss) => (
             <>
+              {/* Explicit sign-out always proceeds and clears drafts. */}
               <Button
                 variant="ghost"
                 onPress={() => {
@@ -274,11 +280,11 @@ function AdminAccountMenu({
               >
                 Sign out
               </Button>
-              <Button variant="secondary" onPress={() => closeSettings(false)}>
+              <Button variant="secondary" onPress={requestDismiss}>
                 Done
               </Button>
             </>
-          }
+          )}
         >
           <Tabs
             selectedKey={selectedTab}

@@ -195,6 +195,14 @@ describe('AdminSettings documented tab composition', () => {
         fetch.mock.calls.every(([, options]) => options?.method === 'GET'),
       ).toBe(true);
       fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      // Unsaved WaterlooWorks drafts require an explicit discard.
+      const confirm = await screen.findByRole('alertdialog', {
+        name: 'Discard unsaved changes?',
+      });
+      expect(
+        screen.getByRole('dialog', { name: 'Admin settings' }),
+      ).toContainElement(confirm);
+      fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
       await waitFor(() =>
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
       );
@@ -205,6 +213,42 @@ describe('AdminSettings documented tab composition', () => {
       expect(screen.getByLabelText('WaterlooWorks password')).toHaveValue('');
     },
   );
+
+  it.each(['WaterlooWorks username', 'Replacement OpenAI API key'])(
+    'keeps a typed %s draft after an accidental Escape until discard is confirmed',
+    async (label) => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        () => new Promise(() => {}),
+      );
+      openSettings();
+      const dialog = (await screen.findByRole('dialog')) as HTMLDialogElement;
+      const value = crypto.randomUUID();
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      fireEvent(dialog, new Event('cancel', { cancelable: true }));
+      await screen.findByRole('alertdialog', {
+        name: 'Discard unsaved changes?',
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() =>
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument(),
+      );
+      expect(
+        (screen.getByLabelText(label) as HTMLInputElement).value === value,
+      ).toBe(true);
+      expect(dialog.open).toBe(true);
+    },
+  );
+
+  it('closes without confirmation when no draft was typed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () => new Promise(() => {}),
+    );
+    openSettings();
+    const dialog = await screen.findByRole('dialog');
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 
   it.each(['Usage', 'Go to Refresh'])(
     'aborts a pending key read through %s and fences its late response before reconciling on return',
