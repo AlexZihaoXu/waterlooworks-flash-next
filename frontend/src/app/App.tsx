@@ -36,6 +36,7 @@ import {
   Button,
   Card,
   Chip,
+  Drawer,
   Label,
   ListBox,
   Link,
@@ -480,6 +481,203 @@ const WorkspaceView = memo(function WorkspaceView({
     !requesting &&
     interruption !== 'recovery_required';
 
+  const activeFilterCount = Object.values(activeFilters).reduce(
+    (count, values) => count + values.length,
+    0,
+  );
+  const sidebarContent = (
+    <div className="sidebar-content">
+      <Card>
+        <Card.Header>
+          <div className="workspace-toolbar">
+            <div className="filter-heading">
+              <LuFilter aria-hidden="true" />
+              <Typography type="h6" role="heading" aria-level={2}>
+                Filters
+              </Typography>
+            </div>
+            <Button
+              size="sm"
+              variant="tertiary"
+              aria-label="Clear filters"
+              isDisabled={
+                !connected ||
+                !Object.values(activeFilters).some(
+                  (values) => values.length > 0,
+                )
+              }
+              onPress={() => {
+                setFilters(emptyFilters);
+                setPage(1);
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        </Card.Header>
+        <Separator />
+        <Card.Content>
+          <div className="filter-grid">
+            {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
+              <div className={`filter-slot filter-slot-${key}`} key={key}>
+                <div className="stack-small">
+                  <Typography
+                    id={`${filterIds}-${key}-label`}
+                    type="body-sm"
+                    weight={activeFilters[key].length ? 'medium' : 'normal'}
+                    color={activeFilters[key].length ? 'default' : 'muted'}
+                  >
+                    {filterLabels[key]}
+                  </Typography>
+                  <Button
+                    fullWidth
+                    variant={
+                      activeFilters[key].length ? 'secondary' : 'tertiary'
+                    }
+                    aria-labelledby={`${filterIds}-${key}-label ${filterIds}-${key}-value`}
+                    aria-haspopup="dialog"
+                    isDisabled={
+                      !connected ||
+                      (options[key].length === 0 &&
+                        activeFilters[key].length === 0)
+                    }
+                    onPress={() => {
+                      setDraft([...activeFilters[key]]);
+                      setPickerQuery('');
+                      setPicker(key);
+                      setPickerOpen(true);
+                    }}
+                  >
+                    <span className="filter-trigger-content">
+                      <Typography
+                        id={`${filterIds}-${key}-value`}
+                        type="body-sm"
+                        truncate
+                        color={activeFilters[key].length ? 'default' : 'muted'}
+                        weight={activeFilters[key].length ? 'medium' : 'normal'}
+                      >
+                        {activeFilters[key].length === 0
+                          ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : 'organizations'}`
+                          : activeFilters[key].length === 1
+                            ? activeFilters[key][0]
+                            : `${activeFilters[key].length} selected`}
+                      </Typography>
+                      <LuChevronDown
+                        aria-hidden="true"
+                        color={
+                          activeFilters[key].length
+                            ? 'currentColor'
+                            : 'var(--muted)'
+                        }
+                      />
+                    </span>
+                  </Button>
+                  {connected &&
+                    key === 'country' &&
+                    options.country.length === 0 && (
+                      <Typography type="body-xs" color="muted">
+                        No current country predictions yet.
+                      </Typography>
+                    )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card.Content>
+      </Card>
+      <Card>
+        <Card.Header>
+          <Card.Title>Options</Card.Title>
+        </Card.Header>
+        <Separator />
+        <Card.Content>
+          <div className="stack">
+            <Select
+              fullWidth
+              isDisabled={!connected}
+              value={preferences.format}
+              onChange={(value) => {
+                if (value === 'hour' || value === 'month') {
+                  setPreferences({ ...preferences, format: value });
+                  setPage(1);
+                }
+              }}
+            >
+              <Label>Compensation format</Label>
+              <Select.Trigger>
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  <ListBox.Item id="hour" textValue="Hourly">
+                    Hourly
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                  <ListBox.Item id="month" textValue="Monthly">
+                    Monthly
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            <Select
+              fullWidth
+              isDisabled={!connected}
+              value={preferences.currency}
+              onChange={(value) => {
+                if (
+                  value === 'original' ||
+                  value === 'CAD' ||
+                  value === 'USD'
+                ) {
+                  setPreferences({ ...preferences, currency: value });
+                  setPage(1);
+                }
+              }}
+            >
+              <Label>Currency</Label>
+              <Select.Trigger>
+                <Select.Value />
+                <Select.Indicator />
+              </Select.Trigger>
+              <Select.Popover>
+                <ListBox>
+                  <ListBox.Item id="original" textValue="Original currency">
+                    Original currency
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                  <ListBox.Item id="CAD" textValue="Approx. CAD">
+                    Approx. CAD
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                  <ListBox.Item id="USD" textValue="Approx. USD">
+                    Approx. USD
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                </ListBox>
+              </Select.Popover>
+            </Select>
+            {preferences.currency !== 'original' && (
+              <Typography type="body-xs" color="muted">
+                {fxStatus === 'loading'
+                  ? 'Loading reference rates…'
+                  : fxStatus === 'unavailable'
+                    ? 'FX unavailable; showing original currencies.'
+                    : fx
+                      ? `Bank of Canada · ${fx.as_of} · approximate conversion`
+                      : 'Reference rates not loaded.'}
+              </Typography>
+            )}
+            <Typography type="body-xs" color="muted">
+              * Currency assumed to be CAD; retained after conversion.
+            </Typography>
+          </div>
+        </Card.Content>
+      </Card>
+    </div>
+  );
+
   return (
     <main className="workspace">
       <Toast.Provider placement="top" maxVisibleToasts={1} />
@@ -756,226 +954,46 @@ const WorkspaceView = memo(function WorkspaceView({
             visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
           }}
         >
-          <ScrollShadow
-            hideScrollBar
-            tabIndex={0}
-            aria-label="Filters and options"
-          >
-            <div className="sidebar-content">
-              <Card>
-                <Card.Header>
-                  <div className="workspace-toolbar">
-                    <div className="filter-heading">
-                      <LuFilter aria-hidden="true" />
-                      <Typography type="h6" role="heading" aria-level={2}>
-                        Filters
-                      </Typography>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="tertiary"
-                      aria-label="Clear filters"
-                      isDisabled={
-                        !connected ||
-                        !Object.values(activeFilters).some(
-                          (values) => values.length > 0,
-                        )
-                      }
-                      onPress={() => {
-                        setFilters(emptyFilters);
-                        setPage(1);
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                </Card.Header>
-                <Separator />
-                <Card.Content>
-                  <div className="filter-grid">
-                    {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
-                      <div
-                        className={`filter-slot filter-slot-${key}`}
-                        key={key}
-                      >
-                        <div className="stack-small">
-                          <Typography
-                            id={`${filterIds}-${key}-label`}
-                            type={compact ? 'body-xs' : 'body-sm'}
-                            weight={
-                              activeFilters[key].length ? 'medium' : 'normal'
-                            }
-                            color={
-                              activeFilters[key].length ? 'default' : 'muted'
-                            }
-                          >
-                            {filterLabels[key]}
-                          </Typography>
-                          <Button
-                            fullWidth
-                            variant={
-                              activeFilters[key].length
-                                ? 'secondary'
-                                : 'tertiary'
-                            }
-                            aria-labelledby={`${filterIds}-${key}-label ${filterIds}-${key}-value`}
-                            aria-haspopup="dialog"
-                            isDisabled={
-                              !connected ||
-                              (options[key].length === 0 &&
-                                activeFilters[key].length === 0)
-                            }
-                            onPress={() => {
-                              setDraft([...activeFilters[key]]);
-                              setPickerQuery('');
-                              setPicker(key);
-                              setPickerOpen(true);
-                            }}
-                          >
-                            <span className="filter-trigger-content">
-                              <Typography
-                                id={`${filterIds}-${key}-value`}
-                                type="body-sm"
-                                truncate
-                                color={
-                                  activeFilters[key].length
-                                    ? 'default'
-                                    : 'muted'
-                                }
-                                weight={
-                                  activeFilters[key].length
-                                    ? 'medium'
-                                    : 'normal'
-                                }
-                              >
-                                {compact
-                                  ? activeFilters[key].length === 0
-                                    ? 'All'
-                                    : String(activeFilters[key].length)
-                                  : activeFilters[key].length === 0
-                                    ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : 'organizations'}`
-                                    : activeFilters[key].length === 1
-                                      ? activeFilters[key][0]
-                                      : `${activeFilters[key].length} selected`}
-                              </Typography>
-                              <LuChevronDown
-                                aria-hidden="true"
-                                color={
-                                  activeFilters[key].length
-                                    ? 'currentColor'
-                                    : 'var(--muted)'
-                                }
-                              />
-                            </span>
-                          </Button>
-                          {connected &&
-                            key === 'country' &&
-                            options.country.length === 0 && (
-                              <Typography type="body-xs" color="muted">
-                                No current country predictions yet.
-                              </Typography>
-                            )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card.Content>
-              </Card>
-              <Card>
-                <Card.Header>
-                  <Card.Title>Options</Card.Title>
-                </Card.Header>
-                <Separator />
-                <Card.Content>
-                  <div className="stack">
-                    <Select
-                      fullWidth
-                      isDisabled={!connected}
-                      value={preferences.format}
-                      onChange={(value) => {
-                        if (value === 'hour' || value === 'month') {
-                          setPreferences({ ...preferences, format: value });
-                          setPage(1);
-                        }
-                      }}
-                    >
-                      <Label>Compensation format</Label>
-                      <Select.Trigger>
-                        <Select.Value />
-                        <Select.Indicator />
-                      </Select.Trigger>
-                      <Select.Popover>
-                        <ListBox>
-                          <ListBox.Item id="hour" textValue="Hourly">
-                            Hourly
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                          <ListBox.Item id="month" textValue="Monthly">
-                            Monthly
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                        </ListBox>
-                      </Select.Popover>
-                    </Select>
-                    <Select
-                      fullWidth
-                      isDisabled={!connected}
-                      value={preferences.currency}
-                      onChange={(value) => {
-                        if (
-                          value === 'original' ||
-                          value === 'CAD' ||
-                          value === 'USD'
-                        ) {
-                          setPreferences({ ...preferences, currency: value });
-                          setPage(1);
-                        }
-                      }}
-                    >
-                      <Label>Currency</Label>
-                      <Select.Trigger>
-                        <Select.Value />
-                        <Select.Indicator />
-                      </Select.Trigger>
-                      <Select.Popover>
-                        <ListBox>
-                          <ListBox.Item
-                            id="original"
-                            textValue="Original currency"
-                          >
-                            Original currency
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                          <ListBox.Item id="CAD" textValue="Approx. CAD">
-                            Approx. CAD
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                          <ListBox.Item id="USD" textValue="Approx. USD">
-                            Approx. USD
-                            <ListBox.ItemIndicator />
-                          </ListBox.Item>
-                        </ListBox>
-                      </Select.Popover>
-                    </Select>
-                    {preferences.currency !== 'original' && (
-                      <Typography type="body-xs" color="muted">
-                        {fxStatus === 'loading'
-                          ? 'Loading reference rates…'
-                          : fxStatus === 'unavailable'
-                            ? 'FX unavailable; showing original currencies.'
-                            : fx
-                              ? `Bank of Canada · ${fx.as_of} · approximate conversion`
-                              : 'Reference rates not loaded.'}
-                      </Typography>
-                    )}
-                    <Typography type="body-xs" color="muted">
-                      * Currency assumed to be CAD; retained after conversion.
-                    </Typography>
-                  </div>
-                </Card.Content>
-              </Card>
-            </div>
-          </ScrollShadow>
+          {compact ? (
+            // Phones: one full-width trigger opens the same filters and
+            // options in a documented HeroUI Drawer, with full value text.
+            <Drawer>
+              <Button
+                fullWidth
+                variant={activeFilterCount ? 'secondary' : 'tertiary'}
+                aria-haspopup="dialog"
+                isDisabled={!connected}
+              >
+                <LuFilter aria-hidden="true" />
+                {activeFilterCount
+                  ? `Filters (${activeFilterCount})`
+                  : 'Filters'}
+              </Button>
+              <Drawer.Backdrop>
+                <Drawer.Content placement="bottom">
+                  <Drawer.Dialog>
+                    <Drawer.Handle />
+                    <Drawer.CloseTrigger />
+                    <Drawer.Header>
+                      <Drawer.Heading>Filters</Drawer.Heading>
+                    </Drawer.Header>
+                    <Drawer.Body>{sidebarContent}</Drawer.Body>
+                    <Drawer.Footer>
+                      <Button slot="close">Done</Button>
+                    </Drawer.Footer>
+                  </Drawer.Dialog>
+                </Drawer.Content>
+              </Drawer.Backdrop>
+            </Drawer>
+          ) : (
+            <ScrollShadow
+              hideScrollBar
+              tabIndex={0}
+              aria-label="Filters and options"
+            >
+              {sidebarContent}
+            </ScrollShadow>
+          )}
         </motion.aside>
         <motion.section
           className="posting-results stack"
