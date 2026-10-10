@@ -481,6 +481,7 @@ function AdminAccountMenu({
               {/* Explicit sign-out always proceeds and clears drafts. */}
               <Button
                 variant="ghost"
+                size={compact ? 'lg' : 'md'}
                 onPress={() => {
                   closeSettings(false);
                   signOut();
@@ -488,7 +489,11 @@ function AdminAccountMenu({
               >
                 Sign out
               </Button>
-              <Button variant="secondary" onPress={requestDismiss}>
+              <Button
+                variant="secondary"
+                size={compact ? 'lg' : 'md'}
+                onPress={requestDismiss}
+              >
                 Done
               </Button>
             </>
