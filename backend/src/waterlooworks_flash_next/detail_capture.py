@@ -87,6 +87,11 @@ class BlockDisposition(StrEnum):
     FATAL = "fatal"
 
 
+# Page-side idle window: how long the page may take to dispatch the next title
+# read. Time spent inside the paced request controller (30 s fetch timeout plus
+# 5/10/15 s retries) never consumes it; each settled request restarts it.
+CAPTURE_IDLE_SECONDS = 10.0
+
 DISCARDED_RESOURCES = frozenset(
     {"image", "font", "stylesheet", "media", "texttrack", "script"}
 )
@@ -152,6 +157,7 @@ class CaptureGate:
     ] = field(default_factory=dict)
     active: bool = False
     complete: bool = False
+    settled_at: float = 0.0
     error: DetailFetchError | None = None
     report: Callable[["CaptureGate"], None] | None = field(default=None, repr=False)
 
@@ -329,6 +335,7 @@ def install_capture_guard(
         finally:
             if owns_active:
                 gate.active = False
+                gate.settled_at = time.monotonic()
             try:
                 if (
                     discarded
@@ -355,6 +362,24 @@ def install_capture_guard(
 
     page.context.route("**/*", intercept)
     return gate
+
+
+def wait_for_capture(
+    page: Page, gate: CaptureGate, *, clock: Callable[[], float] = time.monotonic
+) -> None:
+    """Wait until the gate completes or fails, or the page stays idle too long.
+
+    The deadline is derived from the request controller's own timing: it is
+    measured from the later of the click and the last settled bootstrap request,
+    so a slow but successful paced metadata request still lets the page
+    dispatch its dependent markup read. At most two requests are accepted, so
+    the total wait stays bounded.
+    """
+    started = clock()
+    while clock() < max(started, gate.settled_at) + CAPTURE_IDLE_SECONDS:
+        page.wait_for_timeout(100)
+        if gate.invalid or gate.complete:
+            break
 
 
 def capture_detail_source(
@@ -471,11 +496,7 @@ def capture_detail_source(
         titles.nth(candidates[0]).click()
         stage = CaptureStage.WAIT
         emit(stage)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            page.wait_for_timeout(100)
-            if gate.invalid or gate.complete:
-                break
+        wait_for_capture(page, gate)
         templates = gate.templates
         if gate.error:
             raise gate.error

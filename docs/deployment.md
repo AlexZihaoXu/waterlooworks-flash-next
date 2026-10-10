@@ -69,7 +69,7 @@ Before the parent transfers private data or starts any writer:
 
 ### Interrupted refresh recovery
 
-On SIGTERM the API lifespan sets a cooperative stop flag and waits up to 150 seconds (below `stop_grace_period: 190s`). The refresh worker checks it after authentication, between listing pages, between detail postings and between OpenAI analysis batches; it then finalizes the run as `interrupted` and releases the provider lease. Completed detail checkpoints remain, and in-flight analysis completions may still checkpoint. Authentication/Duo and an individual paced request are not cut short, so a stop during those steps, a SIGKILL, OOM or power loss can still leave a durable `running` row. After restart the UI status reports `interrupted` with stage `recovery_required`, and new refreshes stay blocked (HTTP 409) until an operator finalizes the row explicitly:
+On SIGTERM the API lifespan sets a cooperative stop flag and waits up to 150 seconds (below `stop_grace_period: 190s`). The refresh worker checks it after authentication, between listing pages, between detail postings and between OpenAI analysis batches; it then finalizes the run as `interrupted` and releases the provider lease. A partial listing pass is saved, completed detail checkpoints remain, and in-flight analysis completions may still checkpoint. Authentication/Duo and an individual paced request are not cut short, so a stop during those steps, a SIGKILL, OOM or power loss can still leave a durable `running` row. After restart the UI status reports `interrupted` with stage `recovery_required`, and new refreshes stay blocked (HTTP 409) until an operator finalizes the row explicitly:
 
 ```sh
 docker compose --env-file /operator/private/production.env --profile prod stop backend

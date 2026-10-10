@@ -142,6 +142,16 @@ def select_detail_queue(
     return queue, skipped
 
 
+def analysis_batches(ids: list[str]) -> list[list[str]]:
+    """Split a selection into jobs within the inference job bound."""
+    from waterlooworks_flash_next.inference import MAX_JOB_POSTINGS
+
+    return [
+        ids[start : start + MAX_JOB_POSTINGS]
+        for start in range(0, len(ids), MAX_JOB_POSTINGS)
+    ]
+
+
 class RefreshConflict(Exception):
     def __init__(self, status_code: int, retry_after: int = 0) -> None:
         self.status_code = status_code
@@ -515,13 +525,22 @@ class RefreshService:
         )
 
     def _analysis_progress(
-        self, connection: sqlite3.Connection, job_id: str, *, log: bool = True
+        self,
+        connection: sqlite3.Connection,
+        job_id: str,
+        *,
+        log: bool = True,
+        total: int | None = None,
     ) -> None:
         from waterlooworks_flash_next.inference import inference_job_status
 
         status = inference_job_status(connection, job_id)
         counts = status.counts
-        total = connection.execute("SELECT count(*) FROM postings").fetchone()[0]
+        if total is None:
+            # A refresh job reuses its run ID: its scope is that run's listing.
+            total = connection.execute(
+                "SELECT count(*) FROM posting_observations WHERE run_id=?", (job_id,)
+            ).fetchone()[0]
         missing = max(0, total - sum(counts.values()))
         cache_hits = connection.execute(
             "SELECT count(*) FROM inference_job_items WHERE job_id=? AND cache_hit=1",
@@ -550,16 +569,7 @@ class RefreshService:
             )
 
     def _analyze_saved_data(self, run_id: str) -> None:
-        from waterlooworks_flash_next.inference import (
-            InferenceConfig,
-            create_inference_job,
-            inference_job_status,
-            request_inference_stop,
-            run_inference_job,
-        )
-        from waterlooworks_flash_next.inference_schema import _ERROR_CATEGORIES
         from waterlooworks_flash_next.normalized_storage import normalize_saved_postings
-        from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
 
         with self.lock:
             self.state.stage = "normalizing"
@@ -574,13 +584,19 @@ class RefreshService:
                 f"{normalized.projections_created} updated, "
                 f"{normalized.projections_reused} reused."
             )
+            # Only postings in this run's listing pass; history never grows a job.
             ids = [
                 str(row[0])
                 for row in connection.execute(
-                    "SELECT posting_id FROM posting_contents ORDER BY posting_id"
+                    "SELECT c.posting_id FROM posting_contents c "
+                    "JOIN posting_observations o ON o.posting_id=c.posting_id "
+                    "WHERE o.run_id=? ORDER BY c.posting_id",
+                    (run_id,),
                 )
             ]
-            total = connection.execute("SELECT count(*) FROM postings").fetchone()[0]
+            total = connection.execute(
+                "SELECT count(*) FROM posting_observations WHERE run_id=?", (run_id,)
+            ).fetchone()[0]
             if not ids:
                 with self.lock:
                     self.state.analysis_total = total
@@ -588,69 +604,25 @@ class RefreshService:
                     self.state.analysis_skipped = total
                 self.emit("No saved detail content to analyze; no model request made.")
                 return
-            job_id = create_inference_job(
-                connection, ids, InferenceConfig(concurrency=4), job_id=run_id
-            )
-            with self.lock:
-                self.state.stage = "analysis"
-                self.state.analysis_total = total
-                self.state.analysis_job_id = job_id
-            self.emit(
-                f"OpenAI extraction job {job_id}: {len(ids)} saved postings queued; "
-                f"{total - len(ids)} without saved details skipped. Model {MODEL_ID}; "
-                "at most 4 simultaneous requests; validated cache reused."
-            )
-
-            stopping = False
-
-            def progress() -> None:
-                nonlocal stopping
-                self._analysis_progress(connection, job_id)
-                if self.stop_event.is_set() and not stopping:
-                    # Durable stop flag: no new batch is claimed; in-flight
-                    # completions may still checkpoint.
-                    stopping = True
-                    request_inference_stop(connection, job_id)
-
-            progress()
-            if inference_job_status(connection, job_id).persisted_status == "pending":
-                run_inference_job(
+            batches = analysis_batches(ids)
+            rejected = False
+            for index, batch in enumerate(batches):
+                self._checkpoint()
+                rejected |= self._analyze_batch(
                     connection,
-                    job_id,
-                    on_progress=progress,
-                    provider_lease=self.provider_lease,
+                    batch,
+                    # The first job reuses the run ID for durable status/recovery.
+                    job_id=run_id if index == 0 else None,
+                    total=total if len(batches) == 1 else len(batch),
+                    label=f" (batch {index + 1}/{len(batches)})"
+                    if len(batches) > 1
+                    else "",
+                    skipped=total - len(ids) if index == 0 else 0,
                 )
-            progress()
-            self._checkpoint()
-            status = inference_job_status(connection, job_id)
-            for reason, count in connection.execute(
-                "SELECT error_category,count(*) FROM inference_job_items "
-                "WHERE job_id=? AND error_category IS NOT NULL GROUP BY error_category",
-                (job_id,),
-            ):
-                if reason in _ERROR_CATEGORIES:
-                    self.emit(
-                        f"OpenAI extraction outcome: {reason}; {count} postings.",
-                        "warning",
-                    )
-            if status.error_category in _ERROR_CATEGORIES:
-                self.emit(
-                    f"OpenAI extraction failure category: {status.error_category}.",
-                    "error",
-                )
-            if status.persisted_status != "completed":
-                self.emit(
-                    "OpenAI extraction did not complete. Saved collection and accepted "
-                    "checkpoints are preserved. Check OpenAI usage, budget "
-                    "and the saved job "
-                    "status; no automatic resume.",
-                    "error",
-                )
-                raise RefreshAnalysisError("OpenAI analysis did not complete.")
             self.emit(
                 "OpenAI extraction completed. Rejected or unavailable facts remain "
                 "unknown; no model reasoning or posting content was logged.",
-                "warning" if status.counts.get("rejected") else "info",
+                "warning" if rejected else "info",
             )
         except (RefreshAnalysisError, CollectionInterrupted):
             raise
@@ -663,6 +635,112 @@ class RefreshService:
             raise RefreshAnalysisError("OpenAI analysis failed.") from None
         finally:
             connection.close()
+
+    def _analyze_batch(
+        self,
+        connection: sqlite3.Connection,
+        ids: list[str],
+        *,
+        job_id: str | None,
+        total: int,
+        label: str,
+        skipped: int,
+    ) -> bool:
+        """Run one bounded extraction job; return whether any item was rejected."""
+        from waterlooworks_flash_next.inference import (
+            InferenceConfig,
+            create_inference_job,
+            inference_job_status,
+            request_inference_stop,
+            run_inference_job,
+        )
+        from waterlooworks_flash_next.inference_schema import _ERROR_CATEGORIES
+        from waterlooworks_flash_next.openai_usage import MODEL as MODEL_ID
+
+        job_id = create_inference_job(
+            connection, ids, InferenceConfig(concurrency=4), job_id=job_id
+        )
+        with self.lock:
+            self.state.stage = "analysis"
+            self.state.analysis_total = total
+            self.state.analysis_job_id = job_id
+        self.emit(
+            f"OpenAI extraction job {job_id}{label}: {len(ids)} saved postings "
+            f"queued; {skipped} without saved details skipped. Model {MODEL_ID}; "
+            "at most 4 simultaneous requests; validated cache reused."
+        )
+        stopping = False
+
+        def progress() -> None:
+            nonlocal stopping
+            self._analysis_progress(connection, job_id, total=total)
+            if self.stop_event.is_set() and not stopping:
+                # Durable stop flag: no new batch is claimed; in-flight
+                # completions may still checkpoint.
+                stopping = True
+                request_inference_stop(connection, job_id)
+
+        progress()
+        if inference_job_status(connection, job_id).persisted_status == "pending":
+            run_inference_job(
+                connection,
+                job_id,
+                on_progress=progress,
+                provider_lease=self.provider_lease,
+            )
+        progress()
+        self._checkpoint()
+        status = inference_job_status(connection, job_id)
+        for reason, count in connection.execute(
+            "SELECT error_category,count(*) FROM inference_job_items "
+            "WHERE job_id=? AND error_category IS NOT NULL GROUP BY error_category",
+            (job_id,),
+        ):
+            if reason in _ERROR_CATEGORIES:
+                self.emit(
+                    f"OpenAI extraction outcome: {reason}; {count} postings.",
+                    "warning",
+                )
+        if status.error_category in _ERROR_CATEGORIES:
+            self.emit(
+                f"OpenAI extraction failure category: {status.error_category}.",
+                "error",
+            )
+        if status.persisted_status != "completed":
+            self.emit(
+                "OpenAI extraction did not complete. Saved collection and accepted "
+                "checkpoints are preserved. Check OpenAI usage, budget "
+                "and the saved job "
+                "status; no automatic resume.",
+                "error",
+            )
+            raise RefreshAnalysisError("OpenAI analysis did not complete.")
+        return bool(status.counts.get("rejected"))
+
+    def _save_partial_listings(
+        self, run_id: str, collection: ListingCollection
+    ) -> None:
+        """Persist pages fetched before a listing failure; never raises."""
+        try:
+            listings = _stored_listings(collection)
+            connection = open_database(self.path)
+            try:
+                save_listings(
+                    connection, run_id, listings, received_at=collection.received_at
+                )
+            finally:
+                connection.close()
+        except Exception:
+            self.emit(
+                "Partial listing pass could not be saved; diagnostics suppressed.",
+                "error",
+            )
+            return
+        self.emit(
+            f"Partial listing pass saved: {collection.pages_completed} pages, "
+            f"{len(listings)} unique postings. No deletion is inferred; details "
+            "and analysis were not run."
+        )
 
     def _detail_progress(self, progress: DetailProgress) -> None:
         with self.lock:
@@ -729,24 +807,17 @@ class RefreshService:
                     1, math.ceil(source.first_page.totalResults / source.page_size)
                 )
             collection = ListingCollection(source, should_stop=self.stop_requested)
-            collection.run()  # Captured page 1 reused; existing 2/4/8-second policy.
+            try:
+                collection.run()  # Captured page 1 reused; 2/4/8-second policy.
+            except (ListingFetchError, CollectionInterrupted):
+                # Upsert-only and never infers deletion: partial pages are safe.
+                self._save_partial_listings(run_id, collection)
+                raise
             with self.lock:
                 self.state.stage = "saving"
                 self.state.eta_seconds = None
             self.emit("Saving the completed listing pass and its revision history.")
-            listings: list[StoredListing] = []
-            for posting_id, row in collection.postings.items():
-                payload: dict[str, object] = {"id": posting_id}
-                for cell in row.data:
-                    if cell.key not in EXPORT_FIELDS or cell.key == "Id":
-                        continue
-                    value = cell.value
-                    if cell.key == "JobTitle":
-                        if not isinstance(value, dict):
-                            raise RuntimeError("Invalid title.")
-                        value = value.get("postingTitle")
-                    payload[EXPORT_FIELDS[cell.key]] = value
-                listings.append(StoredListing.model_validate(payload))
+            listings = _stored_listings(collection)
             connection = open_database(self.path)
             try:
                 save_listings(
@@ -886,6 +957,23 @@ class RefreshService:
                 if self.provider_lease is not None:
                     self.provider_lease.close()
                     self.provider_lease = None
+
+
+def _stored_listings(collection: ListingCollection) -> list[StoredListing]:
+    listings: list[StoredListing] = []
+    for posting_id, row in collection.postings.items():
+        payload: dict[str, object] = {"id": posting_id}
+        for cell in row.data:
+            if cell.key not in EXPORT_FIELDS or cell.key == "Id":
+                continue
+            value = cell.value
+            if cell.key == "JobTitle":
+                if not isinstance(value, dict):
+                    raise RuntimeError("Invalid title.")
+                value = value.get("postingTitle")
+            payload[EXPORT_FIELDS[cell.key]] = value
+        listings.append(StoredListing.model_validate(payload))
+    return listings
 
 
 class SafeRefreshHandler(logging.Handler):
