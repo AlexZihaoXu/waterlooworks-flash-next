@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -373,3 +374,128 @@ def test_provider_reuses_one_bounded_client_and_closes_it(
     provider.close()
     assert client.is_closed
     provider.close()
+
+
+# Token-count primitives priced at exactly $0.01 by the dated Standard table.
+CENT = UsageCounters(
+    input_tokens=50_000,
+    cached_tokens=0,
+    cache_write_tokens=0,
+    output_tokens=0,
+    reasoning_tokens=0,
+)
+
+
+def _spend(ledger: AttemptLedger, usage: UsageCounters | None) -> str:
+    run = str(uuid4())
+    ledger.create_run(run, BudgetLimits())
+    attempt = ledger.reserve(run, "a" * 64)
+    if usage is None:
+        ledger.finalize(attempt, UsageCounters(), model=None, service_tier=None)
+    else:
+        ledger.finalize(attempt, usage, model="gpt-5.6-luna", service_tier="default")
+    return attempt
+
+
+def test_daily_cost_stop_is_optional_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from waterlooworks_flash_next.openai_ledger import daily_cost_stop_from_environment
+
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    assert daily_cost_stop_from_environment() is None
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "2.50")
+    assert daily_cost_stop_from_environment() == Decimal("2.50")
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "")
+    assert daily_cost_stop_from_environment() is None
+    for invalid in ("NaN", "Infinity", "0", "-1", "1001", "one"):
+        monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", invalid)
+        with pytest.raises(BudgetStopped) as error:
+            daily_cost_stop_from_environment()
+        assert str(error.value) == "OpenAI budget configuration is invalid."
+
+
+def test_rolling_daily_ceiling_spans_runs_and_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    ledger = AttemptLedger(path)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    spent = _spend(ledger, CENT)
+    fresh = str(uuid4())
+    ledger.create_run(fresh, BudgetLimits())
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "0.01")
+    with pytest.raises(BudgetStopped, match="24-hour"):
+        ledger.reserve(fresh, "b" * 64)
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "0.02")
+    rejected = ledger.reserve(fresh, "b" * 64)
+    ledger.finalize_error_envelope(rejected, 429)
+    connection = open_database(path)
+    with connection:
+        connection.execute(
+            "UPDATE openai_attempts SET reserved_at=? WHERE attempt_id=?",
+            ((datetime.now(UTC) - timedelta(hours=25)).isoformat(), spent),
+        )
+    connection.close()
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "0.01")
+    later = str(uuid4())
+    ledger.create_run(later, BudgetLimits())
+    ledger.reserve(later, "c" * 64)
+
+
+def test_rolling_daily_ceiling_treats_unknown_usage_as_not_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    ledger = AttemptLedger(path)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    _spend(ledger, None)
+    other = str(uuid4())
+    ledger.create_run(other, BudgetLimits())
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "100")
+    with pytest.raises(BudgetStopped, match="unknown"):
+        ledger.reserve(other, "b" * 64)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD")
+    abandoned = ledger.reserve(other, "b" * 64)
+    # An unfinalized attempt this caller does not own is unknown, too.
+    third = str(uuid4())
+    ledger.create_run(third, BudgetLimits())
+    connection = open_database(path)
+    with connection:
+        connection.execute(
+            "UPDATE openai_attempts SET reserved_at=? WHERE known_usd IS NULL "
+            "AND finalized_at IS NOT NULL",
+            ((datetime.now(UTC) - timedelta(days=2)).isoformat(),),
+        )
+    connection.close()
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "100")
+    with pytest.raises(BudgetStopped, match="unknown"):
+        ledger.reserve(third, "c" * 64)
+    ledger.reserve(third, "c" * 64, active_attempts=frozenset({abandoned}))
+
+
+def test_admin_usage_reports_rolling_daily_spend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from waterlooworks_flash_next.openai_usage_api import read_usage
+
+    path = tmp_path / "empty.sqlite3"
+    open_database(path).close()
+    ledger = AttemptLedger(path)
+    monkeypatch.delenv("WW_OPENAI_DAILY_COST_STOP_USD", raising=False)
+    empty = read_usage(path)
+    assert empty.daily_cost_stop_usd is None
+    assert (empty.rolling_24h_attempts, empty.rolling_24h_known_usd) == (0, "0")
+    assert empty.rolling_24h_total_usd == "0"
+    _spend(ledger, CENT)
+    _spend(ledger, CENT)
+    _spend(ledger, None)
+    monkeypatch.setenv("WW_OPENAI_DAILY_COST_STOP_USD", "5")
+    usage = read_usage(path)
+    assert usage.daily_cost_stop_usd == "5"
+    assert usage.rolling_24h_attempts == 3
+    assert usage.rolling_24h_unpriced_attempts == 1
+    assert Decimal(usage.rolling_24h_known_usd) == Decimal("0.02")
+    assert usage.rolling_24h_total_usd is None

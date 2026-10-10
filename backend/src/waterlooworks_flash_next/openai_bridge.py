@@ -13,7 +13,11 @@ from typing import Any, BinaryIO, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from waterlooworks_flash_next.openai_ledger import BudgetLimits, BudgetStopped
+from waterlooworks_flash_next.openai_ledger import (
+    BudgetLimits,
+    BudgetStopped,
+    daily_cost_stop_from_environment,
+)
 from waterlooworks_flash_next.openai_provider import ProviderError, ResponsesProvider
 from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
 
@@ -80,6 +84,7 @@ class Bridge:
         self.provider = ResponsesProvider(path)
         self.provider.require_ready()
         BudgetLimits.from_environment()
+        daily_cost_stop_from_environment()
 
     def require_owner(self) -> None:
         if (

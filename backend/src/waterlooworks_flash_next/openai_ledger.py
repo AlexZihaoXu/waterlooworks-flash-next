@@ -44,6 +44,25 @@ class BudgetLimits(BaseModel):
             raise BudgetStopped("OpenAI budget configuration is invalid.") from None
 
 
+DAILY_COST_STOP_MAX_USD = Decimal(1000)
+
+
+def daily_cost_stop_from_environment() -> Decimal | None:
+    """Optional rolling 24-hour known-cost stop across all runs; unset disables."""
+    raw = os.environ.get("WW_OPENAI_DAILY_COST_STOP_USD")
+    if raw is None or raw == "":
+        return None  # Empty supports Compose pass-through of an unset value.
+    try:
+        value = Decimal(raw)
+        if not value.is_finite() or not Decimal("0.01") <= value <= (
+            DAILY_COST_STOP_MAX_USD
+        ):
+            raise ValueError
+    except Exception:
+        raise BudgetStopped("OpenAI budget configuration is invalid.") from None
+    return value
+
+
 def migrate_openai_ledger(connection: sqlite3.Connection) -> None:
     connection.execute("""
         CREATE TABLE openai_runs (
@@ -118,6 +137,25 @@ class AttemptLedger:
             }
         )
 
+    @staticmethod
+    def _rolling_rows(
+        connection: sqlite3.Connection,
+    ) -> list[tuple[str, str | None, str | None]]:
+        return connection.execute(
+            "SELECT attempt_id,known_usd,finalized_at FROM openai_attempts "
+            "WHERE julianday(reserved_at) >= julianday('now','-1 day')"
+        ).fetchall()
+
+    @classmethod
+    def rolling_summary(cls, connection: sqlite3.Connection) -> CostSummary:
+        """Every attempt reserved in the last 24 hours, across all runs."""
+        return summarize_costs(
+            {
+                row[0]: None if row[1] is None else Decimal(row[1])
+                for row in cls._rolling_rows(connection)
+            }
+        )
+
     def summary(self, run_id: str) -> CostSummary:
         connection = self._connect()
         try:
@@ -138,6 +176,7 @@ class AttemptLedger:
         *,
         active_attempts: frozenset[str] = frozenset(),
     ) -> str:
+        daily_stop = daily_cost_stop_from_environment()
         connection = self._connect()
         try:
             with connection:
@@ -174,6 +213,21 @@ class AttemptLedger:
                     raise BudgetStopped(
                         "OpenAI request limit or known-cost stop threshold reached."
                     )
+                if daily_stop is not None:
+                    rolling = self._rolling_rows(connection)
+                    if any(
+                        known is None
+                        and (finalized is not None or attempt not in active_attempts)
+                        for attempt, known, finalized in rolling
+                    ):
+                        raise BudgetStopped(
+                            "OpenAI usage in the last 24 hours is unknown; review "
+                            "before dispatching under the daily stop threshold."
+                        )
+                    if self.rolling_summary(connection).known_usd >= daily_stop:
+                        raise BudgetStopped(
+                            "OpenAI rolling 24-hour known-cost stop threshold reached."
+                        )
                 if connection.execute(
                     "SELECT 1 FROM openai_attempts WHERE run_id=? AND operation_hash=?",
                     (run_id, operation_hash),

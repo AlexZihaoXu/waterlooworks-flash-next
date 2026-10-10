@@ -35,6 +35,7 @@ from waterlooworks_flash_next.openai_ledger import (
     AttemptLedger,
     BudgetLimits,
     BudgetStopped,
+    daily_cost_stop_from_environment,
 )
 from waterlooworks_flash_next.openai_provider import (
     ENDPOINT,
@@ -847,6 +848,7 @@ def _run_inference_job(
         ledger = AttemptLedger(path)
         ledger.create_run(job_id, BudgetLimits.from_environment())
         ledger.require_resumable(job_id)
+        daily_cost_stop_from_environment()
         ResponsesProvider(path).require_ready()
     except (CredentialError, BudgetStopped):
         try:

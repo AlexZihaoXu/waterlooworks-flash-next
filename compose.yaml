@@ -57,6 +57,7 @@ services:
       WW_DETAIL_LIMIT: ${WW_DETAIL_LIMIT:-12}
       WW_OPENAI_REQUEST_LIMIT: ${WW_OPENAI_REQUEST_LIMIT:-20}
       WW_OPENAI_KNOWN_COST_STOP_USD: ${WW_OPENAI_KNOWN_COST_STOP_USD:-1}
+      WW_OPENAI_DAILY_COST_STOP_USD: ${WW_OPENAI_DAILY_COST_STOP_USD:-}
     secrets:
       - firebase_service_account
       - ww_credentials_key
