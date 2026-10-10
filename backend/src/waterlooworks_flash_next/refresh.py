@@ -82,6 +82,7 @@ _INTERRUPT_ATTEMPTS = tuple(
     "error_category='cancelled' WHERE run_id=? AND status='running'"
     for table in ("posting_content_attempts", "posting_fetch_attempts")
 )
+UNCHANGED = "unchanged"
 FAILED_SAME_REVISION = "failed_same_revision"
 _ITEM_FAILURES = frozenset(category.value for category in ITEM_FAILURE_CATEGORIES)
 # Latest terminal content attempt and the listing hash observed in that attempt's run.
@@ -94,17 +95,35 @@ _LATEST_ATTEMPT = (
     "WHERE a.posting_id=? AND a.status<>'running' "
     "ORDER BY a.rowid DESC LIMIT 1"
 )
+# Listing hash observed in the run of the latest successful content capture.
+_LATEST_SUCCESS = (
+    "SELECT r.content_hash FROM posting_content_attempts a "
+    "JOIN posting_observations o ON o.posting_id=a.posting_id AND o.run_id=a.run_id "
+    "JOIN posting_revisions r ON r.revision_id=o.revision_id "
+    "WHERE a.posting_id=? AND a.status='succeeded' "
+    "ORDER BY a.rowid DESC LIMIT 1"
+)
 
 
 def detail_skip_reason(
     current_hash: str,
     latest_attempt: tuple[str, str | None, str | None] | None,
+    *,
+    success_hash: str | None = None,
+    content_current: bool = False,
+    full_refetch: bool = False,
 ) -> str | None:
     """Why a listed posting needs no detail request this run, or None to fetch it.
 
-    A posting whose own response failed validation on the unchanged listing
-    revision would fail identically again, so it waits for a listing change.
+    Saved content from the current extractor whose last successful capture saw
+    the same listing hash is reused. A posting whose own response failed
+    validation on the unchanged listing revision would fail identically again,
+    so it waits for a listing change. ``full_refetch`` disables both skips.
     """
+    if full_refetch:
+        return None
+    if content_current and success_hash is not None and success_hash == current_hash:
+        return UNCHANGED
     if latest_attempt is not None:
         status, category, listing_hash = latest_attempt
         if (
@@ -118,23 +137,35 @@ def detail_skip_reason(
 
 
 def select_detail_queue(
-    connection: sqlite3.Connection, listings: list[StoredListing]
+    connection: sqlite3.Connection,
+    listings: list[StoredListing],
+    *,
+    full_refetch: bool = False,
 ) -> tuple[list[StoredListing], dict[str, int]]:
     """Listing-ordered detail queue and counts of postings skipped per reason."""
+    from waterlooworks_flash_next.content_storage import EXTRACTOR_VERSION
+
     queue: list[StoredListing] = []
     skipped: dict[str, int] = {}
     for listing in listings:
         current = connection.execute(
             "SELECT content_hash FROM postings WHERE posting_id=?", (listing.id,)
         ).fetchone()
-        latest = connection.execute(_LATEST_ATTEMPT, (listing.id,)).fetchone()
-        reason = (
-            detail_skip_reason(
-                str(current[0]), tuple(latest) if latest is not None else None
+        reason = None
+        if current is not None and not full_refetch:
+            latest = connection.execute(_LATEST_ATTEMPT, (listing.id,)).fetchone()
+            success = connection.execute(_LATEST_SUCCESS, (listing.id,)).fetchone()
+            content = connection.execute(
+                "SELECT 1 FROM posting_contents "
+                "WHERE posting_id=? AND extractor_version=?",
+                (listing.id, EXTRACTOR_VERSION),
+            ).fetchone()
+            reason = detail_skip_reason(
+                str(current[0]),
+                tuple(latest) if latest is not None else None,
+                success_hash=str(success[0]) if success is not None else None,
+                content_current=content is not None,
             )
-            if current is not None
-            else None
-        )
         if reason is None:
             queue.append(listing)
         else:
@@ -150,6 +181,15 @@ def analysis_batches(ids: list[str]) -> list[list[str]]:
         ids[start : start + MAX_JOB_POSTINGS]
         for start in range(0, len(ids), MAX_JOB_POSTINGS)
     ]
+
+
+def configured_full_refetch(value: str | None) -> bool:
+    """Server-only full detail refetch switch; never accepted from a client."""
+    if value is None or value == "0":
+        return False
+    if value == "1":
+        return True
+    raise ValueError("WW_DETAIL_FULL_REFETCH must be 0 or 1.")
 
 
 class RefreshConflict(Exception):
@@ -287,10 +327,12 @@ class RefreshService:
         project_root: Path | None,
         *,
         detail_limit: int | None = None,
+        full_refetch: bool = False,
     ) -> None:
         self.path = path
         self.project_root = project_root
         self.detail_limit = detail_limit
+        self.full_refetch = full_refetch
         self.lock = threading.RLock()
         self.state = RefreshSnapshot()
         self.worker: threading.Thread | None = None
@@ -823,7 +865,9 @@ class RefreshService:
                 save_listings(
                     connection, run_id, listings, received_at=collection.received_at
                 )
-                eligible, skipped = select_detail_queue(connection, listings)
+                eligible, skipped = select_detail_queue(
+                    connection, listings, full_refetch=self.full_refetch
+                )
                 queue = (
                     eligible
                     if self.detail_limit is None
@@ -856,6 +900,16 @@ class RefreshService:
                     "Full listing pass saved. "
                     "Starting sequential detail-content collection."
                 )
+                if self.full_refetch:
+                    self.emit(
+                        "Full detail refetch enabled by the server; "
+                        "unchanged postings are requested again."
+                    )
+                elif skipped.get(UNCHANGED):
+                    self.emit(
+                        f"{skipped[UNCHANGED]} postings skipped: listing unchanged "
+                        "since their last successful detail capture."
+                    )
                 if skipped.get(FAILED_SAME_REVISION):
                     self.emit(
                         f"{skipped[FAILED_SAME_REVISION]} postings skipped: their "
