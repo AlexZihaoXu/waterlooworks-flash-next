@@ -16,6 +16,8 @@ const pacing = {
   used_24h: 0,
   remaining_24h: 1200,
   next_allowed_at: null,
+  last_finished_at: null,
+  cooldown_until: null,
   blocked_until: null,
   last_pacing_stop: null,
   last_error_category: null,

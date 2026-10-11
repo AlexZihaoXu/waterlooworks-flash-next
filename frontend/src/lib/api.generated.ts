@@ -1488,7 +1488,7 @@ export interface components {
       daily_request_cap: number;
       /**
        * Min Interval Minutes
-       * @description WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes.
+       * @description WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes: scheduled refreshes skip within it; a manual refresh asks for confirmation.
        */
       min_interval_minutes: number;
       /** Min Gap Seconds */
@@ -1512,9 +1512,19 @@ export interface components {
       remaining_24h: number;
       /**
        * Next Allowed At
-       * @description UTC ISO time a refresh may start; null when allowed now.
+       * @description UTC ISO end of the hard wait (block or rolling budget); null when a manual refresh may start now, possibly after confirmation.
        */
       next_allowed_at: string | null;
+      /**
+       * Last Finished At
+       * @description UTC ISO finish time of the most recent finished run, if any.
+       */
+      last_finished_at: string | null;
+      /**
+       * Cooldown Until
+       * @description UTC ISO end of the minimum interval after the last finish; null when past. Before it, a manual refresh needs confirm_recent.
+       */
+      cooldown_until: string | null;
       /**
        * Blocked Until
        * @description Active ban-risk/rate-limit block end (UTC ISO), if any.
@@ -1533,9 +1543,16 @@ export interface components {
     };
     /**
      * RefreshRequest
-     * @description An explicit empty object starts one guarded listing-then-content refresh.
+     * @description Starts one guarded listing-then-content refresh; ``{}`` is the usual body.
      */
-    RefreshRequest: Record<string, never>;
+    RefreshRequest: {
+      /**
+       * Confirm Recent
+       * @description Admin confirmation to refresh within WW_REFRESH_MIN_INTERVAL_MINUTES of the previous run's finish. Never waives a ban-risk/rate-limit block or the rolling 24-hour request budget.
+       * @default false
+       */
+      confirm_recent: boolean;
+    };
     /**
      * RefreshScheduleView
      * @description Admin schedule settings; times are Toronto wall-clock HH:MM, sorted.
@@ -4757,9 +4774,11 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Conflict */
+      /** @description A refresh is already running, or (with the X-WW-Refresh-Recent header) the previous run finished within the minimum interval: resend with confirm_recent=true after asking the admin. Scheduled refreshes never confirm. */
       409: {
         headers: {
+          /** @description Present only on the confirmable refusal: the previous run's finish time (UTC ISO 8601). */
+          'X-WW-Refresh-Recent'?: string;
           [name: string]: unknown;
         };
         content: {
@@ -4784,9 +4803,11 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Too Many Requests */
+      /** @description Ban-risk/rate-limit block or rolling 24-hour request budget; never overridable by confirm_recent. */
       429: {
         headers: {
+          /** @description Whole seconds until the hard wait ends. */
+          'Retry-After'?: number;
           [name: string]: unknown;
         };
         content: {

@@ -373,6 +373,8 @@ def test_admin_refresh_challenge_empty_read_does_not_start_work(tmp_path: Path) 
                 "used_24h": 0,
                 "remaining_24h": 1200,
                 "next_allowed_at": None,
+                "last_finished_at": None,
+                "cooldown_until": None,
                 "blocked_until": None,
                 "last_pacing_stop": None,
                 "last_error_category": None,

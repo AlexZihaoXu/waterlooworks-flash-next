@@ -58,7 +58,9 @@ def test_cross_origin_refresh_and_form_posts_are_rejected(tmp_path: Path) -> Non
         assert client.post("/api/refresh", content="").status_code == 415
 
 
-def test_refresh_claim_blocks_concurrency_and_enforces_cooldown(tmp_path: Path) -> None:
+def test_refresh_claim_blocks_concurrency_and_needs_recent_confirmation(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "db.sqlite3"
     open_database(path).close()
     run_id = claim_refresh(path)
@@ -75,8 +77,10 @@ def test_refresh_claim_blocks_concurrency_and_enforces_cooldown(tmp_path: Path) 
     connection.close()
     with pytest.raises(RefreshConflict) as cooldown:
         claim_refresh(path)
-    assert cooldown.value.status_code == 429
+    assert cooldown.value.status_code == 409
+    assert cooldown.value.recent_finished_at is not None
     assert cooldown.value.retry_after > 0
+    claim_refresh(path, allow_recent=True)
 
 
 def test_api_docs_require_explicit_flag(

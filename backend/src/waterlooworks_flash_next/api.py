@@ -74,6 +74,7 @@ from waterlooworks_flash_next.keyword_index import read_keyword_index
 from waterlooworks_flash_next.openai_settings_api import install_openai_settings
 from waterlooworks_flash_next.openai_usage_api import install_openai_usage
 from waterlooworks_flash_next.refresh import (
+    RECENT_HEADER,
     RefreshConflict,
     RefreshService,
     configured_detail_limit,
@@ -175,8 +176,10 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         version="0.1.0",
         description=(
             "Google-authenticated shared listings API. Admin-only refresh with "
-            "a 300-second post-run cooldown and sequential detail content "
-            "after the full listing save. "
+            "durable WaterlooWorks pacing: within the minimum interval after a "
+            "run finishes a manual refresh needs explicit confirmation "
+            "(confirm_recent), while blocks and the rolling budget always "
+            "refuse. Sequential detail content follows the full listing save. "
             "Configure safe HTTPS and the pinned owner bootstrap before opening access."
         ),
         responses={
@@ -508,12 +511,47 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return service.snapshot()
 
+    refresh_errors: dict[int | str, dict[str, Any]] = {
+        **errors,
+        409: {
+            "model": ErrorResponse,
+            "description": (
+                "A refresh is already running, or (with the "
+                f"{RECENT_HEADER} header) the previous run finished within the "
+                "minimum interval: resend with confirm_recent=true after "
+                "asking the admin. Scheduled refreshes never confirm."
+            ),
+            "headers": {
+                RECENT_HEADER: {
+                    "description": (
+                        "Present only on the confirmable refusal: the previous "
+                        "run's finish time (UTC ISO 8601)."
+                    ),
+                    "schema": {"type": "string"},
+                }
+            },
+        },
+        429: {
+            "model": ErrorResponse,
+            "description": (
+                "Ban-risk/rate-limit block or rolling 24-hour request budget; "
+                "never overridable by confirm_recent."
+            ),
+            "headers": {
+                "Retry-After": {
+                    "description": "Whole seconds until the hard wait ends.",
+                    "schema": {"type": "integer"},
+                }
+            },
+        },
+    }
+
     @protected.post(
         "/api/refresh",
         dependencies=[Depends(require_admin)],
         status_code=202,
         response_model=RefreshAccepted,
-        responses=errors,
+        responses=refresh_errors,
         operation_id="startRefresh",
     )
     def start_refresh(
@@ -522,7 +560,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if not enabled:
             raise HTTPException(503, "Manual refresh is disabled on this server.")
         try:
-            run_id = service.start()
+            run_id = service.start(confirm_recent=body.confirm_recent)
             response.headers["Cache-Control"] = "no-store"
             return RefreshAccepted(run_id=run_id)
         except CredentialError:
@@ -532,6 +570,15 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 "and the backend key before refreshing.",
             ) from None
         except RefreshConflict as error:
+            if error.recent_finished_at is not None:
+                raise HTTPException(
+                    409,
+                    str(error),
+                    headers={
+                        RECENT_HEADER: error.recent_finished_at,
+                        "Cache-Control": "no-store",
+                    },
+                ) from None
             raise HTTPException(
                 error.status_code,
                 str(error),

@@ -96,6 +96,10 @@ def test_due_slot_starts_once_and_is_never_retried(tmp_path: Path) -> None:
     [
         (RefreshConflict(409), "skipped_running"),
         (RefreshConflict(429, 60, "Refresh cooldown is active."), "skipped_blocked"),
+        (
+            RefreshConflict(409, 60, recent_finished_at="2026-07-01T11:10:00+00:00"),
+            "skipped_blocked",
+        ),
         (CredentialError("AI extraction is not activated."), "failed_to_start"),
         (RuntimeError("Manual refresh is disabled."), "skipped_disabled"),
         (ValueError("unexpected"), "failed_to_start"),

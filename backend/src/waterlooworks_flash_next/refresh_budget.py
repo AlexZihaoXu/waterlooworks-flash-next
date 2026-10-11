@@ -81,29 +81,36 @@ def describe_delay(seconds: int) -> str:
 
 @dataclass(frozen=True)
 class PacingStatus:
+    """Hard waits (blocks, rolling budget) and the confirmable post-run interval.
+
+    ``cooldown_until`` is the end of WW_REFRESH_MIN_INTERVAL_MINUTES after the
+    latest finish: scheduled refreshes skip within it, and an explicit admin
+    refresh within it needs a confirmation. Only blocks and the budget delay a
+    confirmed manual refresh, so ``next_allowed_at`` covers those alone.
+    """
+
     config: PacingConfig
     used: int
     remaining: int
     cooldown_until: datetime | None
     blocked_until: datetime | None
     budget_until: datetime | None
+    last_finished_at: datetime | None = None
 
     @property
     def next_allowed_at(self) -> datetime | None:
         values = [
             value
-            for value in (self.cooldown_until, self.blocked_until, self.budget_until)
+            for value in (self.blocked_until, self.budget_until)
             if value is not None
         ]
         return max(values) if values else None
 
-    def refusal(self, now: datetime) -> tuple[RefusalReason, int] | None:
-        """The longest active reason and its whole remaining seconds, or None."""
-        reasons: tuple[tuple[datetime | None, RefusalReason], ...] = (
-            (self.blocked_until, "blocked"),
-            (self.budget_until, "daily_budget"),
-            (self.cooldown_until, "cooldown"),
-        )
+    def _longest(
+        self,
+        now: datetime,
+        reasons: tuple[tuple[datetime | None, RefusalReason], ...],
+    ) -> tuple[RefusalReason, int] | None:
         candidates = [
             (until, reason)
             for until, reason in reasons
@@ -113,6 +120,19 @@ class PacingStatus:
             return None
         until, reason = max(candidates, key=lambda item: item[0])
         return reason, max(1, math.ceil((until - now).total_seconds()))
+
+    def hard_refusal(self, now: datetime) -> tuple[RefusalReason, int] | None:
+        """The longest active block/budget wait; never overridable."""
+        return self._longest(
+            now,
+            ((self.blocked_until, "blocked"), (self.budget_until, "daily_budget")),
+        )
+
+    def refusal(self, now: datetime) -> tuple[RefusalReason, int] | None:
+        """A hard refusal first; otherwise the active post-run interval, or None."""
+        return self.hard_refusal(now) or self._longest(
+            now, ((self.cooldown_until, "cooldown"),)
+        )
 
 
 def refusal_message(reason: RefusalReason, seconds: int) -> str:
@@ -128,6 +148,14 @@ def refusal_message(reason: RefusalReason, seconds: int) -> str:
             f"next refresh allowed in {delay}."
         )
     return f"Refresh cooldown is active; next refresh allowed in {delay}."
+
+
+def recent_message(seconds: int) -> str:
+    """Fixed text for an unconfirmed manual refresh within the interval."""
+    return (
+        "The last refresh finished recently; confirm to refresh again now "
+        f"(the minimum interval ends in {describe_delay(seconds)})."
+    )
 
 
 def pacing_status(
@@ -150,9 +178,10 @@ def pacing_status(
     latest = connection.execute(
         "SELECT max(finished_at) FROM collection_runs WHERE finished_at IS NOT NULL"
     ).fetchone()[0]
+    last_finished_at = datetime.fromisoformat(latest) if latest else None
     cooldown_until = (
-        datetime.fromisoformat(latest) + timedelta(minutes=config.min_interval_minutes)
-        if latest and config.min_interval_minutes
+        last_finished_at + timedelta(minutes=config.min_interval_minutes)
+        if last_finished_at and config.min_interval_minutes
         else None
     )
     blocked = connection.execute(
@@ -166,4 +195,5 @@ def pacing_status(
         cooldown_until if cooldown_until and cooldown_until > now else None,
         blocked_until if blocked_until and blocked_until > now else None,
         budget_until,
+        last_finished_at,
     )

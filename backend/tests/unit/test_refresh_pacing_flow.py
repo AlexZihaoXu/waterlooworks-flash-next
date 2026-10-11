@@ -220,10 +220,10 @@ def test_a_failed_sign_in_ends_the_run_after_exactly_one_attempt(
         ).fetchone()[0] == (refresh.LOGIN_BROWSER_REQUESTS)
     finally:
         connection.close()
-    # The next start honours the cooldown; nothing retries the login.
+    # The next start honours the interval; nothing retries the login.
     with pytest.raises(refresh.RefreshConflict) as refusal:
         claim_refresh(path)
-    assert "cooldown" in str(refusal.value)
+    assert refusal.value.recent_finished_at is not None
 
 
 def test_run_finish_records_the_pacing_stop_and_restores_it(tmp_path: Path) -> None:
@@ -240,7 +240,9 @@ def test_run_finish_records_the_pacing_stop_and_restores_it(tmp_path: Path) -> N
     restored.restore()
     assert restored.snapshot().pacing_stop == "request_cap"
     assert restored.snapshot().status == "completed"
-    assert 29 * 60 <= restored.snapshot().retry_after <= 30 * 60
+    # The confirmable interval is no member-visible countdown.
+    assert restored.snapshot().retry_after == 0
+    assert restored.pacing_status().cooldown_until is not None
 
 
 def test_invalid_pacing_environment_fails_app_startup_closed(

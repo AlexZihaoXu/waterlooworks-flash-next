@@ -22,7 +22,16 @@ class ErrorResponse(Contract):
 
 
 class RefreshRequest(Contract):
-    """An explicit empty object starts one guarded listing-then-content refresh."""
+    """Starts one guarded listing-then-content refresh; ``{}`` is the usual body."""
+
+    confirm_recent: bool = Field(
+        default=False,
+        description=(
+            "Admin confirmation to refresh within WW_REFRESH_MIN_INTERVAL_MINUTES "
+            "of the previous run's finish. Never waives a ban-risk/rate-limit "
+            "block or the rolling 24-hour request budget."
+        ),
+    )
 
 
 class CompensationRate(Contract):
@@ -400,7 +409,11 @@ class RefreshPacingStatus(Contract):
         ge=1, description="WW_REFRESH_DAILY_REQUEST_CAP per rolling 24 hours."
     )
     min_interval_minutes: int = Field(
-        ge=0, description="WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes."
+        ge=0,
+        description=(
+            "WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes: scheduled "
+            "refreshes skip within it; a manual refresh asks for confirmation."
+        ),
     )
     min_gap_seconds: float = Field(ge=0)
     max_gap_seconds: float = Field(ge=0)
@@ -411,7 +424,19 @@ class RefreshPacingStatus(Contract):
     used_24h: int = Field(ge=0, description="Requests counted in the last 24 hours.")
     remaining_24h: int = Field(ge=0)
     next_allowed_at: str | None = Field(
-        description="UTC ISO time a refresh may start; null when allowed now."
+        description=(
+            "UTC ISO end of the hard wait (block or rolling budget); null when a "
+            "manual refresh may start now, possibly after confirmation."
+        )
+    )
+    last_finished_at: str | None = Field(
+        description="UTC ISO finish time of the most recent finished run, if any."
+    )
+    cooldown_until: str | None = Field(
+        description=(
+            "UTC ISO end of the minimum interval after the last finish; null when "
+            "past. Before it, a manual refresh needs confirm_recent."
+        )
     )
     blocked_until: str | None = Field(
         description="Active ban-risk/rate-limit block end (UTC ISO), if any."

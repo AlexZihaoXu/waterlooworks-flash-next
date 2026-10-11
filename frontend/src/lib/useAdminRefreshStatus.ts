@@ -27,7 +27,7 @@ export function parseRefreshPacing(value: unknown): RefreshPacing {
       (data[key] as string).length <= 64 &&
       !Number.isNaN(Date.parse(data[key] as string)));
   if (
-    Object.keys(data).length !== 15 ||
+    Object.keys(data).length !== 17 ||
     ![
       'request_cap',
       'daily_request_cap',
@@ -43,7 +43,12 @@ export function parseRefreshPacing(value: unknown): RefreshPacing {
       'rest_min_seconds',
       'rest_max_seconds',
     ].every(seconds) ||
-    !['next_allowed_at', 'blocked_until'].every(time) ||
+    ![
+      'next_allowed_at',
+      'last_finished_at',
+      'cooldown_until',
+      'blocked_until',
+    ].every(time) ||
     !(
       data.last_pacing_stop === null ||
       PACING_STOPS.includes(String(data.last_pacing_stop))

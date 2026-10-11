@@ -20,6 +20,8 @@ const pacing = {
   used_24h: 0,
   remaining_24h: 1200,
   next_allowed_at: null,
+  last_finished_at: null,
+  cooldown_until: null,
   blocked_until: null,
   last_pacing_stop: null,
   last_error_category: null,
@@ -132,6 +134,8 @@ it('separates the pacing status from the challenge and validates it strictly', a
     { ...pacing, request_cap: 1.5 },
     { ...pacing, last_pacing_stop: 'other' },
     { ...pacing, blocked_until: 'not a time' },
+    { ...pacing, last_finished_at: 'not a time' },
+    { ...pacing, cooldown_until: 7 },
     { ...pacing, last_error_category: '<b>' },
     { ...pacing, extra: true },
   ]) {

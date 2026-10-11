@@ -101,8 +101,10 @@ def test_recover_marks_stale_run_interrupted_and_unblocks_claims(
     assert recover_interrupted_runs(path) == {"runs": 0, "attempts": 0}
     with pytest.raises(RefreshConflict) as cooling:
         claim_refresh(path)
-    # The recovered run now counts as finished: ordinary cooldown, not 409.
-    assert cooling.value.status_code == 429
+    # The recovered run now counts as finished: the confirmable interval,
+    # not the running conflict.
+    assert cooling.value.status_code == 409
+    assert cooling.value.recent_finished_at == finished_at
 
 
 def test_recover_refuses_while_provider_lease_is_held(tmp_path: Path) -> None:

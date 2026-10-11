@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "WaterlooWorks Flash Next local API",
-    "description": "Google-authenticated shared listings API. Admin-only refresh with a 300-second post-run cooldown and sequential detail content after the full listing save. Configure safe HTTPS and the pinned owner bootstrap before opening access.",
+    "description": "Google-authenticated shared listings API. Admin-only refresh with durable WaterlooWorks pacing: within the minimum interval after a run finishes a manual refresh needs explicit confirmation (confirm_recent), while blocks and the rolling budget always refuse. Sequential detail content follows the full listing save. Configure safe HTTPS and the pinned owner bootstrap before opening access.",
     "version": "0.1.0"
   },
   "paths": {
@@ -3335,7 +3335,15 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "A refresh is already running, or (with the X-WW-Refresh-Recent header) the previous run finished within the minimum interval: resend with confirm_recent=true after asking the admin. Scheduled refreshes never confirm.",
+            "headers": {
+              "X-WW-Refresh-Recent": {
+                "description": "Present only on the confirmable refusal: the previous run's finish time (UTC ISO 8601).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3355,7 +3363,15 @@
             }
           },
           "429": {
-            "description": "Too Many Requests",
+            "description": "Ban-risk/rate-limit block or rolling 24-hour request budget; never overridable by confirm_recent.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds until the hard wait ends.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -6051,7 +6067,7 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Min Interval Minutes",
-            "description": "WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes."
+            "description": "WW_REFRESH_MIN_INTERVAL_MINUTES after a run finishes: scheduled refreshes skip within it; a manual refresh asks for confirmation."
           },
           "min_gap_seconds": {
             "type": "number",
@@ -6104,7 +6120,31 @@
               }
             ],
             "title": "Next Allowed At",
-            "description": "UTC ISO time a refresh may start; null when allowed now."
+            "description": "UTC ISO end of the hard wait (block or rolling budget); null when a manual refresh may start now, possibly after confirmation."
+          },
+          "last_finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Finished At",
+            "description": "UTC ISO finish time of the most recent finished run, if any."
+          },
+          "cooldown_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldown Until",
+            "description": "UTC ISO end of the minimum interval after the last finish; null when past. Before it, a manual refresh needs confirm_recent."
           },
           "blocked_until": {
             "anyOf": [
@@ -6159,6 +6199,8 @@
           "used_24h",
           "remaining_24h",
           "next_allowed_at",
+          "last_finished_at",
+          "cooldown_until",
           "blocked_until",
           "last_pacing_stop",
           "last_error_category"
@@ -6167,11 +6209,18 @@
         "description": "Server pacing policy and rolling usage; no credentials or source data."
       },
       "RefreshRequest": {
-        "properties": {},
+        "properties": {
+          "confirm_recent": {
+            "type": "boolean",
+            "title": "Confirm Recent",
+            "description": "Admin confirmation to refresh within WW_REFRESH_MIN_INTERVAL_MINUTES of the previous run's finish. Never waives a ban-risk/rate-limit block or the rolling 24-hour request budget.",
+            "default": false
+          }
+        },
         "additionalProperties": false,
         "type": "object",
         "title": "RefreshRequest",
-        "description": "An explicit empty object starts one guarded listing-then-content refresh."
+        "description": "Starts one guarded listing-then-content refresh; ``{}`` is the usual body."
       },
       "RefreshScheduleView": {
         "properties": {

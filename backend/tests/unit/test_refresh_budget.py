@@ -215,10 +215,13 @@ def test_claim_cooldown_uses_configured_minutes_and_reports_remaining(
     finished_run(path, finished=datetime.now(UTC) - timedelta(minutes=10), requests=5)
     with pytest.raises(RefreshConflict) as refusal:
         claim_refresh(path, PacingConfig(400, 1200, 30))
-    assert refusal.value.status_code == 429
+    # Confirmable: 409 with the finish time, not a hard 429.
+    assert refusal.value.status_code == 409
+    assert refusal.value.recent_finished_at is not None
     assert 19 * 60 <= refusal.value.retry_after <= 20 * 60
     assert str(refusal.value) == (
-        "Refresh cooldown is active; next refresh allowed in about 20 min."
+        "The last refresh finished recently; confirm to refresh again now "
+        "(the minimum interval ends in about 20 min)."
     )
     claim_refresh(path, PacingConfig(400, 1200, 0))
 

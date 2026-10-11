@@ -393,7 +393,8 @@ class RefreshScheduler:
 
     Every existing protection applies: the provider lease, the shared pacing
     gate and caps, the minimum interval, ban-risk blocks, credential and AI
-    readiness checks and the post-run cooldown. A refused slot is recorded
+    readiness checks and the post-run interval (never confirmed here, so it
+    stays a hard skip for scheduled slots). A refused slot is recorded
     and never retried; slots older than the grace window are never caught up.
     ``active`` is the server gate (WW_ENABLE_REFRESH and WW_ENABLE_SCHEDULE).
     """
@@ -434,8 +435,11 @@ class RefreshScheduler:
             run_id = self.service.start()
             outcome = "started"
         except RefreshConflict as error:
+            # The scheduler never confirms: the post-run interval is a skip.
             outcome = (
-                "skipped_running" if error.status_code == 409 else "skipped_blocked"
+                "skipped_running"
+                if error.status_code == 409 and error.recent_finished_at is None
+                else "skipped_blocked"
             )
         except CredentialError:
             outcome = "failed_to_start"

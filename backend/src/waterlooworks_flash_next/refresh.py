@@ -1,4 +1,4 @@
-"""One explicit listings refresh at a time, with durable cooldown and safe events.
+"""One explicit listings refresh at a time, with durable pacing and safe events.
 
 Offline operator recovery after a killed refresh (API stopped first):
 
@@ -60,6 +60,7 @@ from waterlooworks_flash_next.provider_lease import ProviderBusy, ProviderLease
 from waterlooworks_flash_next.refresh_budget import (
     describe_delay,
     pacing_status,
+    recent_message,
     record_pacing_stop,
     record_ww_request,
     refusal_message,
@@ -240,12 +241,24 @@ def configured_full_refetch(value: str | None) -> bool:
     raise ValueError("WW_DETAIL_FULL_REFETCH must be 0 or 1.")
 
 
+# Fixed response header on the confirmable 409: the previous run's finish
+# (UTC ISO). Its presence distinguishes "refreshed recently" from "running".
+RECENT_HEADER = "X-WW-Refresh-Recent"
+
+
 class RefreshConflict(Exception):
     def __init__(
-        self, status_code: int, retry_after: int = 0, message: str | None = None
+        self,
+        status_code: int,
+        retry_after: int = 0,
+        message: str | None = None,
+        *,
+        recent_finished_at: str | None = None,
     ) -> None:
         self.status_code = status_code
         self.retry_after = retry_after
+        # Set only for the confirmable refusal within the post-run interval.
+        self.recent_finished_at = recent_finished_at
         super().__init__(
             message
             or (
@@ -256,13 +269,19 @@ class RefreshConflict(Exception):
         )
 
 
-def claim_refresh(path: Path, pacing: PacingConfig | None = None) -> str:
+def claim_refresh(
+    path: Path, pacing: PacingConfig | None = None, *, allow_recent: bool = False
+) -> str:
     """SQLite transaction prevents concurrent claims, including across API processes.
 
-    Refused (429 with the remaining seconds) while a stored block, the rolling
-    24-hour request budget or the cooldown since the previous run's finish is
-    active; the longest wait wins. Stale running rows are NOT automatically
-    cleared after a crash; the explicit offline ``recover`` command finalizes them.
+    Refused (429 with the remaining seconds) while a stored block or the rolling
+    24-hour request budget is active; the longest hard wait wins and nothing
+    overrides it. Within the minimum interval since the previous run's finish,
+    and with no hard wait, an unconfirmed claim is refused with 409 carrying
+    ``recent_finished_at``; ``allow_recent`` (an explicit admin confirmation)
+    proceeds. The scheduler never confirms. Stale running rows are NOT
+    automatically cleared after a crash; the explicit offline ``recover``
+    command finalizes them.
     """
     pacing = pacing or PacingConfig()
     connection = open_database(path)
@@ -274,10 +293,20 @@ def claim_refresh(path: Path, pacing: PacingConfig | None = None) -> str:
             ).fetchone():
                 raise RefreshConflict(409)
             now = datetime.now(UTC)
-            refusal = pacing_status(connection, pacing, now).refusal(now)
+            status = pacing_status(connection, pacing, now)
+            refusal = status.hard_refusal(now)
             if refusal is not None:
                 reason, delay = refusal
                 raise RefreshConflict(429, delay, refusal_message(reason, delay))
+            recent = status.refusal(now)
+            if recent is not None and not allow_recent:
+                assert status.last_finished_at is not None
+                raise RefreshConflict(
+                    409,
+                    recent[1],
+                    recent_message(recent[1]),
+                    recent_finished_at=status.last_finished_at.isoformat(),
+                )
             run_id = str(uuid4())
             connection.execute(
                 "INSERT INTO collection_runs (id, started_at) VALUES (?, ?)",
@@ -522,6 +551,12 @@ class RefreshService:
             used_24h=status.used,
             remaining_24h=status.remaining,
             next_allowed_at=next_allowed.isoformat() if next_allowed else None,
+            last_finished_at=status.last_finished_at.isoformat()
+            if status.last_finished_at
+            else None,
+            cooldown_until=status.cooldown_until.isoformat()
+            if status.cooldown_until
+            else None,
             blocked_until=status.blocked_until.isoformat()
             if status.blocked_until
             else None,
@@ -554,7 +589,8 @@ class RefreshService:
             )
             self.state.logs = self.state.logs[-200:]
 
-    def start(self) -> str:
+    def start(self, confirm_recent: bool = False) -> str:
+        """Start one run; ``confirm_recent`` only waives the post-run interval."""
         with self.lock:
             if self.project_root is None:
                 raise RuntimeError("Manual refresh is disabled.")
@@ -569,7 +605,9 @@ class RefreshService:
             except ProviderBusy:
                 raise RefreshConflict(409) from None
             try:
-                run_id = claim_refresh(self.path, self.pacing)
+                run_id = claim_refresh(
+                    self.path, self.pacing, allow_recent=confirm_recent
+                )
             except Exception:
                 lease.close()
                 raise
