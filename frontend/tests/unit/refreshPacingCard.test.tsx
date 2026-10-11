@@ -78,3 +78,21 @@ it('shows a loading description before the first status read', () => {
   render(<RefreshPacingCard pacing={null} />);
   expect(screen.getByText('Pacing status is loading.')).toBeInTheDocument();
 });
+
+it('explains the confirmable interval instead of a countdown', () => {
+  const finished = new Date(Date.now() - 12 * 60_000);
+  const until = new Date(finished.getTime() + 30 * 60_000);
+  render(
+    <RefreshPacingCard
+      pacing={{
+        ...pacing,
+        last_finished_at: finished.toISOString(),
+        cooldown_until: until.toISOString(),
+      }}
+    />,
+  );
+  expect(screen.getByRole('status')).toHaveTextContent(
+    `Last refresh finished at ${finished.toLocaleString()}. Refreshing before ${until.toLocaleString()} asks for confirmation; scheduled refreshes wait until then.`,
+  );
+  expect(screen.queryByText('Refresh allowed now.')).not.toBeInTheDocument();
+});

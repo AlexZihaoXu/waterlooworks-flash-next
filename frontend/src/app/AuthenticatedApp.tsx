@@ -66,7 +66,11 @@ export function RefreshPacingCard({
       </Card>
     );
   const blocked = localTime(pacing.blocked_until);
+  // Hard wait only (block or rolling budget); the post-run interval is
+  // confirmable and explained separately.
   const next = localTime(pacing.next_allowed_at);
+  const finished = localTime(pacing.last_finished_at);
+  const recentUntil = localTime(pacing.cooldown_until);
   const stop = refreshStopLabel(pacing.last_pacing_stop);
   return (
     <Card variant="secondary">
@@ -137,7 +141,11 @@ export function RefreshPacingCard({
             refresh · {pacing.min_interval_minutes} min between refreshes
           </p>
           <p role="status">
-            {next ? `Next refresh allowed at ${next}.` : 'Refresh allowed now.'}
+            {next
+              ? `Next refresh allowed at ${next}.`
+              : finished && recentUntil
+                ? `Last refresh finished at ${finished}. Refreshing before ${recentUntil} asks for confirmation; scheduled refreshes wait until then.`
+                : 'Refresh allowed now.'}
           </p>
         </div>
       </Card.Content>

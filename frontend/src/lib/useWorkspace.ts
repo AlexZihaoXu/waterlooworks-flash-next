@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { refreshAction } from './refreshAction';
-import { readManualRefresh } from './workspaceRefresh';
+import { readManualRefresh, readRecentRefresh } from './workspaceRefresh';
 import {
   createLatestWorkspaceRead,
   createWorkspaceReloadPolicy,
@@ -178,6 +178,9 @@ async function readJson(path: string, signal?: AbortSignal): Promise<unknown> {
 // only a stream that stays down this long is reported as interrupted.
 export const STREAM_INTERRUPTED_GRACE_MS = 5_000;
 
+export type ManualRefreshResult =
+  ReturnType<typeof refreshAction> | { recent: string } | undefined;
+
 export function useWorkspace(enabled: boolean) {
   const [state, setState] = useState<WorkspaceState>({ status: 'loading' });
   const [refresh, setRefresh] = useState<RefreshSnapshot | null>(null);
@@ -278,48 +281,66 @@ export function useWorkspace(enabled: boolean) {
     };
   }, [enabled]);
 
-  const manualRefresh = useCallback(async () => {
-    const controller = mountController.current;
-    const current = () =>
-      controller !== null &&
-      mountController.current === controller &&
-      !controller.signal.aborted;
-    const decision = refreshAction(
-      enabled &&
-        current() &&
-        !requestInFlight.current &&
-        streamConnected &&
-        state.status === 'ready' &&
-        state.manual_refresh_available,
-      refresh?.retry_after ?? 0,
-      refresh?.status === 'running',
-    );
-    if (decision !== 'request' || !controller) return decision;
-    requestInFlight.current = true;
-    setRequesting(true);
-    setActionError(null);
-    try {
-      const response = await readManualRefresh(controller.signal);
-      if (!current()) return;
-      if (![202, 409, 429].includes(response.status)) {
-        setActionError('Refresh was not accepted. No automatic retry.');
-      }
-      setRefresh(parseRefresh(response.snapshot));
-      if (response.status === 409) return 'running';
-      if (response.status === 429) return 'cooldown';
-    } catch {
-      if (!current()) return;
-      setActionError(
-        'Refresh status is uncertain. Check the live stream before trying again.',
+  /**
+   * Without confirmation, a refresh inside the post-run interval returns
+   * ``{ recent }`` (the previous finish) before any POST, so the caller can
+   * ask the admin; a stale client gets the same from the server 409 signal.
+   */
+  const manualRefresh = useCallback(
+    async (confirmRecent = false): Promise<ManualRefreshResult> => {
+      const controller = mountController.current;
+      const current = () =>
+        controller !== null &&
+        mountController.current === controller &&
+        !controller.signal.aborted;
+      const decision = refreshAction(
+        enabled &&
+          current() &&
+          !requestInFlight.current &&
+          streamConnected &&
+          state.status === 'ready' &&
+          state.manual_refresh_available,
+        refresh?.retry_after ?? 0,
+        refresh?.status === 'running',
       );
-      setStreamConnected(false);
-    } finally {
-      if (current()) {
-        requestInFlight.current = false;
-        setRequesting(false);
+      if (decision !== 'request' || !controller) return decision;
+      requestInFlight.current = true;
+      setRequesting(true);
+      setActionError(null);
+      try {
+        if (!confirmRecent) {
+          const recent = await readRecentRefresh(controller.signal);
+          if (!current()) return;
+          if (recent !== null) return { recent };
+        }
+        const response = await readManualRefresh(
+          controller.signal,
+          confirmRecent,
+        );
+        if (!current()) return;
+        if (![202, 409, 429].includes(response.status)) {
+          setActionError('Refresh was not accepted. No automatic retry.');
+        }
+        setRefresh(parseRefresh(response.snapshot));
+        if (response.recentFinishedAt !== null)
+          return { recent: response.recentFinishedAt };
+        if (response.status === 409) return 'running';
+        if (response.status === 429) return 'paused';
+      } catch {
+        if (!current()) return;
+        setActionError(
+          'Refresh status is uncertain. Check the live stream before trying again.',
+        );
+        setStreamConnected(false);
+      } finally {
+        if (current()) {
+          requestInFlight.current = false;
+          setRequesting(false);
+        }
       }
-    }
-  }, [enabled, streamConnected, state, refresh]);
+    },
+    [enabled, streamConnected, state, refresh],
+  );
 
   return {
     state,

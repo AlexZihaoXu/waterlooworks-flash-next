@@ -100,6 +100,7 @@ describe('workspaceRefresh lifecycle (HTTP/empty-data primitives only)', () => {
     await expect(readManualRefresh(newMount.signal)).resolves.toEqual({
       status: 202,
       snapshot: null,
+      recentFinishedAt: null,
     });
     pending.resolve(new Response(null, { status: 202 }));
     await failed;

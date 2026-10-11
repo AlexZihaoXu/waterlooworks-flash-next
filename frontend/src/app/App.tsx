@@ -34,6 +34,7 @@ import {
 } from 'react-icons/lu';
 import {
   Alert,
+  AlertDialog,
   Badge,
   Breadcrumbs,
   Button,
@@ -78,7 +79,7 @@ import {
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
 import { RefreshContext } from '../lib/refreshContext';
-import { torontoDateTime } from '../lib/refreshSchedule';
+import { relativeTime, torontoDateTime } from '../lib/refreshSchedule';
 import { RefreshTimes } from './RefreshTimes';
 import { refreshWaitText } from '../lib/refreshProgress';
 import { refreshInterruption, refreshRunning } from '../lib/refreshState';
@@ -148,7 +149,10 @@ export function App({
   useLayoutEffect(() => {
     latestManualRefresh.current = remote.manualRefresh;
   });
-  const manualRefresh = useCallback(() => latestManualRefresh.current(), []);
+  const manualRefresh = useCallback(
+    (confirmRecent?: boolean) => latestManualRefresh.current(confirmRecent),
+    [],
+  );
   // Stable reader so the memoized workspace never re-renders per snapshot.
   const latestRefresh = useRef(refresh);
   useLayoutEffect(() => {
@@ -215,7 +219,7 @@ const WorkspaceView = memo(function WorkspaceView({
   streamInterrupted: boolean;
   actionError: string | null;
   manualRefresh: ReturnType<typeof useWorkspace>['manualRefresh'];
-  /** Seconds until the server admits another refresh (cooldown/budget/block). */
+  /** Seconds until a block or the rolling budget admits another refresh. */
   refreshRetryAfter: () => number;
   signedOutContent?: ReactNode;
   account?: ReactNode;
@@ -326,6 +330,10 @@ const WorkspaceView = memo(function WorkspaceView({
     };
   }, []);
   const refreshToast = useRef<string | null>(null);
+  // "Refresh again?" confirmation inside the post-run interval. The label is
+  // kept after closing so the exit animation never shows an empty sentence.
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [recentAgo, setRecentAgo] = useState('');
   const needsTierFx = useMemo(
     () =>
       state.status === 'ready' &&
@@ -829,14 +837,17 @@ const WorkspaceView = memo(function WorkspaceView({
     visibility: { delay: detailOpen && !reducedMotion ? 0.18 : 0 },
     ...(compact ? { height: { duration: 0 } } : {}),
   };
-  const requestRefresh = async () => {
-    const result = await manualRefresh();
-    if (result === 'cooldown' || result === 'running') {
+  const requestRefresh = async (confirmRecent = false) => {
+    const result = await manualRefresh(confirmRecent);
+    if (typeof result === 'object') {
+      setRecentAgo(relativeTime(Date.parse(result.recent), Date.now()));
+      setRecentOpen(true);
+      return;
+    }
+    if (result === 'paused' || result === 'running') {
       if (refreshToast.current) toast.close(refreshToast.current);
       refreshToast.current = toast.warning(
-        result === 'running'
-          ? 'Refresh already running'
-          : 'Refresh is on cooldown',
+        result === 'running' ? 'Refresh already running' : 'Refresh paused',
         {
           description:
             result === 'running'
@@ -844,8 +855,8 @@ const WorkspaceView = memo(function WorkspaceView({
               : refreshRetryAfter() > 0
                 ? `Next refresh allowed in ${refreshWaitText(
                     refreshRetryAfter(),
-                  )}. Pacing protects the WaterlooWorks account; see Admin settings › Refresh.`
-                : 'Please wait before refreshing again.',
+                  )}. A WaterlooWorks block or the daily request budget protects the account; see Admin settings › Refresh.`
+                : 'A WaterlooWorks block or the daily request budget protects the account; see Admin settings › Refresh.',
         },
       );
     }
@@ -1515,7 +1526,7 @@ const WorkspaceView = memo(function WorkspaceView({
             aria-label="Refresh postings"
             isDisabled={!canRefresh}
             isPending={requesting}
-            onPress={requestRefresh}
+            onPress={() => void requestRefresh()}
           >
             {refreshing || requesting ? (
               <Spinner size="sm" color="current" />
@@ -1534,6 +1545,35 @@ const WorkspaceView = memo(function WorkspaceView({
   return (
     <main className="workspace">
       <Toast.Provider placement="top" maxVisibleToasts={1} />
+      <AlertDialog.Backdrop isOpen={recentOpen} onOpenChange={setRecentOpen}>
+        <AlertDialog.Container size="sm">
+          <AlertDialog.Dialog>
+            <AlertDialog.Header>
+              <AlertDialog.Icon status="warning" />
+              <AlertDialog.Heading>Refresh again?</AlertDialog.Heading>
+            </AlertDialog.Header>
+            <AlertDialog.Body>
+              <p>
+                The last refresh finished {recentAgo}. Refreshing again this
+                soon sends more requests to WaterlooWorks.
+              </p>
+            </AlertDialog.Body>
+            <AlertDialog.Footer>
+              <Button slot="close" variant="tertiary">
+                Cancel
+              </Button>
+              <Button
+                onPress={() => {
+                  setRecentOpen(false);
+                  void requestRefresh(true);
+                }}
+              >
+                Refresh anyway
+              </Button>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
       <Modal.Backdrop isOpen={pickerOpen} onOpenChange={setPickerOpen}>
         <Modal.Container size="lg" placement="center" scroll="inside">
           <Modal.Dialog>
@@ -1662,7 +1702,7 @@ const WorkspaceView = memo(function WorkspaceView({
                   variant={refreshing || requesting ? 'secondary' : 'tertiary'}
                   isDisabled={!canRefresh}
                   isPending={requesting}
-                  onPress={requestRefresh}
+                  onPress={() => void requestRefresh()}
                 >
                   <LuRefreshCw
                     aria-hidden="true"
