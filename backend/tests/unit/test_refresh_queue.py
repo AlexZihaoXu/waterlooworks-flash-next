@@ -16,6 +16,7 @@ from waterlooworks_flash_next.refresh import (
     UNCHANGED,
     configured_full_refetch,
     detail_skip_reason,
+    lead_with_visible,
     prefer_unsaved,
     select_detail_queue,
 )
@@ -148,3 +149,52 @@ def test_capped_runs_progress_by_fetching_unsaved_postings_first() -> None:
     ordered = prefer_unsaved(queue, {"0", "2"})
     assert [item.id for item in ordered] == ["1", "3", "4", "0", "2"]
     assert prefer_unsaved(queue, set()) == queue
+
+
+def _ids(items: list[StoredListing]) -> list[str]:
+    return [item.id for item in items]
+
+
+def _sentinels(*ids: str) -> list[StoredListing]:
+    # Identity/title-only sentinels; no posting records.
+    return [cast(StoredListing, SimpleNamespace(id=i, title="t")) for i in ids]
+
+
+def test_bootstrap_posting_is_queued_from_the_visible_first_page() -> None:
+    # The title click needs a posting the browser's first board page shows.
+    eligible = _sentinels("60", "61", "7", "62")
+    queue, limited = lead_with_visible(eligible, eligible, ["5", "7", "8"], 3)
+    assert _ids(queue) == ["7", "60", "61"]
+    assert limited
+
+
+def test_visible_posting_counts_inside_the_detail_limit() -> None:
+    eligible = _sentinels(*(str(n) for n in range(60, 70)), "9")
+    queue, limited = lead_with_visible(eligible, eligible, ["9"], 2)
+    assert _ids(queue) == ["9", "60"]
+    assert limited
+
+
+def test_saved_visible_posting_leads_when_no_queued_one_is_visible() -> None:
+    listings = _sentinels("1", "2", "60", "61")
+    eligible = listings[2:]
+    queue, limited = lead_with_visible(eligible, listings, ["1", "2"], 2)
+    assert _ids(queue) == ["1", "60"]
+    assert limited
+    queue, limited = lead_with_visible(eligible, listings, ["1", "2"], None)
+    assert _ids(queue) == ["1", "60", "61"]
+    assert not limited
+
+
+def test_untitled_visible_postings_cannot_lead() -> None:
+    listings = [
+        cast(StoredListing, SimpleNamespace(id="1", title=None)),
+        *_sentinels("60"),
+    ]
+    queue, _ = lead_with_visible(listings[1:], listings, ["1"], None)
+    assert _ids(queue) == ["60"]
+
+
+def test_empty_queue_stays_empty() -> None:
+    listings = _sentinels("1")
+    assert lead_with_visible([], listings, ["1"], 5) == ([], False)

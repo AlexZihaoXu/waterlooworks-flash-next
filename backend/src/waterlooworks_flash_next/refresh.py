@@ -222,6 +222,32 @@ def prefer_unsaved(
     ]
 
 
+def lead_with_visible(
+    eligible: list[StoredListing],
+    listings: list[StoredListing],
+    visible_ids: list[str],
+    limit: int | None,
+) -> tuple[list[StoredListing], bool]:
+    """Limited detail queue led by a posting the browser's board page shows.
+
+    The detail bootstrap clicks the first queued posting's title on the job
+    board's first page, so that posting must be visible there. A queued visible
+    posting moves to the front inside the limit; otherwise an already-saved
+    visible posting leads (one extra detail request) to enable the rest.
+    """
+    if not eligible:
+        return [], False
+    queued = {item.id: item for item in eligible}
+    lead = next((queued[i] for i in visible_ids if i in queued), None)
+    rest = [item for item in eligible if lead is None or item.id != lead.id]
+    if lead is None:
+        titled = {item.id: item for item in listings if item.title}
+        lead = next((titled[i] for i in visible_ids if i in titled), None)
+    ordered = rest if lead is None else [lead, *rest]
+    queue = ordered if limit is None else ordered[:limit]
+    return queue, sum(item.id in queued for item in queue) < len(eligible)
+
+
 def analysis_batches(ids: list[str]) -> list[list[str]]:
     """Split a selection into jobs within the inference job bound."""
     from waterlooworks_flash_next.inference import MAX_JOB_POSTINGS
@@ -1101,12 +1127,12 @@ class RefreshService:
                 eligible, skipped = select_detail_queue(
                     connection, listings, full_refetch=self.full_refetch
                 )
-                queue = (
-                    eligible
-                    if self.detail_limit is None
-                    else eligible[: self.detail_limit]
+                queue, limited = lead_with_visible(
+                    eligible,
+                    listings,
+                    [row.posting_id() for row in source.first_page.data],
+                    self.detail_limit,
                 )
-                limited = len(queue) < len(eligible)
                 with connection:
                     connection.execute(
                         "UPDATE collection_runs SET pages_completed=?,"
