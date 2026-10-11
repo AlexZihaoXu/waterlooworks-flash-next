@@ -177,6 +177,37 @@ under the identical active configuration.
   historical runs. Their OpenAI-only `start`/`resume` paths were removed with
   the Responses bridge; the v7 source-span extraction CLI has no Pi port.
 
+## Evidence by reference and feedback (template v10)
+
+`submit_extraction` evidence is `{field, text, start, end}`: either exact
+words in `text` (offsets null) or `start`/`end` offsets cited from
+`find_span`/`read_section` (text null). The backend reconstructs the exact
+source span — also mapping text that differs only by whitespace, NBSP, smart
+quotes, dashes or case — before the unchanged `validate_extraction` decides.
+Rejections return a fixed reason code with the failing path and section name,
+for example `Rejected [rate_currency_unsupported]: base_rates[0]: …`. Postings
+that fit inline are marked `complete` and the model is told to submit in its
+first reply; the final allowed turn forces the submit tool. Results use
+`v10-pi-ref-evidence`; v9 results remain trusted on read.
+
+## Dry-run evaluation
+
+```sh
+uv run --project backend python -m waterlooworks_flash_next.pi_eval <database> \
+  --limit 20 [--template v10|v9] [--reasoning low] [--max-turns 4] \
+  [--max-tool-calls 8] [--max-output-tokens N] [--parallel N] [--offset N]
+```
+
+Runs the real sidecar path with the active configuration (plus overrides) on
+saved postings that deterministic parsing left for analysis. The database is
+opened read-only and an in-memory ledger replaces the usage ledger (a rotated
+OAuth refresh token is still persisted). Output is JSON lines with a posting
+index, outcome, category, reason code, turns, tool calls and token/second
+counts, then a summary (acceptance rate, reason histogram, reasoning tokens).
+`--template v9` replays the previous prompt with exact-text evidence and the
+generic hint for baseline comparison (sidecar-level changes such as the forced
+final-turn submit apply to both).
+
 ## Unknown usage after a crash
 
 If the sidecar dies or times out mid-request, attempts it reserved but never

@@ -59,7 +59,7 @@ def test_job_identity_is_derived_from_the_active_pi_configuration() -> None:
     identity = JobIdentity.from_config(CUSTOM)
     assert identity.model_id == "pi:custom:local-model"
     assert identity.endpoint == "http://100.64.0.10:8000/v1"
-    assert identity.template_version.startswith("v9-pi-tools+")
+    assert identity.template_version.startswith("v10-pi-ref-evidence+")
     assert identity.max_tokens == CUSTOM.max_output_tokens
     # Any identity-relevant change produces a different cache identity.
     other = JobIdentity.from_config(

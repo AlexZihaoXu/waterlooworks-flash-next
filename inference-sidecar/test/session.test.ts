@@ -301,3 +301,28 @@ test('submit arguments are validated against the backend schema before the backe
   assert.deepEqual(checks[0]?.params.payload, SUBMISSION);
   assert.equal(result(session.messages)?.status, 'submitted');
 });
+
+test('the final allowed turn forces the submit tool by name', async () => {
+  fake.requests.length = 0;
+  fake.script([
+    { tool: 'list_sections', args: {} },
+    { tool: 'submit_extraction', args: SUBMISSION },
+  ]);
+  const session = await runSession(
+    [
+      startMessage(baseUrl, { max_turns: 2 }),
+      itemMessage('item-15'),
+      { type: 'end' },
+    ],
+    backend(),
+  );
+  assert.equal(result(session.messages)?.status, 'submitted');
+  const completions = fake.requests.filter(
+    (r) => r.path === '/v1/chat/completions',
+  );
+  assert.equal(completions[0]?.body.tool_choice, undefined);
+  assert.deepEqual(completions[1]?.body.tool_choice, {
+    type: 'function',
+    function: { name: 'submit_extraction' },
+  });
+});

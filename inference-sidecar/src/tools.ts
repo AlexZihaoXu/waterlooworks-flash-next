@@ -82,7 +82,7 @@ export function buildTools(
       name: 'find_span',
       label: 'Find text',
       description:
-        'Case-insensitive literal search across saved sections. Returns short snippets with exact offsets.',
+        'Case-insensitive literal search across saved sections. Each match has start/end offsets you can cite as evidence {field, start, end}.',
       parameters: Type.Object(
         {
           query: Type.String({ minLength: 1, maxLength: 200 }),
@@ -109,6 +109,8 @@ export function buildTools(
             matches.push({
               section: name,
               offset: index,
+              start: index,
+              end: index + needle.length,
               match: source.slice(index, index + needle.length),
               snippet: source.slice(start, end),
             });

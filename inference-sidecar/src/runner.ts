@@ -87,6 +87,17 @@ export function categorizeStatus(
   return timedOut ? 'timeout' : 'connection';
 }
 
+export function submitToolName(item: ItemMessage): string {
+  return item.kind === 'extraction' ? 'submit_extraction' : 'submit_country';
+}
+
+/** Named tool_choice in the shape each OpenAI wire API expects. */
+export function forcedToolChoice(api: string, name: string): object {
+  return api === 'openai-completions'
+    ? { type: 'function', function: { name } }
+    : { type: 'function', name };
+}
+
 export interface RunnerContext {
   config: StartConfig;
   runtime: Runtime;
@@ -201,7 +212,21 @@ export async function runItem(
         status = response.status;
       },
     };
-    if (injectPayload) request.onPayload = injectPayload;
+    // Final allowed turn: force the submit tool so the posting cannot end in
+    // prose or another read (tool_choice by name, per wire API).
+    const forceSubmit = turns >= config.maxTurns && turns > 1;
+    if (injectPayload || forceSubmit)
+      request.onPayload = (payload) => {
+        let body = injectPayload
+          ? (injectPayload(payload) ?? payload)
+          : payload;
+        if (forceSubmit && typeof body === 'object' && body !== null)
+          body = {
+            ...(body as Record<string, unknown>),
+            tool_choice: forcedToolChoice(model.api, submitToolName(item)),
+          };
+        return body;
+      };
     if (config.mode !== 'custom' && config.reasoning !== null)
       request.reasoning = config.reasoning as PiThinkingLevel;
     let stream: AssistantMessageEventStream;
