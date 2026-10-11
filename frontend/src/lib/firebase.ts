@@ -1,8 +1,10 @@
 import { deleteApp, initializeApp } from 'firebase/app';
 import { runAuthOperation } from './authLifecycle';
 import {
+  browserLocalPersistence,
   browserPopupRedirectResolver,
   GoogleAuthProvider,
+  indexedDBLocalPersistence,
   inMemoryPersistence,
   initializeAuth,
   signInWithPopup,
@@ -18,8 +20,14 @@ const app = initializeApp({
   messagingSenderId: '267612792066',
   appId: '1:267612792066:web:8ac84f7470cb6657108e1b',
 });
+// The Google sign-in survives reloads so hourly renewal keeps working; the
+// server still ends every session 12 h after the Google sign-in (`auth_time`).
 const auth = initializeAuth(app, {
-  persistence: inMemoryPersistence,
+  persistence: [
+    indexedDBLocalPersistence,
+    browserLocalPersistence,
+    inMemoryPersistence,
+  ],
   popupRedirectResolver: browserPopupRedirectResolver,
 });
 const provider = new GoogleAuthProvider();
@@ -30,6 +38,7 @@ export async function googleToken() {
   return result.user.getIdToken();
 }
 export async function renewedToken(uid: string) {
+  await auth.authStateReady();
   if (auth.currentUser?.uid !== uid) throw new Error('Sign in again.');
   return auth.currentUser.getIdToken(true);
 }
