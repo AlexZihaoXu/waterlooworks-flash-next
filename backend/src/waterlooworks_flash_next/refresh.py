@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -24,6 +25,7 @@ from waterlooworks_flash_next.api_models import (
     RefreshLog,
     RefreshPacingStatus,
     RefreshSnapshot,
+    ScheduledFailureNotice,
 )
 from waterlooworks_flash_next.auth_challenge import AuthChallenge, AuthChallengeStatus
 from waterlooworks_flash_next.credentials import CredentialStore
@@ -356,6 +358,17 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+@dataclass(frozen=True)
+class RunOutcome:
+    """Terminal state of one run for listeners; fixed categories only."""
+
+    run_id: str
+    status: Literal["completed", "failed", "interrupted"]
+    error_category: str | None
+    pacing_stop: str | None
+    authenticated: bool
+
+
 class RefreshService:
     def __init__(
         self,
@@ -378,6 +391,10 @@ class RefreshService:
         self.provider_lease: ProviderLease | None = None
         self.auth_challenge = AuthChallenge()
         self.stop_event = threading.Event()
+        # Called once after each run is finalized (the scheduler's failure hook).
+        self.on_finished: Callable[[RunOutcome], None] | None = None
+        # Member-visible schedule summary: next UTC run, last failed slot time.
+        self.schedule_notice: tuple[str | None, str | None] = (None, None)
 
     def stop_requested(self) -> bool:
         return self.stop_event.is_set()
@@ -450,9 +467,18 @@ class RefreshService:
         except ProviderBusy:
             return False
 
+    def set_schedule_notice(self, next_at: str | None, failed_at: str | None) -> None:
+        with self.lock:
+            self.schedule_notice = (next_at, failed_at)
+
     def snapshot(self) -> RefreshSnapshot:
         with self.lock:
             snapshot = self.state.model_copy(deep=True)
+            next_at, failed_at = self.schedule_notice
+            snapshot.next_scheduled_at = next_at
+            snapshot.scheduled_failure = (
+                ScheduledFailureNotice(failed_at=failed_at) if failed_at else None
+            )
             if self.cooldown_until:
                 snapshot.retry_after = max(
                     0,
@@ -962,6 +988,7 @@ class RefreshService:
 
     def _run(self, run_id: str) -> None:
         session: LoginSession | None = None
+        authenticated = False
         success = False
         interrupted = False
         category: str | None = "internal"
@@ -992,6 +1019,7 @@ class RefreshService:
             )
             if not at_waterlooworks(session.page):
                 raise RuntimeError("Authentication not confirmed.")
+            authenticated = True
             self._checkpoint()
             source = open_all_jobs(session.page)
             if source is None:
@@ -1193,6 +1221,43 @@ class RefreshService:
                 if self.provider_lease is not None:
                     self.provider_lease.close()
                     self.provider_lease = None
+                self._notify_finished(
+                    run_id, success, interrupted, category, authenticated
+                )
+
+    def _notify_finished(
+        self,
+        run_id: str,
+        success: bool,
+        interrupted: bool,
+        category: str | None,
+        authenticated: bool,
+    ) -> None:
+        listener = self.on_finished
+        if listener is None:
+            return
+        with self.lock:
+            pacing_stop = self.state.pacing_stop
+        try:
+            listener(
+                RunOutcome(
+                    run_id=run_id,
+                    status="completed"
+                    if success
+                    else "interrupted"
+                    if interrupted
+                    else "failed",
+                    error_category=category,
+                    pacing_stop=pacing_stop,
+                    authenticated=authenticated,
+                )
+            )
+        except Exception:
+            self.emit(
+                "Could not record the scheduled refresh outcome; "
+                "diagnostics suppressed.",
+                "warning",
+            )
 
 
 def _rest_message(seconds: float) -> str:

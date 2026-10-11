@@ -10,20 +10,30 @@ once at its first occurrence.
 Validation errors are fixed strings that never echo input.
 """
 
+import asyncio
 import re
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
+from waterlooworks_flash_next.api_models import (
+    RefreshScheduleView,
+    ScheduleFailureView,
+    ScheduleSlotView,
+)
+from waterlooworks_flash_next.credentials import CredentialError
 from waterlooworks_flash_next.database import open_database
+from waterlooworks_flash_next.logging import stage_logger
+from waterlooworks_flash_next.refresh import RefreshConflict, RunOutcome
 
 TORONTO = ZoneInfo("America/Toronto")
 MAX_TIMES = 24
 GRACE = timedelta(minutes=10)
+TICK_SECONDS = 30
 _TIME = re.compile(r"\A([01][0-9]|2[0-3]):([0-5][0-9])\Z", re.ASCII)
 
 SlotOutcome = Literal[
@@ -301,3 +311,211 @@ class ScheduleStore:
                 )
         finally:
             connection.close()
+
+    def fail_scheduled_run(
+        self, run_id: str, category: FailureCategory, now: datetime
+    ) -> bool:
+        """Atomically turn scheduling off for a scheduled run's bad failure.
+
+        Returns False (and changes nothing) when the run was not scheduled.
+        """
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT slot,due_at FROM refresh_schedule_slots WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+                if row is None:
+                    return False
+                connection.execute(
+                    "UPDATE refresh_schedule_slots SET failure_category=? "
+                    "WHERE run_id=?",
+                    (category, run_id),
+                )
+                connection.execute(
+                    "UPDATE refresh_schedule_state SET enabled=0, enabled_at=NULL, "
+                    "disabled_reason='run_failed', failed_run_id=?, failed_slot=?, "
+                    "failed_at=?, failure_category=?, changed_at=? WHERE id=1",
+                    (run_id, row[0], row[1], category, _iso(now)),
+                )
+            return True
+        finally:
+            connection.close()
+
+
+_BAD_ERRORS: frozenset[str] = frozenset({"authentication", "rate_limit", "redirect"})
+
+
+def scheduled_failure(outcome: RunOutcome) -> FailureCategory | None:
+    """Failures that must turn scheduling off; ordinary ones return None.
+
+    Any ban-risk block wins. A failure before WaterlooWorks confirmed the
+    sign-in is a Duo/login/credential problem (approval denied, timed out or
+    not completed). After sign-in, 401/403 or a sign-in page (authentication),
+    429 or a challenge page (rate_limit) and a login/SSO redirect mid-run are
+    bad. Network, timeout, caps and shutdown interruptions are not.
+    """
+    if outcome.status != "failed":
+        return None
+    if outcome.pacing_stop == "ban_risk":
+        return "ban_risk"
+    if not outcome.authenticated:
+        return "sign_in"
+    category = outcome.error_category
+    if category in _BAD_ERRORS:
+        return category  # type: ignore[return-value]
+    return None
+
+
+class ScheduledService(Protocol):
+    def start(self) -> str: ...
+
+    def emit(self, message: str, level: str = "info") -> None: ...
+
+    def set_schedule_notice(
+        self, next_at: str | None, failed_at: str | None
+    ) -> None: ...
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    return None if value is None else value.astimezone(UTC).isoformat()
+
+
+class RefreshScheduler:
+    """Fires due slots through the exact manual-refresh path (service.start).
+
+    Every existing protection applies: the provider lease, the shared pacing
+    gate and caps, the minimum interval, ban-risk blocks, credential and AI
+    readiness checks and the post-run cooldown. A refused slot is recorded
+    and never retried; slots older than the grace window are never caught up.
+    ``active`` is the server gate (WW_ENABLE_REFRESH and WW_ENABLE_SCHEDULE).
+    """
+
+    def __init__(
+        self,
+        store: ScheduleStore,
+        service: ScheduledService,
+        *,
+        active: bool,
+        min_interval_minutes: int = 30,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        grace: timedelta = GRACE,
+    ) -> None:
+        self.store = store
+        self.service = service
+        self.active = active
+        self.min_interval_minutes = min_interval_minutes
+        self.clock = clock
+        self.grace = grace
+        self.log = stage_logger("schedule")
+
+    def tick(self) -> None:
+        state = self.store.state()
+        if self.active and state.enabled:
+            now = self.clock()
+            minutes = self.store.minutes()
+            for slot, due_at in due_slots(now, minutes, state.enabled_at, self.grace):
+                if not self.store.claim(slot, due_at, now):
+                    continue
+                self._decide(slot)
+        self.publish()
+
+    def _decide(self, slot: str) -> None:
+        run_id: str | None = None
+        outcome: SlotOutcome
+        try:
+            run_id = self.service.start()
+            outcome = "started"
+        except RefreshConflict as error:
+            outcome = (
+                "skipped_running" if error.status_code == 409 else "skipped_blocked"
+            )
+        except CredentialError:
+            outcome = "failed_to_start"
+        except RuntimeError as error:
+            outcome = (
+                "skipped_disabled"
+                if str(error) == "Manual refresh is disabled."
+                else "failed_to_start"
+            )
+        except Exception:
+            outcome = "failed_to_start"
+        self.store.record(slot, outcome, run_id, self.clock())
+        self.log.info("Scheduled slot %s Toronto time: %s.", slot, outcome)
+        if run_id is not None:
+            self.service.emit(
+                f"Scheduled refresh for {slot[-5:]} Toronto time started."
+            )
+
+    def run_finished(self, outcome: RunOutcome) -> None:
+        category = scheduled_failure(outcome)
+        if category is None:
+            return
+        if self.store.fail_scheduled_run(outcome.run_id, category, self.clock()):
+            self.log.warning(
+                "Scheduled refresh failed (%s); scheduling turned off.", category
+            )
+            self.publish()
+
+    def publish(self) -> None:
+        state = self.store.state()
+        upcoming = (
+            next_run(self.clock(), self.store.minutes(), state.enabled_at)
+            if self.active and state.enabled
+            else None
+        )
+        self.service.set_schedule_notice(
+            _utc_iso(upcoming),
+            _utc_iso(state.failure.failed_at) if state.failure else None,
+        )
+
+    def view(self) -> RefreshScheduleView:
+        state = self.store.state()
+        minutes = self.store.minutes()
+        upcoming = (
+            next_run(self.clock(), minutes, state.enabled_at)
+            if self.active and state.enabled
+            else None
+        )
+        failure = state.failure
+        return RefreshScheduleView(
+            times=[format_minute(minute) for minute in minutes],
+            enabled=state.enabled,
+            server_enabled=self.active,
+            next_run_at=_utc_iso(upcoming),
+            min_interval_minutes=self.min_interval_minutes,
+            max_times=MAX_TIMES,
+            last=[
+                ScheduleSlotView(
+                    slot=entry.slot,
+                    due_at=_utc_iso(entry.due_at) or "",
+                    outcome=entry.outcome,
+                    run_id=entry.run_id,
+                    failure_category=entry.failure_category,
+                )
+                for entry in self.store.recent()
+            ],
+            failure=ScheduleFailureView(
+                run_id=failure.run_id,
+                slot=failure.slot,
+                failed_at=_utc_iso(failure.failed_at) or "",
+                category=failure.category,
+            )
+            if failure
+            else None,
+        )
+
+    async def run(
+        self,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        interval: float = TICK_SECONDS,
+    ) -> None:
+        """Tick forever off the event loop until cancelled at shutdown."""
+        while True:
+            try:
+                await asyncio.to_thread(self.tick)
+            except Exception:
+                self.log.error("Scheduler tick failed; diagnostics suppressed.")
+            await sleep(interval)

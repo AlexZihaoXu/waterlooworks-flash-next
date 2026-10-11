@@ -300,6 +300,13 @@ class RefreshLog(Contract):
     )
 
 
+class ScheduledFailureNotice(Contract):
+    """Member-safe notice: a scheduled refresh failed (no category or run)."""
+
+    failed: Literal[True] = True
+    failed_at: str = Field(description="UTC ISO time the failed slot was due.")
+
+
 class RefreshSnapshot(Contract):
     run_id: str | None = None
     status: Literal["idle", "running", "completed", "failed", "interrupted"] = "idle"
@@ -372,6 +379,17 @@ class RefreshSnapshot(Contract):
     logs: list[RefreshLog] = Field(
         default_factory=list, description="Bounded to the latest 200 sanitized events."
     )
+    next_scheduled_at: str | None = Field(
+        default=None,
+        description=(
+            "UTC ISO time of the next scheduled refresh; null when scheduling is "
+            "off, has no times or is inactive on this server."
+        ),
+    )
+    scheduled_failure: ScheduledFailureNotice | None = Field(
+        default=None,
+        description="Set while scheduling is off after a failed scheduled refresh.",
+    )
 
 
 class RefreshPacingStatus(Contract):
@@ -415,3 +433,63 @@ class AdminRefreshStatus(AuthChallengeStatus):
 class RefreshAccepted(Contract):
     run_id: str
     status: Literal["running"] = "running"
+
+
+ScheduleOutcome = Literal[
+    "claimed",
+    "started",
+    "skipped_running",
+    "skipped_blocked",
+    "skipped_disabled",
+    "failed_to_start",
+]
+ScheduleFailureCategory = Literal[
+    "sign_in", "authentication", "rate_limit", "redirect", "ban_risk"
+]
+
+
+class ScheduleTimeRequest(Contract):
+    """One Toronto wall-clock time, 24-hour HH:MM."""
+
+    model_config = ConfigDict(strict=True)
+    time: str = Field(min_length=5, max_length=5, repr=False)
+
+
+class ScheduleToggleRequest(Contract):
+    model_config = ConfigDict(strict=True)
+    enabled: bool
+
+
+class ScheduleSlotView(Contract):
+    slot: str = Field(description="Toronto local date and HH:MM.")
+    due_at: str = Field(description="UTC ISO instant the slot was due.")
+    outcome: ScheduleOutcome
+    run_id: str | None
+    failure_category: ScheduleFailureCategory | None
+
+
+class ScheduleFailureView(Contract):
+    run_id: str
+    slot: str
+    failed_at: str = Field(description="UTC ISO instant the failed slot was due.")
+    category: ScheduleFailureCategory
+
+
+class RefreshScheduleView(Contract):
+    """Admin schedule settings; times are Toronto wall-clock HH:MM, sorted."""
+
+    timezone: Literal["America/Toronto"] = "America/Toronto"
+    times: list[str]
+    enabled: bool = Field(description="Admin toggle persisted in the database.")
+    server_enabled: bool = Field(
+        description="WW_ENABLE_REFRESH=1 and WW_ENABLE_SCHEDULE=1 on this server."
+    )
+    next_run_at: str | None = Field(
+        description="UTC ISO next run; null unless both switches are on."
+    )
+    min_interval_minutes: int = Field(ge=0)
+    max_times: int = Field(ge=1)
+    last: list[ScheduleSlotView] = Field(description="Most recent slot decisions.")
+    failure: ScheduleFailureView | None = Field(
+        description="Scheduled-run failure that turned scheduling off, if any."
+    )
