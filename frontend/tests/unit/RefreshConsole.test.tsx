@@ -4,7 +4,7 @@ import { RefreshConsole } from '../../src/app/RefreshActivity';
 
 // Generic disclosure content, not log/API fixtures.
 describe('compact refresh console', () => {
-  it('previews three lines without Button styling, expands and collapses', () => {
+  it('stays fully collapsed without Button styling until opened', () => {
     render(
       <RefreshConsole
         entries={['one', 'two', 'three', 'four'].map((key) => ({
@@ -17,9 +17,9 @@ describe('compact refresh console', () => {
     );
     const trigger = screen.getByRole('button', { name: 'Expand refresh log' });
     expect(trigger).not.toHaveClass('button');
-    expect(within(trigger).queryByText('one')).not.toBeInTheDocument();
-    for (const line of ['two', 'three', 'four'])
-      expect(within(trigger).getByText(line)).toBeInTheDocument();
+    expect(screen.queryByRole('log')).not.toBeInTheDocument();
+    for (const line of ['one', 'two', 'three', 'four'])
+      expect(within(trigger).queryByText(line)).not.toBeInTheDocument();
     fireEvent.click(trigger);
     expect(screen.getByRole('log', { name: 'Refresh log' })).toBeVisible();
     expect(within(screen.getByRole('log')).getByText('one')).toBeVisible();

@@ -63,21 +63,6 @@ export const RefreshConsole = memo(function RefreshConsole({
                     </Typography>
                     <Disclosure.Indicator />
                   </span>
-                  {!expanded && (
-                    <span className="log-preview-lines">
-                      {entries.length ? (
-                        entries.slice(-3).map((entry) => (
-                          <span className="log-preview-line" key={entry.key}>
-                            {entry.content}
-                          </span>
-                        ))
-                      ) : (
-                        <Typography type="code">
-                          Waiting for refresh progress.
-                        </Typography>
-                      )}
-                    </span>
-                  )}
                 </span>
               </Disclosure.Trigger>
             </span>

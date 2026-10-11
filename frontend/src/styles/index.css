@@ -398,18 +398,6 @@ body {
   max-width: 100%;
   text-align: start;
 }
-.log-preview-lines {
-  display: block;
-  height: 4.5rem;
-  overflow: hidden;
-}
-.log-preview-line {
-  display: block;
-  line-height: 1.5rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .log-window {
   height: min(18rem, 25dvh);
   max-height: min(18rem, 25dvh);
