@@ -84,7 +84,7 @@ docker compose --env-file /operator/private/production.env --profile prod run --
 docker compose --env-file /operator/private/production.env --profile prod start backend
 ```
 
-The command first takes the provider lease and refuses (exit 1, nothing changed) while any live refresh or OpenAI extraction owns the database. It marks every `running` collection run `interrupted` and its open content/detail attempts `interrupted` with category `cancelled`, then prints only the two counts as JSON. It never logs in, fetches, resumes, normalizes or invokes OpenAI, and the normal 300-second cooldown then applies. An analysis job left `running` by the same crash is reported `interrupted` after its lease expires and still needs an explicit `inference resume` (see the README). Never hand-edit SQLite for this.
+The command first takes the provider lease and refuses (exit 1, nothing changed) while any live refresh or OpenAI extraction owns the database. It marks every `running` collection run `interrupted` and its open content/detail attempts `interrupted` with category `cancelled`, then prints only the two counts as JSON. It never logs in, fetches, resumes, normalizes or invokes OpenAI, and the normal post-run minimum interval then applies. An analysis job left `running` by the same crash is reported `interrupted` after its lease expires and still needs an explicit `inference resume` (see the README). Never hand-edit SQLite for this.
 
 ## Staged operator flow (parent gates)
 
@@ -115,11 +115,11 @@ Saved-only `node scripts/extract.mjs` / `node scripts/country.mjs` are explicit 
 
 Compose passes three server-only pacing variables with conservative defaults (`${VAR:-default}`); set them in the explicit `--env-file` only to make pacing _stricter_:
 
-| Variable                          | Default | Allowed | Effect                                                                      |
-| --------------------------------- | ------- | ------- | --------------------------------------------------------------------------- |
-| `WW_REFRESH_REQUEST_CAP`          | 400     | 1–2000  | WaterlooWorks requests per refresh; reaching it finishes the run partially. |
-| `WW_REFRESH_DAILY_REQUEST_CAP`    | 1200    | 1–5000  | Requests per rolling 24 hours across runs (stored in SQLite).               |
-| `WW_REFRESH_MIN_INTERVAL_MINUTES` | 30      | 0–1440  | Cooldown after the previous run finishes before a new manual refresh.       |
+| Variable                          | Default | Allowed | Effect                                                                                             |
+| --------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `WW_REFRESH_REQUEST_CAP`          | 400     | 1–2000  | WaterlooWorks requests per refresh; reaching it finishes the run partially.                        |
+| `WW_REFRESH_DAILY_REQUEST_CAP`    | 1200    | 1–5000  | Requests per rolling 24 hours across runs (stored in SQLite).                                      |
+| `WW_REFRESH_MIN_INTERVAL_MINUTES` | 30      | 0–1440  | Interval after the previous run finishes: scheduled slots skip; manual refresh needs confirmation. |
 
 An empty, non-integer or out-of-range value stops the API at startup with a fixed message; nothing falls back to unlimited. Gaps (3–6 s), rests (45–120 s every 20–30 requests) and ban-risk blocks (429: max(Retry-After, 1 h); 401/403, sign-in redirects or challenge pages, a failed transient retry: 6 h) are fixed in code. Clear a block only after checking the account in a browser: stop the API, run `python -m waterlooworks_flash_next.rate_limit clear --database <path>`, then start it. Schema v15 adds the additive `collection_run_pacing` table; test `open_database(copy_path).close()` on a backup first. See [scraping workflow](scraping-workflow.md#conservative-waterlooworks-pacing).
 
