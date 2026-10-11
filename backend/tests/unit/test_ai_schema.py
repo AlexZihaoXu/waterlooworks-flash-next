@@ -82,7 +82,7 @@ def test_deployed_v15_pacing_database_migrates_to_v16_with_row_verification(
         )
     }
     connection.close()
-    connection = open_database(path)
+    connection = _open_at(path, monkeypatch, 16)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
     assert _rows(connection, "inference_jobs") == jobs
     assert _rows(connection, "collection_run_pacing") == pacing
@@ -100,14 +100,14 @@ def test_deployed_v15_pacing_database_migrates_to_v16_with_row_verification(
 def test_fresh_and_v14_databases_reach_v16_through_pacing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fresh = open_database(tmp_path / "fresh.sqlite3")
+    fresh = _open_at(tmp_path / "fresh.sqlite3", monkeypatch, 16)
     assert fresh.execute("PRAGMA user_version").fetchone()[0] == 16
     for table in ("collection_run_pacing", "ai_settings", "ai_credentials"):
         assert fresh.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
     fresh.close()
     path = tmp_path / "legacy.sqlite3"
     _open_at(path, monkeypatch, 14).close()
-    connection = open_database(path)  # v14 -> v15 (pacing) -> v16 (Pi)
+    connection = _open_at(path, monkeypatch, 16)  # v14 -> v15 -> v16 (Pi)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
     assert connection.execute("SELECT count(*) FROM collection_run_pacing").fetchone()
     connection.close()

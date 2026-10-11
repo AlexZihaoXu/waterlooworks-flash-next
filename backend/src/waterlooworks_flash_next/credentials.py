@@ -250,7 +250,7 @@ def initialize_key(env_path: Path, database_path: Path) -> None:
             database_path.resolve().as_uri() + "?mode=ro", uri=True
         )
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (12, 13, 14, 15, 16):
+        if version not in (12, 13, 14, 15, 16, 17):
             raise ValueError
         if connection.execute("SELECT 1 FROM waterlooworks_credentials").fetchone():
             raise ValueError
