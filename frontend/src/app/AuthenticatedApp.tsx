@@ -43,6 +43,8 @@ import { useCompactLayout } from '../lib/useCompactLayout';
 import { App } from './App';
 import { AdminSettingsDialog } from './AdminSettingsDialog';
 import { AISettingsPanel } from './AISettingsPanel';
+import { RefreshScheduleTab } from './RefreshScheduleTab';
+import { useRefreshSchedule } from '../lib/useRefreshSchedule';
 
 function localTime(value: string | null): string | null {
   return value === null ? null : new Date(value).toLocaleString();
@@ -75,7 +77,8 @@ export function RefreshPacingCard({
           {pacing.max_gap_seconds} s after the previous one, rests{' '}
           {pacing.rest_min_seconds}–{pacing.rest_max_seconds} s every{' '}
           {pacing.rest_every_min}–{pacing.rest_every_max} requests, and never
-          runs in parallel. Refreshes are manual only.
+          runs in parallel. Scheduled refreshes (Admin settings › Schedule)
+          follow the same rules.
         </Card.Description>
       </Card.Header>
       <Card.Content>
@@ -348,7 +351,8 @@ export function AccountMenu({
   );
 }
 
-export type AdminSettingsHandle = { open: () => void };
+export type AdminSettingsTab = 'refresh' | 'schedule';
+export type AdminSettingsHandle = { open: (tab?: AdminSettingsTab) => void };
 
 // Official v3 content in the owner-approved bounded native dialog shell.
 function AdminAccountMenu({
@@ -374,12 +378,16 @@ function AdminAccountMenu({
   );
   const refresh = useAdminRefreshStatus(settings.isOpen, uid);
   const ai = useAISettings(settings.isOpen && selectedTab === 'ai', uid);
-  // Workspace Duo notice: open straight to the Refresh tab. Never reopen an
-  // open dialog, because opening clears and rereads credential state.
+  const schedule = useRefreshSchedule(
+    settings.isOpen && selectedTab === 'schedule',
+    uid,
+  );
+  // Workspace notices open straight to the Refresh (Duo) or Schedule tab.
+  // Never reopen an open dialog: opening clears and rereads credential state.
   useImperativeHandle(settingsRef, () => ({
-    open: () => {
+    open: (tab: AdminSettingsTab = 'refresh') => {
       if (settings.isOpen) return;
-      setSelectedTab('refresh');
+      setSelectedTab(tab);
       settings.setOpen(true);
     },
   }));
@@ -519,6 +527,10 @@ function AdminAccountMenu({
                 </Tabs.Tab>
                 <Tabs.Tab id="refresh">
                   Refresh
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="schedule">
+                  Schedule
                   <Tabs.Indicator />
                 </Tabs.Tab>
               </Tabs.List>
@@ -920,6 +932,9 @@ function AdminAccountMenu({
                 <RefreshPacingCard pacing={refresh.pacing} />
               </div>
             </Tabs.Panel>
+            <Tabs.Panel id="schedule">
+              <RefreshScheduleTab schedule={schedule} compact={compact} />
+            </Tabs.Panel>
           </Tabs>
         </AdminSettingsDialog>
       )}
@@ -936,7 +951,7 @@ export function AuthenticatedApp() {
   const profile = useAccountProfile(session?.uid ?? null);
   const adminSettings = useRef<AdminSettingsHandle>(null);
   const openAdminSettings = useCallback(
-    () => adminSettings.current?.open(),
+    (tab?: AdminSettingsTab) => adminSettings.current?.open(tab),
     [],
   );
   return (

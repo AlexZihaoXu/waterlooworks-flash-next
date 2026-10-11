@@ -1,5 +1,4 @@
 import {
-  createContext,
   memo,
   use,
   useCallback,
@@ -63,7 +62,6 @@ import {
   useTheme,
 } from '@heroui/react';
 import {
-  displayTime,
   displayValue,
   formatCount,
   emptyFilters,
@@ -79,6 +77,9 @@ import {
 } from '../lib/workspace';
 import { useWorkspace } from '../lib/useWorkspace';
 import { RefreshActivity } from './RefreshActivity';
+import { RefreshContext } from '../lib/refreshContext';
+import { torontoDateTime } from '../lib/refreshSchedule';
+import { RefreshTimes } from './RefreshTimes';
 import { refreshWaitText } from '../lib/refreshProgress';
 import { refreshInterruption, refreshRunning } from '../lib/refreshState';
 import {
@@ -117,11 +118,6 @@ const notice = {
   ],
 } as const;
 
-// Live refresh snapshots change about once a second during a refresh. Only the
-// refresh presentation subscribes to them; the memoized browser receives
-// primitive summaries so the posting grid does not re-render on every tick.
-const RefreshContext = createContext<RefreshSnapshot | null>(null);
-
 function LiveRefreshActivity() {
   return <RefreshActivity refresh={use(RefreshContext)} />;
 }
@@ -138,8 +134,8 @@ export function App({
   refresh?: RefreshSnapshot | null;
   signedOutContent?: ReactNode;
   account?: ReactNode;
-  /** Admin only: opens Admin settings (Refresh tab) from workspace notices. */
-  onOpenAdminSettings?: () => void;
+  /** Admin only: opens Admin settings (Refresh or Schedule tab). */
+  onOpenAdminSettings?: (tab?: 'refresh' | 'schedule') => void;
 }) {
   const signedOut = signedOutContent !== undefined;
   const live = suppliedState === undefined;
@@ -174,6 +170,8 @@ export function App({
           refreshRunning(refresh) && refresh?.stage === 'authentication'
         }
         onOpenAdminSettings={onOpenAdminSettings}
+        nextScheduledAt={refresh?.next_scheduled_at ?? null}
+        scheduledFailedAt={refresh?.scheduled_failure?.failed_at ?? null}
         requesting={remote.requesting}
         streamConnected={remote.streamConnected}
         streamInterrupted={remote.streamInterrupted}
@@ -203,6 +201,8 @@ const WorkspaceView = memo(function WorkspaceView({
   signedOutContent,
   account,
   onOpenAdminSettings,
+  nextScheduledAt = null,
+  scheduledFailedAt = null,
 }: {
   state: WorkspaceState;
   live: boolean;
@@ -219,7 +219,10 @@ const WorkspaceView = memo(function WorkspaceView({
   refreshRetryAfter: () => number;
   signedOutContent?: ReactNode;
   account?: ReactNode;
-  onOpenAdminSettings?: () => void;
+  onOpenAdminSettings?: (tab?: 'refresh' | 'schedule') => void;
+  /** Member-safe schedule summary from the shared refresh snapshot. */
+  nextScheduledAt?: string | null;
+  scheduledFailedAt?: string | null;
 }) {
   const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
@@ -1309,13 +1312,18 @@ const WorkspaceView = memo(function WorkspaceView({
                 WaterlooWorks Flash Next
               </Typography>
             </div>
-            <Typography type="body-xs" color="muted">
-              {lastObserved
-                ? `Updated ${displayTime(lastObserved)}`
-                : loading
-                  ? '\u00a0'
-                  : 'Find your next role.'}
-            </Typography>
+            {connected ? (
+              <div className="refresh-times">
+                <RefreshTimes
+                  lastRefreshed={lastObserved}
+                  nextScheduled={nextScheduledAt}
+                />
+              </div>
+            ) : (
+              <Typography type="body-xs" color="muted">
+                {loading ? '\u00a0' : 'Find your next role.'}
+              </Typography>
+            )}
           </div>
           <div className="stack-small">
             <div className="inline-layout header-actions">
@@ -1406,9 +1414,35 @@ const WorkspaceView = memo(function WorkspaceView({
               and approve only the refresh you requested.
             </Alert.Description>
           </Alert.Content>
-          <Button size="sm" variant="secondary" onPress={onOpenAdminSettings}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={() => onOpenAdminSettings()}
+          >
             Open Admin settings
           </Button>
+        </Alert>
+      )}
+      {scheduledFailedAt && !signedOut && (
+        <Alert status="danger">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>
+              Scheduled refresh at {torontoDateTime(scheduledFailedAt)} failed.
+              {onOpenAdminSettings
+                ? ' Scheduling was turned off.'
+                : ' Please ask an admin to check the log.'}
+            </Alert.Title>
+          </Alert.Content>
+          {onOpenAdminSettings && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onPress={() => onOpenAdminSettings('schedule')}
+            >
+              Open Schedule settings
+            </Button>
+          )}
         </Alert>
       )}
     </>
@@ -1772,12 +1806,20 @@ const WorkspaceView = memo(function WorkspaceView({
             !signedOut &&
             (compact ? (
               <>
-                <div className="results-caption">
+                <div className="results-caption refresh-times">
                   <Typography type="body-xs" color="muted" role="status">
                     {connected
-                      ? `${countText} · Page ${currentPage}/${pages}${lastObserved ? ` · Updated ${displayTime(lastObserved)}` : ''}`
+                      ? `${countText} · Page ${currentPage}/${pages}`
                       : 'Waiting for saved postings'}
                   </Typography>
+                  {/* Outside the status region: the relative label ticks. */}
+                  {connected && (
+                    <RefreshTimes
+                      narrow
+                      lastRefreshed={lastObserved}
+                      nextScheduled={nextScheduledAt}
+                    />
+                  )}
                 </div>
                 {/* Phones: a floating pill (approved outer panel) with 44px
                     HeroUI buttons; the list reserves space beneath it. */}

@@ -802,3 +802,36 @@ body {
     padding: 0;
   }
 }
+
+/* Admin Schedule tab: native layout around HeroUI components only. The
+   flex column bounds the HeroUI ScrollShadow (its overflow lets it shrink). */
+.schedule-times {
+  display: flex;
+  flex-direction: column;
+  max-height: 15rem;
+}
+.schedule-time-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.schedule-time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-block: 0.125rem;
+}
+.schedule-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+.refresh-times {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
