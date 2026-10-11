@@ -58,6 +58,7 @@ services:
       WW_BROWSER_PROFILE: /app/browser-profile
       WW_BROWSER_HEADLESS: '1'
       WW_ENABLE_REFRESH: ${WW_ENABLE_REFRESH:-0}
+      WW_ENABLE_SCHEDULE: ${WW_ENABLE_SCHEDULE:-0}
       WW_DETAIL_LIMIT: ${WW_DETAIL_LIMIT:-12}
       WW_DETAIL_FULL_REFETCH: ${WW_DETAIL_FULL_REFETCH:-0}
       # Conservative WaterlooWorks pacing; invalid values fail startup closed.
