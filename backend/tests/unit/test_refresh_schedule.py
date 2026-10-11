@@ -211,6 +211,9 @@ def test_toggle_records_enable_time_and_clears_failure(tmp_path: Path) -> None:
     state = store.state()
     assert state.enabled is True and state.enabled_at == at
     assert state.failure is None
+    # A repeated "on" never moves the enable time (it would hide a due slot).
+    store.set_enabled(True, at + timedelta(minutes=5))
+    assert store.state().enabled_at == at
     store.set_enabled(False, at + timedelta(hours=1))
     assert store.state().enabled is False
     assert store.state().enabled_at is None

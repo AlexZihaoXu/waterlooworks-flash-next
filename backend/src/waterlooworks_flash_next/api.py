@@ -1,6 +1,7 @@
 """Google-authenticated shared API; admin-only explicit collection."""
 
 import asyncio
+import contextlib
 import os
 import sqlite3
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -78,6 +79,8 @@ from waterlooworks_flash_next.refresh import (
     configured_detail_limit,
     configured_full_refetch,
 )
+from waterlooworks_flash_next.refresh_schedule import RefreshScheduler, ScheduleStore
+from waterlooworks_flash_next.refresh_schedule_api import install_refresh_schedule
 from waterlooworks_flash_next.shutdown import ShutdownNotice
 from waterlooworks_flash_next.snapshot_cache import SnapshotCache
 from waterlooworks_flash_next.targeted_disciplines import read_targeted_disciplines
@@ -92,6 +95,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     # Explicit database paths never enable collection through environment inheritance.
     # Google authentication remains mandatory regardless of this collection setting.
     enabled = database_path is None and os.environ.get("WW_ENABLE_REFRESH") == "1"
+    # Automatic scheduled refreshes need a second, explicit server gate.
+    scheduling = enabled and os.environ.get("WW_ENABLE_SCHEDULE") == "1"
     root = Path(os.environ.get("WW_PROJECT_ROOT", str(Path.cwd())))
     detail_limit = (
         configured_detail_limit(os.environ.get("WW_DETAIL_LIMIT"))
@@ -114,6 +119,14 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         full_refetch=full_refetch,
         pacing=pacing,
     )
+    scheduler = RefreshScheduler(
+        ScheduleStore(path),
+        service,
+        active=scheduling,
+        min_interval_minutes=pacing.min_interval_minutes,
+    )
+    # Scheduled runs that fail sign-in or hit a ban-risk signal turn it off.
+    service.on_finished = scheduler.run_finished
 
     # Interactive docs load third-party CDN script on the app origin and expose
     # the API surface unauthenticated, so they are opt-in for local work only.
@@ -131,6 +144,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         app.state.transport = AuthTransport.from_environment()
         open_database(path).close()
         service.restore()
+        scheduler.publish()
+        app.state.refresh_scheduler_task = (
+            asyncio.create_task(scheduler.run(), name="refresh-scheduler")
+            if scheduling
+            else None
+        )
         # uvicorn runs the lifespan shutdown only after open responses finish, and
         # SSE streams never finish on their own: flag the worker and end streams as
         # soon as the signal arrives instead.
@@ -139,6 +158,11 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             yield
         finally:
             uninstall()
+            task = app.state.refresh_scheduler_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             # Cooperative stop: the worker finalizes its run as interrupted at the
             # next page/posting/analysis-batch checkpoint before SIGKILL.
             await asyncio.to_thread(service.request_stop)
@@ -177,6 +201,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     install_openai_settings(app, path, verifier)
     install_openai_usage(app, path)
     install_ai_settings(app, path)
+    install_refresh_schedule(app, scheduler)
     protected = APIRouter(dependencies=[Depends(require_session)])
 
     @app.exception_handler(RequestValidationError)

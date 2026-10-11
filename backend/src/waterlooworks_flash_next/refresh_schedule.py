@@ -286,7 +286,10 @@ class ScheduleStore:
         )
 
     def set_enabled(self, enabled: bool, now: datetime | None = None) -> None:
-        """Turning on clears the failure banner (history stays in the slots)."""
+        """Turning on clears the failure banner (history stays in the slots).
+
+        Unchanged values are a no-op so a repeated "on" never moves enabled_at.
+        """
         at = _iso(now or datetime.now(UTC))
         connection = self._connect()
         try:
@@ -297,7 +300,8 @@ class ScheduleStore:
                     "ELSE failed_run_id END, failed_slot=CASE WHEN ? THEN NULL "
                     "ELSE failed_slot END, failed_at=CASE WHEN ? THEN NULL "
                     "ELSE failed_at END, failure_category=CASE WHEN ? THEN NULL "
-                    "ELSE failure_category END, changed_at=? WHERE id=1",
+                    "ELSE failure_category END, changed_at=? "
+                    "WHERE id=1 AND enabled<>?",
                     (
                         int(enabled),
                         at if enabled else None,
@@ -307,6 +311,7 @@ class ScheduleStore:
                         enabled,
                         enabled,
                         at,
+                        int(enabled),
                     ),
                 )
         finally:

@@ -383,6 +383,42 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/admin/refresh-schedule': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Schedule */
+    get: operations['getRefreshSchedule'];
+    put?: never;
+    /** Add Time */
+    post: operations['addRefreshScheduleTime'];
+    /** Remove Time */
+    delete: operations['removeRefreshScheduleTime'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/admin/refresh-schedule/enabled': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Set Enabled */
+    put: operations['setRefreshScheduleEnabled'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/admin/refresh-auth': {
     parameters: {
       query?: never;
@@ -1500,6 +1536,46 @@ export interface components {
      * @description An explicit empty object starts one guarded listing-then-content refresh.
      */
     RefreshRequest: Record<string, never>;
+    /**
+     * RefreshScheduleView
+     * @description Admin schedule settings; times are Toronto wall-clock HH:MM, sorted.
+     */
+    RefreshScheduleView: {
+      /**
+       * Timezone
+       * @default America/Toronto
+       * @constant
+       */
+      timezone: 'America/Toronto';
+      /** Times */
+      times: string[];
+      /**
+       * Enabled
+       * @description Admin toggle persisted in the database.
+       */
+      enabled: boolean;
+      /**
+       * Server Enabled
+       * @description WW_ENABLE_REFRESH=1 and WW_ENABLE_SCHEDULE=1 on this server.
+       */
+      server_enabled: boolean;
+      /**
+       * Next Run At
+       * @description UTC ISO next run; null unless both switches are on.
+       */
+      next_run_at: string | null;
+      /** Min Interval Minutes */
+      min_interval_minutes: number;
+      /** Max Times */
+      max_times: number;
+      /**
+       * Last
+       * @description Most recent slot decisions.
+       */
+      last: components['schemas']['ScheduleSlotView'][];
+      /** @description Scheduled-run failure that turned scheduling off, if any. */
+      failure: components['schemas']['ScheduleFailureView'] | null;
+    };
     /** RefreshSnapshot */
     RefreshSnapshot: {
       /** Run Id */
@@ -1652,6 +1728,13 @@ export interface components {
        * @description Bounded to the latest 200 sanitized events.
        */
       logs: components['schemas']['RefreshLog'][];
+      /**
+       * Next Scheduled At
+       * @description UTC ISO time of the next scheduled refresh; null when scheduling is off, has no times or is inactive on this server.
+       */
+      next_scheduled_at: string | null;
+      /** @description Set while scheduling is off after a failed scheduled refresh. */
+      scheduled_failure: components['schemas']['ScheduledFailureNotice'] | null;
     };
     /** RevealChallenge */
     RevealChallenge: {
@@ -1679,6 +1762,90 @@ export interface components {
     RevealedKey: {
       /** Api Key */
       api_key: string;
+    };
+    /** ScheduleFailureView */
+    ScheduleFailureView: {
+      /** Run Id */
+      run_id: string;
+      /** Slot */
+      slot: string;
+      /**
+       * Failed At
+       * @description UTC ISO instant the failed slot was due.
+       */
+      failed_at: string;
+      /**
+       * Category
+       * @enum {string}
+       */
+      category:
+        'sign_in' | 'authentication' | 'rate_limit' | 'redirect' | 'ban_risk';
+    };
+    /** ScheduleSlotView */
+    ScheduleSlotView: {
+      /**
+       * Slot
+       * @description Toronto local date and HH:MM.
+       */
+      slot: string;
+      /**
+       * Due At
+       * @description UTC ISO instant the slot was due.
+       */
+      due_at: string;
+      /**
+       * Outcome
+       * @enum {string}
+       */
+      outcome:
+        | 'claimed'
+        | 'started'
+        | 'skipped_running'
+        | 'skipped_blocked'
+        | 'skipped_disabled'
+        | 'failed_to_start';
+      /** Run Id */
+      run_id: string | null;
+      /** Failure Category */
+      failure_category:
+        | (
+            | 'sign_in'
+            | 'authentication'
+            | 'rate_limit'
+            | 'redirect'
+            | 'ban_risk'
+          )
+        | null;
+    };
+    /**
+     * ScheduleTimeRequest
+     * @description One Toronto wall-clock time, 24-hour HH:MM.
+     */
+    ScheduleTimeRequest: {
+      /** Time */
+      time: string;
+    };
+    /** ScheduleToggleRequest */
+    ScheduleToggleRequest: {
+      /** Enabled */
+      enabled: boolean;
+    };
+    /**
+     * ScheduledFailureNotice
+     * @description Member-safe notice: a scheduled refresh failed (no category or run).
+     */
+    ScheduledFailureNotice: {
+      /**
+       * Failed
+       * @default true
+       * @constant
+       */
+      failed: true;
+      /**
+       * Failed At
+       * @description UTC ISO time the failed slot was due.
+       */
+      failed_at: string;
     };
     /** SessionIdentity */
     SessionIdentity: {
@@ -3367,6 +3534,278 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['LoginResponse'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getRefreshSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RefreshScheduleView'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  addRefreshScheduleTime: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduleTimeRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RefreshScheduleView'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  removeRefreshScheduleTime: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduleTimeRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RefreshScheduleView'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setRefreshScheduleEnabled: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ScheduleToggleRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RefreshScheduleView'];
         };
       };
       /** @description Unauthorized */

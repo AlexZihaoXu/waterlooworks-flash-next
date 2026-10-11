@@ -1942,6 +1942,324 @@
         ]
       }
     },
+    "/api/admin/refresh-schedule": {
+      "get": {
+        "summary": "Get Schedule",
+        "operationId": "getRefreshSchedule",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshScheduleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Add Time",
+        "operationId": "addRefreshScheduleTime",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshScheduleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Remove Time",
+        "operationId": "removeRefreshScheduleTime",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshScheduleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      }
+    },
+    "/api/admin/refresh-schedule/enabled": {
+      "put": {
+        "summary": "Set Enabled",
+        "operationId": "setRefreshScheduleEnabled",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshScheduleView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      }
+    },
     "/api/admin/refresh-auth": {
       "get": {
         "summary": "Refresh Auth",
@@ -5855,6 +6173,89 @@
         "title": "RefreshRequest",
         "description": "An explicit empty object starts one guarded listing-then-content refresh."
       },
+      "RefreshScheduleView": {
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "const": "America/Toronto",
+            "title": "Timezone",
+            "default": "America/Toronto"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Times"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Admin toggle persisted in the database."
+          },
+          "server_enabled": {
+            "type": "boolean",
+            "title": "Server Enabled",
+            "description": "WW_ENABLE_REFRESH=1 and WW_ENABLE_SCHEDULE=1 on this server."
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At",
+            "description": "UTC ISO next run; null unless both switches are on."
+          },
+          "min_interval_minutes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Min Interval Minutes"
+          },
+          "max_times": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Times"
+          },
+          "last": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleSlotView"
+            },
+            "type": "array",
+            "title": "Last",
+            "description": "Most recent slot decisions."
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleFailureView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scheduled-run failure that turned scheduling off, if any."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "timezone",
+          "times",
+          "enabled",
+          "server_enabled",
+          "next_run_at",
+          "min_interval_minutes",
+          "max_times",
+          "last",
+          "failure"
+        ],
+        "title": "RefreshScheduleView",
+        "description": "Admin schedule settings; times are Toronto wall-clock HH:MM, sorted."
+      },
       "RefreshSnapshot": {
         "properties": {
           "run_id": {
@@ -6095,6 +6496,29 @@
             "type": "array",
             "title": "Logs",
             "description": "Bounded to the latest 200 sanitized events."
+          },
+          "next_scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scheduled At",
+            "description": "UTC ISO time of the next scheduled refresh; null when scheduling is off, has no times or is inactive on this server."
+          },
+          "scheduled_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScheduledFailureNotice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set while scheduling is off after a failed scheduled refresh."
           }
         },
         "additionalProperties": false,
@@ -6130,7 +6554,9 @@
           "analysis_cache_hits",
           "analysis_provider",
           "eta_seconds",
-          "logs"
+          "logs",
+          "next_scheduled_at",
+          "scheduled_failure"
         ],
         "title": "RefreshSnapshot"
       },
@@ -6187,6 +6613,144 @@
         "type": "object",
         "required": ["api_key"],
         "title": "RevealedKey"
+      },
+      "ScheduleFailureView": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "slot": {
+            "type": "string",
+            "title": "Slot"
+          },
+          "failed_at": {
+            "type": "string",
+            "title": "Failed At",
+            "description": "UTC ISO instant the failed slot was due."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "sign_in",
+              "authentication",
+              "rate_limit",
+              "redirect",
+              "ban_risk"
+            ],
+            "title": "Category"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["run_id", "slot", "failed_at", "category"],
+        "title": "ScheduleFailureView"
+      },
+      "ScheduleSlotView": {
+        "properties": {
+          "slot": {
+            "type": "string",
+            "title": "Slot",
+            "description": "Toronto local date and HH:MM."
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At",
+            "description": "UTC ISO instant the slot was due."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "claimed",
+              "started",
+              "skipped_running",
+              "skipped_blocked",
+              "skipped_disabled",
+              "failed_to_start"
+            ],
+            "title": "Outcome"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sign_in",
+                  "authentication",
+                  "rate_limit",
+                  "redirect",
+                  "ban_risk"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["slot", "due_at", "outcome", "run_id", "failure_category"],
+        "title": "ScheduleSlotView"
+      },
+      "ScheduleTimeRequest": {
+        "properties": {
+          "time": {
+            "type": "string",
+            "maxLength": 5,
+            "minLength": 5,
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["time"],
+        "title": "ScheduleTimeRequest",
+        "description": "One Toronto wall-clock time, 24-hour HH:MM."
+      },
+      "ScheduleToggleRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["enabled"],
+        "title": "ScheduleToggleRequest"
+      },
+      "ScheduledFailureNotice": {
+        "properties": {
+          "failed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Failed",
+            "default": true
+          },
+          "failed_at": {
+            "type": "string",
+            "title": "Failed At",
+            "description": "UTC ISO time the failed slot was due."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["failed", "failed_at"],
+        "title": "ScheduledFailureNotice",
+        "description": "Member-safe notice: a scheduled refresh failed (no category or run)."
       },
       "SessionIdentity": {
         "properties": {

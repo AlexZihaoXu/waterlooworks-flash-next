@@ -37,6 +37,8 @@ export function refreshSnapshot(
     analysis_provider: null,
     eta_seconds: null,
     logs: [],
+    next_scheduled_at: null,
+    scheduled_failure: null,
     ...overrides,
   };
 }

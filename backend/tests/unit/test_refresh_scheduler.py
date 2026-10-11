@@ -134,6 +134,7 @@ def test_disabled_toggle_or_inactive_server_never_fires(tmp_path: Path) -> None:
 
 def test_reenabling_after_a_slot_came_due_does_not_fire_it(tmp_path: Path) -> None:
     instance, service, clock, store = scheduler(tmp_path)
+    store.set_enabled(False, utc("2026-07-01 11:20"))
     store.set_enabled(True, utc("2026-07-01 11:31"))
     clock.now = utc("2026-07-01 11:32")
     instance.tick()
