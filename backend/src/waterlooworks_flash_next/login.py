@@ -4,6 +4,7 @@ Never enable Playwright debug logging, tracing, or screenshots for this flow.
 """
 
 import os
+import re
 import stat
 import time
 from collections.abc import Callable
@@ -175,16 +176,20 @@ def secure_profile_directory(profile_path: Path) -> None:
         raise LoginFlowError("Browser profile directory is unsafe.") from None
 
 
+# Every cookie domain except duosecurity.com and its subdomains.
+_NOT_DUO_DOMAIN = re.compile(r"^(?!(?:.*\.)?duosecurity\.com$)")
+
+
 def close_browser_context(context: BrowserContext) -> None:
     """Drop session cookies, then close; clearing failures never block closing.
 
     Cookies are cleared on every run so a lingering ADFS/WaterlooWorks session does
-    not outlive the bounded login. Device-trust cookies are discarded as well, so a
-    later run may need a fresh Duo approval.
+    not outlive the bounded login. Only Duo's remembered-device cookies survive in
+    the private profile, so later runs skip the Duo push while the trust lasts.
     """
     try:
         try:
-            context.clear_cookies()
+            context.clear_cookies(domain=_NOT_DUO_DOMAIN)
         except Exception:
             pass
     finally:

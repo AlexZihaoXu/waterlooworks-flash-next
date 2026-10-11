@@ -1,6 +1,7 @@
 """Owner/mode enforcement on key files, env provisioning, databases and profiles."""
 
 import os
+import re
 import sqlite3
 import stat
 from pathlib import Path
@@ -222,8 +223,9 @@ class RecordingContext:
         self.events: list[str] = []
         self.fail_clear = fail_clear
 
-    def clear_cookies(self) -> None:
+    def clear_cookies(self, **filters: object) -> None:
         self.events.append("clear_cookies")
+        self.filters = filters
         if self.fail_clear:
             raise RuntimeError("diagnostics must not escape")
 
@@ -253,5 +255,18 @@ def test_session_close_clears_cookies_before_closing_even_if_clearing_fails(
     session.close()
     assert context.events == ["clear_cookies", "close"]
     assert playwright.stopped
+    # Session cookies go; only Duo's remembered-device state survives.
+    domain = context.filters["domain"]
+    assert isinstance(domain, re.Pattern)
+    for cleared in (
+        "waterlooworks.uwaterloo.ca",
+        ".uwaterloo.ca",
+        "adfs.uwaterloo.ca",
+        "duosecurity.com.example",
+        "notduosecurity.com",
+    ):
+        assert domain.search(cleared)
+    for kept in ("api-1a2b3c4d.duosecurity.com", ".duosecurity.com", "duosecurity.com"):
+        assert not domain.search(kept)
     session.close()
     assert context.events == ["clear_cookies", "close"]

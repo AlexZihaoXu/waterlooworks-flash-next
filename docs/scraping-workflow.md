@@ -10,7 +10,7 @@ Never view the obsolete credentials file, backend `.env`, private database, or s
 
 B2 preserves the observed DOM branches but replaces console codes/process exits with a bounded memory-only admin channel and safe exceptions. Production headless SSO has not been live-validated.
 
-- Credential entry is required again even with the saved browser profile. Browser cookies are now cleared every time the login context closes (and the profile directory is forced to `0700`), so the retained profile no longer keeps a lingering session; a Duo device-trust cookie is discarded too and a later run may need a fresh Duo approval.
+- Credential entry is required again even with the saved browser profile. Browser cookies are cleared every time the login context closes (and the profile directory is forced to `0700`), so the retained profile keeps no lingering ADFS/WaterlooWorks session. Only `duosecurity.com` cookies survive, so Duo's remembered-device trust skips the Duo push on later runs until that trust expires.
 - Sign in can lead to a Duo code challenge. The code may appear after the prompt; DOM-only polling successfully detected it and logged it once.
 - Duo can show **Request timed out / Push timed out**. A fresh-profile run verified automatic detection, ERROR, three-second wait, browser closure, and exit 1 without retry.
 - Entering a wrong code in Duo Mobile produced **Invalid verification code**, alongside **Try again** and **Other options**. The new handler was then verified on that same invalid-code page: ERROR, three-second wait, browser closure, and exit 1 without retry. It runs before code detection on every observer poll; the whole login was not repeated for this handler check.
