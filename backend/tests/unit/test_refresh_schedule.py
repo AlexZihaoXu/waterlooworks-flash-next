@@ -30,8 +30,12 @@ def utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
 
 
-def test_fresh_database_reaches_v17_with_empty_schedule(tmp_path: Path) -> None:
-    connection = open_database(tmp_path / "fresh.sqlite3")
+def test_fresh_database_reaches_v17_with_empty_schedule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with monkeypatch.context() as pinned:
+        pinned.setattr(database, "SCHEMA_VERSION", 17)
+        connection = open_database(tmp_path / "fresh.sqlite3")
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 17
     for table in ("refresh_schedule_times", "refresh_schedule_slots"):
         assert connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
@@ -56,7 +60,9 @@ def test_v16_database_migrates_to_v17_preserving_rows(
         for row in connection.execute("SELECT type,name,sql FROM sqlite_master")
     }
     connection.close()
-    connection = open_database(path)
+    with monkeypatch.context() as pinned:
+        pinned.setattr(database, "SCHEMA_VERSION", 17)
+        connection = open_database(path)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 17
     assert objects <= {
         tuple(row)

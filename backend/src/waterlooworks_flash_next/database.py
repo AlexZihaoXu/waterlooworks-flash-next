@@ -1,4 +1,4 @@
-"""SQLite schema v8 for source history and explicit offline analysis.
+"""SQLite schema for source history, explicit offline analysis and app access.
 
 No network calls, credential loading, or collection writes happen on import.
 """
@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from waterlooworks_flash_next.agent_schema import migrate_agent_access
 from waterlooworks_flash_next.auth_schema import migrate_app_auth
 from waterlooworks_flash_next.compact_history import (
     HistoryReader,
@@ -36,7 +37,7 @@ from waterlooworks_flash_next.refresh_schedule_schema import migrate_refresh_sch
 from waterlooworks_flash_next.runtime_secrets import is_private_owned_file
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 class DatabaseError(Exception):
@@ -502,6 +503,15 @@ def open_database(path: Path) -> sqlite3.Connection:
                 if connection.execute("PRAGMA user_version").fetchone()[0] == 16:
                     migrate_refresh_schedule(connection)
                     connection.execute("PRAGMA user_version = 17")
+        if (
+            SCHEMA_VERSION >= 18
+            and connection.execute("PRAGMA user_version").fetchone()[0] == 17
+        ):
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 17:
+                    migrate_agent_access(connection)
+                    connection.execute("PRAGMA user_version = 18")
         # Idempotent cache-invalidation triggers, outside the versioned contract.
         ensure_data_generation(connection)
         connection.execute("PRAGMA journal_mode = WAL")

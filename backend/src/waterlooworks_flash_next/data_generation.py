@@ -21,8 +21,11 @@ OPERATIONS = ("insert", "update", "delete")
 EXCLUDED_TABLES = frozenset(
     {
         # Authentication, sessions and secrets.
+        "api_tokens",
         "app_sessions",
         "app_users",
+        # Per-user posting marks never enter the identity-free shared snapshots.
+        "posting_marks",
         "openai_reauth_challenges",
         "openai_credentials",
         "waterlooworks_credentials",
