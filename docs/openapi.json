@@ -2260,6 +2260,538 @@
         ]
       }
     },
+    "/api/account/api-token": {
+      "get": {
+        "tags": ["account"],
+        "summary": "Token Status",
+        "description": "Safe metadata about the caller's agent API token: whether one exists, its hint, creation and last-use times. Never the token.",
+        "operationId": "getApiToken",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTokenStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": ["account"],
+        "summary": "Revoke Token",
+        "description": "Revoke the caller's agent API token immediately.",
+        "operationId": "revokeApiToken",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTokenStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      }
+    },
+    "/api/account/api-token/reset": {
+      "post": {
+        "tags": ["account"],
+        "summary": "Reset Token",
+        "description": "Mint a new agent API token for the caller and return its plaintext exactly once. Any previous token stops working immediately. At most 5 resets per 10 minutes.",
+        "operationId": "resetApiToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTokenIssued"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      }
+    },
+    "/api/account/posting-states": {
+      "get": {
+        "tags": ["account"],
+        "summary": "Posting Marks",
+        "description": "All of the caller's posting states and viewed times.",
+        "operationId": "getPostingMarks",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingMarksResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AppSession": []
+          }
+        ]
+      }
+    },
+    "/api/account/posting-states/{posting_id}": {
+      "put": {
+        "tags": ["account"],
+        "summary": "Set State",
+        "description": "Set or clear (null) the caller's state for one saved posting.",
+        "operationId": "setPostingState",
+        "security": [
+          {
+            "AppSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostingStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingMark"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/account/posting-states/{posting_id}/viewed": {
+      "put": {
+        "tags": ["account"],
+        "summary": "Set Viewed",
+        "description": "Mark one saved posting viewed (keeps the first view time) or clear the mark.",
+        "operationId": "setPostingViewed",
+        "security": [
+          {
+            "AppSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostingViewedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingMark"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/api/admin/refresh-auth": {
       "get": {
         "summary": "Refresh Auth",
@@ -2551,6 +3083,874 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/agent/v1/me": {
+      "get": {
+        "tags": ["agent"],
+        "summary": "Me",
+        "description": "Whose behalf this token acts on: the app user's UID, current role and the display profile the app shows them (null when unavailable).",
+        "operationId": "getAgentIdentity",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentIdentityResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, revoked or replaced token.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than 60 requests per minute for one token.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AgentToken": []
+          }
+        ]
+      }
+    },
+    "/api/agent/v1/refresh": {
+      "get": {
+        "tags": ["agent"],
+        "summary": "Refresh Status",
+        "description": "When the saved listings were last refreshed, whether a refresh is running now and when the next scheduled one is due (null if none). Read-only: agents cannot start or schedule refreshes.",
+        "operationId": "getAgentRefreshStatus",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRefreshStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, revoked or replaced token.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than 60 requests per minute for one token.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AgentToken": []
+          }
+        ]
+      }
+    },
+    "/api/agent/v1/postings": {
+      "get": {
+        "tags": ["agent"],
+        "summary": "List Postings",
+        "description": "Search, filter, sort and page the saved postings with the caller's state and viewed marks. Filters are OR within a parameter and AND across parameters; unknown parameters are refused.",
+        "operationId": "listAgentPostings",
+        "security": [
+          {
+            "AgentToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "Keyword search: every word must match some text field (ID, title, organization, location, inferred country).",
+              "default": "",
+              "title": "Q"
+            },
+            "description": "Keyword search: every word must match some text field (ID, title, organization, location, inferred country)."
+          },
+          {
+            "name": "organization",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "maxItems": 50,
+              "description": "Exact organization names (any of).",
+              "title": "Organization"
+            },
+            "description": "Exact organization names (any of)."
+          },
+          {
+            "name": "city",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "maxItems": 50,
+              "description": "Exact stored location values (any of).",
+              "title": "City"
+            },
+            "description": "Exact stored location values (any of)."
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "maxItems": 50,
+              "description": "Accepted inferred country names or ISO codes (any of).",
+              "title": "Country"
+            },
+            "description": "Accepted inferred country names or ISO codes (any of)."
+          },
+          {
+            "name": "discipline",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "maxItems": 50,
+              "description": "Exact targeted discipline source values (any of).",
+              "title": "Discipline"
+            },
+            "description": "Exact targeted discipline source values (any of)."
+          },
+          {
+            "name": "arrangement",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": ["Remote", "Hybrid", "In-person"],
+                "type": "string"
+              },
+              "maxItems": 3,
+              "description": "Remote, Hybrid or In-person (any of).",
+              "title": "Arrangement"
+            },
+            "description": "Remote, Hybrid or In-person (any of)."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": ["interested", "applied", "not_interested", "none"],
+                "type": "string"
+              },
+              "maxItems": 4,
+              "description": "Caller's state: interested, applied, not_interested or none.",
+              "title": "State"
+            },
+            "description": "Caller's state: interested, applied, not_interested or none."
+          },
+          {
+            "name": "exclude_not_interested",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Drop postings the caller marked not_interested.",
+              "default": false,
+              "title": "Exclude Not Interested"
+            },
+            "description": "Drop postings the caller marked not_interested."
+          },
+          {
+            "name": "viewed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only viewed (true) or unviewed (false) postings.",
+              "title": "Viewed"
+            },
+            "description": "Only viewed (true) or unviewed (false) postings."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "id",
+                "newest",
+                "remaining",
+                "applications-desc",
+                "openings-desc",
+                "organization",
+                "compensation-average",
+                "compensation-minimum",
+                "compensation-maximum"
+              ],
+              "type": "string",
+              "description": "Web app sort key.",
+              "default": "id",
+              "title": "Sort"
+            },
+            "description": "Web app sort key."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPostingPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, revoked or replaced token.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "429": {
+            "description": "More than 60 requests per minute for one token.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/v1/postings/{posting_id}": {
+      "get": {
+        "tags": ["agent"],
+        "summary": "Posting Detail",
+        "description": "One saved posting with its plain-text detail content and analysis, exactly as a member sees it. Reading never marks it viewed.",
+        "operationId": "getAgentPosting",
+        "security": [
+          {
+            "AgentToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPostingDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, revoked or replaced token.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "429": {
+            "description": "More than 60 requests per minute for one token.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/agent/v1/postings/{posting_id}/state": {
+      "put": {
+        "tags": ["agent"],
+        "summary": "Set State",
+        "description": "Set the caller's state for one posting to interested, applied or not_interested, or clear it with null.",
+        "operationId": "setAgentPostingState",
+        "security": [
+          {
+            "AgentToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostingStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingMark"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, revoked or replaced token.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "429": {
+            "description": "More than 60 requests per minute for one token.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/agent/v1/postings/{posting_id}/viewed": {
+      "put": {
+        "tags": ["agent"],
+        "summary": "Set Viewed",
+        "description": "Explicitly mark one posting viewed (true keeps the first view time) or clear the mark (false). Reads never set this.",
+        "operationId": "setAgentPostingViewed",
+        "security": [
+          {
+            "AgentToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "posting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "title": "Posting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostingViewedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostingMark"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, revoked or replaced token.",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "429": {
+            "description": "More than 60 requests per minute for one token.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
           }
         }
       }
@@ -3838,6 +5238,494 @@
         "title": "AdminRefreshStatus",
         "description": "Current Duo challenge plus the WaterlooWorks pacing status (admin only)."
       },
+      "AgentIdentityResponse": {
+        "properties": {
+          "uid": {
+            "type": "string",
+            "title": "Uid"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["admin", "member"],
+            "title": "Role"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Display name/email/photo as shown in the app; null if unavailable."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["uid", "role", "profile"],
+        "title": "AgentIdentityResponse"
+      },
+      "AgentPostingDetail": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization"
+          },
+          "division": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location",
+            "description": "Stored listing city/location text."
+          },
+          "openings": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Source value as stored."
+          },
+          "level": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "application_count": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Source value as stored."
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Source text, Eastern Time, e.g. 'Oct 15, 2026 11:59 PM'."
+          },
+          "work_arrangement": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["Remote", "Hybrid", "In-person"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Arrangement"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code",
+            "description": "Accepted inferred ISO country code; never derived from city."
+          },
+          "country_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Name"
+          },
+          "targeted_disciplines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Targeted Disciplines"
+          },
+          "compensation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompensationSort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Source-grounded pay summary; null when none is available."
+          },
+          "first_seen_at": {
+            "type": "string",
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "title": "Last Seen At"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["interested", "applied", "not_interested"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State",
+            "description": "The caller's state, if any."
+          },
+          "viewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewed At",
+            "description": "The caller's explicit view time."
+          },
+          "content": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoredPostingContent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Saved plain-text detail fields; null before detail collection."
+          },
+          "content_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Observed At"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/PostingAnalysisResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "title",
+          "organization",
+          "division",
+          "location",
+          "openings",
+          "level",
+          "application_count",
+          "deadline",
+          "work_arrangement",
+          "country_code",
+          "country_name",
+          "targeted_disciplines",
+          "compensation",
+          "first_seen_at",
+          "last_seen_at",
+          "state",
+          "viewed_at",
+          "content",
+          "content_observed_at",
+          "analysis"
+        ],
+        "title": "AgentPostingDetail",
+        "description": "Everything a member sees on the web job page, read-only."
+      },
+      "AgentPostingPage": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Matching postings across all pages."
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages"
+          },
+          "postings": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPostingSummary"
+            },
+            "type": "array",
+            "title": "Postings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["page", "page_size", "total", "total_pages", "postings"],
+        "title": "AgentPostingPage"
+      },
+      "AgentPostingSummary": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization"
+          },
+          "division": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location",
+            "description": "Stored listing city/location text."
+          },
+          "openings": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Source value as stored."
+          },
+          "level": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "application_count": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Source value as stored."
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Source text, Eastern Time, e.g. 'Oct 15, 2026 11:59 PM'."
+          },
+          "work_arrangement": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["Remote", "Hybrid", "In-person"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Arrangement"
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code",
+            "description": "Accepted inferred ISO country code; never derived from city."
+          },
+          "country_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Name"
+          },
+          "targeted_disciplines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Targeted Disciplines"
+          },
+          "compensation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompensationSort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Source-grounded pay summary; null when none is available."
+          },
+          "first_seen_at": {
+            "type": "string",
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "title": "Last Seen At"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["interested", "applied", "not_interested"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State",
+            "description": "The caller's state, if any."
+          },
+          "viewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewed At",
+            "description": "The caller's explicit view time."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "posting_id",
+          "title",
+          "organization",
+          "division",
+          "location",
+          "openings",
+          "level",
+          "application_count",
+          "deadline",
+          "work_arrangement",
+          "country_code",
+          "country_name",
+          "targeted_disciplines",
+          "compensation",
+          "first_seen_at",
+          "last_seen_at",
+          "state",
+          "viewed_at"
+        ],
+        "title": "AgentPostingSummary",
+        "description": "Compact member-visible posting for agents, with the caller's marks."
+      },
+      "AgentRefreshStatus": {
+        "properties": {
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["idle", "running", "completed", "failed", "interrupted"],
+            "title": "Status"
+          },
+          "last_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refreshed At",
+            "description": "UTC ISO time the saved listings were last observed (the web header's 'Refreshed … ago'); null before the first refresh."
+          },
+          "last_run_finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Finished At",
+            "description": "UTC ISO finish time of the most recent run of any outcome."
+          },
+          "next_scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scheduled At",
+            "description": "UTC ISO time of the next scheduled refresh; null when scheduling is off, has no times or is inactive on this server."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "running",
+          "status",
+          "last_refreshed_at",
+          "last_run_finished_at",
+          "next_scheduled_at"
+        ],
+        "title": "AgentRefreshStatus",
+        "description": "Read-only refresh facts; nothing here starts or schedules a refresh."
+      },
       "AnalysisEvidence": {
         "properties": {
           "source_kind": {
@@ -3933,6 +5821,79 @@
         "type": "object",
         "required": ["state", "value", "evidence", "unknown_values"],
         "title": "AnalysisValue"
+      },
+      "ApiTokenIssued": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token",
+            "description": "Bearer token for /api/agent/v1/. Shown only in this response; the server keeps a hash."
+          },
+          "hint": {
+            "type": "string",
+            "title": "Hint",
+            "description": "Prefix and last four characters, e.g. wwf_…ab12."
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "UTC ISO 8601."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["token", "hint", "created_at"],
+        "title": "ApiTokenIssued",
+        "description": "The plaintext token, returned exactly once; store it now."
+      },
+      "ApiTokenStatus": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint",
+            "description": "Prefix and last four characters, e.g. wwf_…ab12."
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At",
+            "description": "UTC ISO 8601."
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At",
+            "description": "UTC ISO 8601 of the latest recorded use (minute resolution)."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["configured"],
+        "title": "ApiTokenStatus",
+        "description": "Safe metadata only; never the token or its digest."
       },
       "ApplicationLink": {
         "properties": {
@@ -4774,6 +6735,13 @@
         "type": "object",
         "required": ["token"],
         "title": "CustomToken"
+      },
+      "EmptyRequest": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EmptyRequest",
+        "description": "Explicit ``{}`` JSON body for session mutations that carry no fields."
       },
       "ErrorResponse": {
         "properties": {
@@ -5857,6 +7825,72 @@
         "required": ["posting_id", "observations"],
         "title": "PostingHistoryResponse"
       },
+      "PostingMark": {
+        "properties": {
+          "posting_id": {
+            "type": "string",
+            "title": "Posting Id"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["interested", "applied", "not_interested"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State",
+            "description": "interested, applied or not_interested; null when unmarked."
+          },
+          "viewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewed At",
+            "description": "UTC ISO 8601 of the first explicit view mark; null if unviewed."
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At",
+            "description": "UTC ISO 8601 of the latest change; null when nothing is stored."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["posting_id", "state", "viewed_at", "updated_at"],
+        "title": "PostingMark",
+        "description": "One user's annotations on one saved posting."
+      },
+      "PostingMarksResponse": {
+        "properties": {
+          "marks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PostingMark"
+            },
+            "type": "object",
+            "title": "Marks",
+            "description": "The caller's marks keyed by posting ID; unmarked IDs are absent."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["marks"],
+        "title": "PostingMarksResponse"
+      },
       "PostingObservation": {
         "properties": {
           "observed_at": {
@@ -6004,6 +8038,40 @@
           "compensation_sort"
         ],
         "title": "PostingResponse"
+      },
+      "PostingStateRequest": {
+        "properties": {
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["interested", "applied", "not_interested"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State",
+            "description": "interested, applied or not_interested; null clears the state."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["state"],
+        "title": "PostingStateRequest"
+      },
+      "PostingViewedRequest": {
+        "properties": {
+          "viewed": {
+            "type": "boolean",
+            "title": "Viewed",
+            "description": "true records the first view time (idempotent); false clears it."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["viewed"],
+        "title": "PostingViewedRequest"
       },
       "RefreshAccepted": {
         "properties": {
@@ -6988,6 +9056,11 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "ww_session"
+      },
+      "AgentToken": {
+        "type": "http",
+        "description": "Per-user agent token from the account settings (POST /api/account/api-token/reset), sent as `Authorization: Bearer wwf_…`.",
+        "scheme": "bearer"
       }
     }
   }

@@ -419,6 +419,110 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/account/api-token': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Token Status
+     * @description Safe metadata about the caller's agent API token: whether one exists, its hint, creation and last-use times. Never the token.
+     */
+    get: operations['getApiToken'];
+    put?: never;
+    post?: never;
+    /**
+     * Revoke Token
+     * @description Revoke the caller's agent API token immediately.
+     */
+    delete: operations['revokeApiToken'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/account/api-token/reset': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reset Token
+     * @description Mint a new agent API token for the caller and return its plaintext exactly once. Any previous token stops working immediately. At most 5 resets per 10 minutes.
+     */
+    post: operations['resetApiToken'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/account/posting-states': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Posting Marks
+     * @description All of the caller's posting states and viewed times.
+     */
+    get: operations['getPostingMarks'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/account/posting-states/{posting_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set State
+     * @description Set or clear (null) the caller's state for one saved posting.
+     */
+    put: operations['setPostingState'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/account/posting-states/{posting_id}/viewed': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set Viewed
+     * @description Mark one saved posting viewed (keeps the first view time) or clear the mark.
+     */
+    put: operations['setPostingViewed'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/admin/refresh-auth': {
     parameters: {
       query?: never;
@@ -464,6 +568,126 @@ export interface paths {
     /** Health */
     get: operations['getHealth'];
     put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agent/v1/me': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Me
+     * @description Whose behalf this token acts on: the app user's UID, current role and the display profile the app shows them (null when unavailable).
+     */
+    get: operations['getAgentIdentity'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agent/v1/refresh': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Refresh Status
+     * @description When the saved listings were last refreshed, whether a refresh is running now and when the next scheduled one is due (null if none). Read-only: agents cannot start or schedule refreshes.
+     */
+    get: operations['getAgentRefreshStatus'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agent/v1/postings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Postings
+     * @description Search, filter, sort and page the saved postings with the caller's state and viewed marks. Filters are OR within a parameter and AND across parameters; unknown parameters are refused.
+     */
+    get: operations['listAgentPostings'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agent/v1/postings/{posting_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Posting Detail
+     * @description One saved posting with its plain-text detail content and analysis, exactly as a member sees it. Reading never marks it viewed.
+     */
+    get: operations['getAgentPosting'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agent/v1/postings/{posting_id}/state': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set State
+     * @description Set the caller's state for one posting to interested, applied or not_interested, or clear it with null.
+     */
+    put: operations['setAgentPostingState'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agent/v1/postings/{posting_id}/viewed': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set Viewed
+     * @description Explicitly mark one posting viewed (true keeps the first view time) or clear the mark (false). Reads never set this.
+     */
+    put: operations['setAgentPostingViewed'];
     post?: never;
     delete?: never;
     options?: never;
@@ -759,6 +983,171 @@ export interface components {
       expires_in_seconds: number;
       pacing: components['schemas']['RefreshPacingStatus'];
     };
+    /** AgentIdentityResponse */
+    AgentIdentityResponse: {
+      /** Uid */
+      uid: string;
+      /**
+       * Role
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+      /** @description Display name/email/photo as shown in the app; null if unavailable. */
+      profile: components['schemas']['AccountProfile'] | null;
+    };
+    /**
+     * AgentPostingDetail
+     * @description Everything a member sees on the web job page, read-only.
+     */
+    AgentPostingDetail: {
+      /** Posting Id */
+      posting_id: string;
+      /** Title */
+      title: string | null;
+      /** Organization */
+      organization: string | null;
+      division: components['schemas']['JsonValue'];
+      /**
+       * Location
+       * @description Stored listing city/location text.
+       */
+      location: string | null;
+      /** @description Source value as stored. */
+      openings: components['schemas']['JsonValue'];
+      level: components['schemas']['JsonValue'];
+      /** @description Source value as stored. */
+      application_count: components['schemas']['JsonValue'];
+      /** @description Source text, Eastern Time, e.g. 'Oct 15, 2026 11:59 PM'. */
+      deadline: components['schemas']['JsonValue'];
+      /** Work Arrangement */
+      work_arrangement: ('Remote' | 'Hybrid' | 'In-person') | null;
+      /**
+       * Country Code
+       * @description Accepted inferred ISO country code; never derived from city.
+       */
+      country_code: string | null;
+      /** Country Name */
+      country_name: string | null;
+      /** Targeted Disciplines */
+      targeted_disciplines: string[];
+      /** @description Source-grounded pay summary; null when none is available. */
+      compensation: components['schemas']['CompensationSort'] | null;
+      /** First Seen At */
+      first_seen_at: string;
+      /** Last Seen At */
+      last_seen_at: string;
+      /**
+       * State
+       * @description The caller's state, if any.
+       */
+      state: ('interested' | 'applied' | 'not_interested') | null;
+      /**
+       * Viewed At
+       * @description The caller's explicit view time.
+       */
+      viewed_at: string | null;
+      /** @description Saved plain-text detail fields; null before detail collection. */
+      content: components['schemas']['StoredPostingContent'] | null;
+      /** Content Observed At */
+      content_observed_at: string | null;
+      analysis: components['schemas']['PostingAnalysisResponse'];
+    };
+    /** AgentPostingPage */
+    AgentPostingPage: {
+      /** Page */
+      page: number;
+      /** Page Size */
+      page_size: number;
+      /**
+       * Total
+       * @description Matching postings across all pages.
+       */
+      total: number;
+      /** Total Pages */
+      total_pages: number;
+      /** Postings */
+      postings: components['schemas']['AgentPostingSummary'][];
+    };
+    /**
+     * AgentPostingSummary
+     * @description Compact member-visible posting for agents, with the caller's marks.
+     */
+    AgentPostingSummary: {
+      /** Posting Id */
+      posting_id: string;
+      /** Title */
+      title: string | null;
+      /** Organization */
+      organization: string | null;
+      division: components['schemas']['JsonValue'];
+      /**
+       * Location
+       * @description Stored listing city/location text.
+       */
+      location: string | null;
+      /** @description Source value as stored. */
+      openings: components['schemas']['JsonValue'];
+      level: components['schemas']['JsonValue'];
+      /** @description Source value as stored. */
+      application_count: components['schemas']['JsonValue'];
+      /** @description Source text, Eastern Time, e.g. 'Oct 15, 2026 11:59 PM'. */
+      deadline: components['schemas']['JsonValue'];
+      /** Work Arrangement */
+      work_arrangement: ('Remote' | 'Hybrid' | 'In-person') | null;
+      /**
+       * Country Code
+       * @description Accepted inferred ISO country code; never derived from city.
+       */
+      country_code: string | null;
+      /** Country Name */
+      country_name: string | null;
+      /** Targeted Disciplines */
+      targeted_disciplines: string[];
+      /** @description Source-grounded pay summary; null when none is available. */
+      compensation: components['schemas']['CompensationSort'] | null;
+      /** First Seen At */
+      first_seen_at: string;
+      /** Last Seen At */
+      last_seen_at: string;
+      /**
+       * State
+       * @description The caller's state, if any.
+       */
+      state: ('interested' | 'applied' | 'not_interested') | null;
+      /**
+       * Viewed At
+       * @description The caller's explicit view time.
+       */
+      viewed_at: string | null;
+    };
+    /**
+     * AgentRefreshStatus
+     * @description Read-only refresh facts; nothing here starts or schedules a refresh.
+     */
+    AgentRefreshStatus: {
+      /** Running */
+      running: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'idle' | 'running' | 'completed' | 'failed' | 'interrupted';
+      /**
+       * Last Refreshed At
+       * @description UTC ISO time the saved listings were last observed (the web header's 'Refreshed … ago'); null before the first refresh.
+       */
+      last_refreshed_at: string | null;
+      /**
+       * Last Run Finished At
+       * @description UTC ISO finish time of the most recent run of any outcome.
+       */
+      last_run_finished_at: string | null;
+      /**
+       * Next Scheduled At
+       * @description UTC ISO time of the next scheduled refresh; null when scheduling is off, has no times or is inactive on this server.
+       */
+      next_scheduled_at: string | null;
+    };
     /** AnalysisEvidence */
     AnalysisEvidence: {
       /**
@@ -787,6 +1176,50 @@ export interface components {
       evidence: components['schemas']['AnalysisEvidence'] | null;
       /** Unknown Values */
       unknown_values: string[];
+    };
+    /**
+     * ApiTokenIssued
+     * @description The plaintext token, returned exactly once; store it now.
+     */
+    ApiTokenIssued: {
+      /**
+       * Token
+       * @description Bearer token for /api/agent/v1/. Shown only in this response; the server keeps a hash.
+       */
+      token: string;
+      /**
+       * Hint
+       * @description Prefix and last four characters, e.g. wwf_…ab12.
+       */
+      hint: string;
+      /**
+       * Created At
+       * @description UTC ISO 8601.
+       */
+      created_at: string;
+    };
+    /**
+     * ApiTokenStatus
+     * @description Safe metadata only; never the token or its digest.
+     */
+    ApiTokenStatus: {
+      /** Configured */
+      configured: boolean;
+      /**
+       * Hint
+       * @description Prefix and last four characters, e.g. wwf_…ab12.
+       */
+      hint?: string | null;
+      /**
+       * Created At
+       * @description UTC ISO 8601.
+       */
+      created_at?: string | null;
+      /**
+       * Last Used At
+       * @description UTC ISO 8601 of the latest recorded use (minute resolution).
+       */
+      last_used_at?: string | null;
     };
     /** ApplicationLink */
     ApplicationLink: {
@@ -1057,6 +1490,11 @@ export interface components {
        */
       token: string;
     };
+    /**
+     * EmptyRequest
+     * @description Explicit ``{}`` JSON body for session mutations that carry no fields.
+     */
+    EmptyRequest: Record<string, never>;
     /** ErrorResponse */
     ErrorResponse: {
       /** Detail */
@@ -1397,6 +1835,39 @@ export interface components {
       /** Observations */
       observations: components['schemas']['PostingObservation'][];
     };
+    /**
+     * PostingMark
+     * @description One user's annotations on one saved posting.
+     */
+    PostingMark: {
+      /** Posting Id */
+      posting_id: string;
+      /**
+       * State
+       * @description interested, applied or not_interested; null when unmarked.
+       */
+      state: ('interested' | 'applied' | 'not_interested') | null;
+      /**
+       * Viewed At
+       * @description UTC ISO 8601 of the first explicit view mark; null if unviewed.
+       */
+      viewed_at: string | null;
+      /**
+       * Updated At
+       * @description UTC ISO 8601 of the latest change; null when nothing is stored.
+       */
+      updated_at: string | null;
+    };
+    /** PostingMarksResponse */
+    PostingMarksResponse: {
+      /**
+       * Marks
+       * @description The caller's marks keyed by posting ID; unmarked IDs are absent.
+       */
+      marks: {
+        [key: string]: components['schemas']['PostingMark'];
+      };
+    };
     /** PostingObservation */
     PostingObservation: {
       /** Observed At */
@@ -1442,6 +1913,22 @@ export interface components {
       /** Targeted Disciplines */
       targeted_disciplines: string[];
       compensation_sort: components['schemas']['CompensationSort'] | null;
+    };
+    /** PostingStateRequest */
+    PostingStateRequest: {
+      /**
+       * State
+       * @description interested, applied or not_interested; null clears the state.
+       */
+      state: ('interested' | 'applied' | 'not_interested') | null;
+    };
+    /** PostingViewedRequest */
+    PostingViewedRequest: {
+      /**
+       * Viewed
+       * @description true records the first view time (idempotent); false clears it.
+       */
+      viewed: boolean;
     };
     /** RefreshAccepted */
     RefreshAccepted: {
@@ -3872,6 +4359,439 @@ export interface operations {
       };
     };
   };
+  getApiToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApiTokenStatus'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  revokeApiToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApiTokenStatus'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  resetApiToken: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['EmptyRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApiTokenIssued'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPostingMarks: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingMarksResponse'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setPostingState: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PostingStateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingMark'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setPostingViewed: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PostingViewedRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingMark'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   getRefreshAuth: {
     parameters: {
       query?: never;
@@ -4110,6 +5030,535 @@ export interface operations {
       /** @description Unprocessable Entity */
       422: {
         headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getAgentIdentity: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AgentIdentityResponse'];
+        };
+      };
+      /** @description Missing, malformed, revoked or replaced token. */
+      401: {
+        headers: {
+          'WWW-Authenticate'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description More than 60 requests per minute for one token. */
+      429: {
+        headers: {
+          'Retry-After'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getAgentRefreshStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AgentRefreshStatus'];
+        };
+      };
+      /** @description Missing, malformed, revoked or replaced token. */
+      401: {
+        headers: {
+          'WWW-Authenticate'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description More than 60 requests per minute for one token. */
+      429: {
+        headers: {
+          'Retry-After'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listAgentPostings: {
+    parameters: {
+      query?: {
+        /** @description Keyword search: every word must match some text field (ID, title, organization, location, inferred country). */
+        q?: string;
+        /** @description Exact organization names (any of). */
+        organization?: string[];
+        /** @description Exact stored location values (any of). */
+        city?: string[];
+        /** @description Accepted inferred country names or ISO codes (any of). */
+        country?: string[];
+        /** @description Exact targeted discipline source values (any of). */
+        discipline?: string[];
+        /** @description Remote, Hybrid or In-person (any of). */
+        arrangement?: ('Remote' | 'Hybrid' | 'In-person')[];
+        /** @description Caller's state: interested, applied, not_interested or none. */
+        state?: ('interested' | 'applied' | 'not_interested' | 'none')[];
+        /** @description Drop postings the caller marked not_interested. */
+        exclude_not_interested?: boolean;
+        /** @description Only viewed (true) or unviewed (false) postings. */
+        viewed?: boolean | null;
+        /** @description Web app sort key. */
+        sort?:
+          | 'id'
+          | 'newest'
+          | 'remaining'
+          | 'applications-desc'
+          | 'openings-desc'
+          | 'organization'
+          | 'compensation-average'
+          | 'compensation-minimum'
+          | 'compensation-maximum';
+        page?: number;
+        page_size?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AgentPostingPage'];
+        };
+      };
+      /** @description Missing, malformed, revoked or replaced token. */
+      401: {
+        headers: {
+          'WWW-Authenticate'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description More than 60 requests per minute for one token. */
+      429: {
+        headers: {
+          'Retry-After'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getAgentPosting: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AgentPostingDetail'];
+        };
+      };
+      /** @description Missing, malformed, revoked or replaced token. */
+      401: {
+        headers: {
+          'WWW-Authenticate'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description More than 60 requests per minute for one token. */
+      429: {
+        headers: {
+          'Retry-After'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setAgentPostingState: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PostingStateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingMark'];
+        };
+      };
+      /** @description Missing, malformed, revoked or replaced token. */
+      401: {
+        headers: {
+          'WWW-Authenticate'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description More than 60 requests per minute for one token. */
+      429: {
+        headers: {
+          'Retry-After'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  setAgentPostingViewed: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        posting_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PostingViewedRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PostingMark'];
+        };
+      };
+      /** @description Missing, malformed, revoked or replaced token. */
+      401: {
+        headers: {
+          'WWW-Authenticate'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description More than 60 requests per minute for one token. */
+      429: {
+        headers: {
+          'Retry-After'?: number;
           [name: string]: unknown;
         };
         content: {
