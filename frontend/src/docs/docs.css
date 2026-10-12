@@ -1,0 +1,8 @@
+/* Docs page only (Swagger UI, not HeroUI): wide guide tables scroll in
+   place instead of widening the page on phones. */
+.swagger-ui .info table,
+.swagger-ui .markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
