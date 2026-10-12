@@ -44,6 +44,8 @@ import { App } from './App';
 import { AdminSettingsDialog } from './AdminSettingsDialog';
 import { AISettingsPanel } from './AISettingsPanel';
 import { RefreshScheduleTab } from './RefreshScheduleTab';
+import { ApiTokenPanel } from './ApiTokenPanel';
+import { uncopiedTokenDiscard, useApiToken } from '../lib/useApiToken';
 import { useRefreshSchedule } from '../lib/useRefreshSchedule';
 
 function localTime(value: string | null): string | null {
@@ -333,29 +335,94 @@ export function AccountMenu({
       />
     );
   return (
-    <Dropdown>
-      <Button
-        aria-label="Account menu"
-        variant="ghost"
-        size="lg"
-        isIconOnly={compact}
-      >
-        {content}
-      </Button>
-      <Dropdown.Popover placement="bottom end">
-        {identity}
-        <Dropdown.Menu
-          aria-label="Account actions"
-          onAction={(key) => {
-            if (key === 'sign-out') signOut();
-          }}
+    <MemberAccountMenu
+      key={uid}
+      uid={uid}
+      compact={compact}
+      content={content}
+      identity={identity}
+      signOut={signOut}
+    />
+  );
+}
+
+// Members get the same native settings shell with only their own token.
+function MemberAccountMenu({
+  uid,
+  compact,
+  content,
+  identity,
+  signOut,
+}: {
+  uid: string;
+  compact: boolean;
+  content: ReactNode;
+  identity: ReactNode;
+  signOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const token = useApiToken(open, uid);
+  return (
+    <>
+      <Dropdown>
+        <Button
+          aria-label="Account menu"
+          variant="ghost"
+          size="lg"
+          isIconOnly={compact}
         >
-          <Dropdown.Item id="sign-out" textValue="Sign out">
-            <Label>Sign out</Label>
-          </Dropdown.Item>
-        </Dropdown.Menu>
-      </Dropdown.Popover>
-    </Dropdown>
+          {content}
+        </Button>
+        <Dropdown.Popover placement="bottom end">
+          {identity}
+          <Dropdown.Menu
+            aria-label="Account actions"
+            onAction={(key) => {
+              if (key === 'settings') setOpen(true);
+              if (key === 'sign-out') signOut();
+            }}
+          >
+            <Dropdown.Item id="settings" textValue="Settings">
+              <Label>Settings</Label>
+            </Dropdown.Item>
+            <Dropdown.Item id="sign-out" textValue="Sign out">
+              <Label>Sign out</Label>
+            </Dropdown.Item>
+          </Dropdown.Menu>
+        </Dropdown.Popover>
+      </Dropdown>
+      {open && (
+        <AdminSettingsDialog
+          title="Settings"
+          onDismiss={() => setOpen(false)}
+          dirty={token.issued !== null && !token.copied}
+          discard={uncopiedTokenDiscard}
+          footer={(requestDismiss) => (
+            <>
+              <Button
+                variant="ghost"
+                size={compact ? 'lg' : 'md'}
+                onPress={() => {
+                  setOpen(false);
+                  signOut();
+                }}
+              >
+                Sign out
+              </Button>
+              <Button
+                variant="secondary"
+                size={compact ? 'lg' : 'md'}
+                onPress={requestDismiss}
+              >
+                Done
+              </Button>
+            </>
+          )}
+        >
+          <ApiTokenPanel token={token} />
+        </AdminSettingsDialog>
+      )}
+    </>
   );
 }
 
@@ -390,6 +457,13 @@ function AdminAccountMenu({
     settings.isOpen && selectedTab === 'schedule',
     uid,
   );
+  // Leaving the tab or closing settings disables the hook, which clears any
+  // shown token; the explicit hide keeps that synchronous with the switch.
+  const token = useApiToken(
+    settings.isOpen && selectedTab === 'api-token',
+    uid,
+  );
+  const tokenUncopied = token.issued !== null && !token.copied;
   // Workspace notices open straight to the Refresh (Duo) or Schedule tab.
   // Never reopen an open dialog: opening clears and rereads credential state.
   useImperativeHandle(settingsRef, () => ({
@@ -413,6 +487,7 @@ function AdminAccountMenu({
       openai.hide();
       openai.setDraft('');
     }
+    if (key !== 'api-token') token.hide();
     setSelectedTab(key);
   };
   const openSettings = () => {
@@ -466,8 +541,10 @@ function AdminAccountMenu({
             settings.username !== '' ||
             settings.password !== '' ||
             openai.draft !== '' ||
-            ai.dirty
+            ai.dirty ||
+            tokenUncopied
           }
+          discard={tokenUncopied ? uncopiedTokenDiscard : undefined}
           notification={
             refresh.challenge?.approval_required && (
               <div className="flex flex-wrap items-center gap-4">
@@ -539,6 +616,10 @@ function AdminAccountMenu({
                 </Tabs.Tab>
                 <Tabs.Tab id="schedule">
                   Schedule
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="api-token">
+                  API token
                   <Tabs.Indicator />
                 </Tabs.Tab>
               </Tabs.List>
@@ -942,6 +1023,9 @@ function AdminAccountMenu({
             </Tabs.Panel>
             <Tabs.Panel id="schedule">
               <RefreshScheduleTab schedule={schedule} compact={compact} />
+            </Tabs.Panel>
+            <Tabs.Panel id="api-token">
+              <ApiTokenPanel token={token} />
             </Tabs.Panel>
           </Tabs>
         </AdminSettingsDialog>

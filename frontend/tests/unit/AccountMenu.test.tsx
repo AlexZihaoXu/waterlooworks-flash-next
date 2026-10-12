@@ -23,7 +23,12 @@ describe('AccountMenu HeroUI composition', () => {
     trigger.focus();
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     fireEvent.keyUp(trigger, { key: 'ArrowDown' });
-    const item = await screen.findByRole('menuitem', { name: 'Sign out' });
+    // Settings comes first; ArrowDown moves on to Sign out.
+    const settings = await screen.findByRole('menuitem', { name: 'Settings' });
+    await waitFor(() => expect(settings).toHaveFocus());
+    fireEvent.keyDown(settings, { key: 'ArrowDown' });
+    fireEvent.keyUp(settings, { key: 'ArrowDown' });
+    const item = screen.getByRole('menuitem', { name: 'Sign out' });
     await waitFor(() => expect(item).toHaveFocus());
     fireEvent.keyDown(item, { key: 'Enter' });
     fireEvent.keyUp(item, { key: 'Enter' });

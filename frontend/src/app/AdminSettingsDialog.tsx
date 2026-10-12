@@ -9,6 +9,19 @@ import {
 import { AlertDialog, Button, CloseButton } from '@heroui/react';
 import './AdminSettingsDialog.css';
 
+export type DiscardText = {
+  heading: string;
+  body: string;
+  confirm: string;
+  cancel: string;
+};
+const defaultDiscard: DiscardText = {
+  heading: 'Discard unsaved changes?',
+  body: 'Typed credentials or keys have not been saved. Closing Admin settings clears them.',
+  confirm: 'Discard changes',
+  cancel: 'Keep editing',
+};
+
 /** Owner-approved shell: HeroUI modal sizes cannot keep compact fixed bounds.
  * Only mounted while open; native modality owns the top layer and focus trap.
  * While `dirty`, every dismissal (Escape, backdrop, close button, footer
@@ -21,12 +34,18 @@ export function AdminSettingsDialog({
   footer,
   onDismiss,
   dirty = false,
+  title = 'Admin settings',
+  discard = defaultDiscard,
 }: {
   children: ReactNode;
   notification?: ReactNode;
   footer: ReactNode | ((requestDismiss: () => void) => ReactNode);
   onDismiss: () => void;
   dirty?: boolean;
+  /** Members reuse the same shell as plain "Settings". */
+  title?: string;
+  /** Wording for the dismissal confirmation shown while `dirty`. */
+  discard?: DiscardText;
 }) {
   const headingId = useId();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -97,12 +116,9 @@ export function AdminSettingsDialog({
       <header className="admin-settings-dialog-header">
         <div className="admin-settings-dialog-heading-row">
           <h2 id={headingId} className="admin-settings-dialog-heading">
-            Admin settings
+            {title}
           </h2>
-          <CloseButton
-            aria-label="Close Admin settings"
-            onPress={requestDismiss}
-          />
+          <CloseButton aria-label={`Close ${title}`} onPress={requestDismiss} />
         </div>
         {notification}
       </header>
@@ -120,19 +136,14 @@ export function AdminSettingsDialog({
             <AlertDialog.Dialog>
               <AlertDialog.Header>
                 <AlertDialog.Icon status="warning" />
-                <AlertDialog.Heading>
-                  Discard unsaved changes?
-                </AlertDialog.Heading>
+                <AlertDialog.Heading>{discard.heading}</AlertDialog.Heading>
               </AlertDialog.Header>
               <AlertDialog.Body>
-                <p>
-                  Typed credentials or keys have not been saved. Closing Admin
-                  settings clears them.
-                </p>
+                <p>{discard.body}</p>
               </AlertDialog.Body>
               <AlertDialog.Footer>
                 <Button slot="close" variant="tertiary">
-                  Keep editing
+                  {discard.cancel}
                 </Button>
                 <Button
                   variant="danger"
@@ -141,7 +152,7 @@ export function AdminSettingsDialog({
                     onDismiss();
                   }}
                 >
-                  Discard changes
+                  {discard.confirm}
                 </Button>
               </AlertDialog.Footer>
             </AlertDialog.Dialog>
