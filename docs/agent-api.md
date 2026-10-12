@@ -2,7 +2,7 @@
 
 A bearer-token API that lets tools such as AI agents search, filter, read and mark saved job postings **on behalf of one signed-in app user**, and check when the saved listings were last refreshed and when the next scheduled refresh is due. It is read-only apart from the caller's own posting marks: **there is no endpoint that starts, schedules or configures a refresh, and no admin setting is reachable.** A test asserts the exact route inventory.
 
-Every route lives under `/api/agent/v1/` and is documented in the tracked [`openapi.json`](openapi.json) (tag `agent`, security scheme `AgentToken`).
+Every route lives under `/api/agent/v1/` and is documented in the tracked [`openapi.json`](openapi.json) (tag `agent`, security scheme `AgentToken`). Schema18 adds the `api_tokens` and `posting_marks` tables.
 
 ## Live docs and schema
 
@@ -10,7 +10,7 @@ No token is needed to read these; they describe the API, not anyone's data:
 
 - `https://<your-host>/docs/`: interactive Swagger UI. Click **Authorize**, paste your token (kept in that tab's memory only) and use **Try it out**.
 - `https://<your-host>/api/agent/v1/openapi.json`: the machine-readable OpenAPI 3 schema of the agent routes only, with this guide as its description. Point an agent here to learn the API.
-- `https://<your-host>/api/agent/v1/guide`: this guide as Markdown. Schema18 adds the `api_tokens` and `posting_marks` tables.
+- `https://<your-host>/api/agent/v1/guide`: this guide as Markdown.
 
 ## Getting a token (web app settings)
 
@@ -23,7 +23,7 @@ Each signed-in user (member or admin) manages one personal token from the accoun
 | DELETE | `/api/account/api-token`                  | Body `{}`. Revokes the token immediately; returns `{configured: false, …}`                                                                        |
 | GET    | `/api/account/posting-states`             | `{marks: {"<posting_id>": {posting_id, state, viewed_at, updated_at}}}`                                                                           |
 | PUT    | `/api/account/posting-states/{id}`        | Body `{state}` where `state` is `interested`, `applied`, `not_interested` or `null` (clear); 404 for unknown IDs                                  |
-| PUT    | `/api/account/posting-states/{id}/viewed` | Body `{viewed: true                                                                                                                               | false}`; `true`keeps the first view time,`false` clears it |
+| PUT    | `/api/account/posting-states/{id}/viewed` | Body `{viewed: true}` keeps the first view time; `{viewed: false}` clears it                                                                      |
 
 The token is **show-once**: the server stores only a SHA-256 digest and a hint like `wwf_…ab12`. If it is lost, reset it. One active token per user; a reset or revoke invalidates the old value on the next request. `last_used_at` is recorded at most once per minute.
 
@@ -55,7 +55,7 @@ At most **60 requests per minute per token** (fixed window). Exceeding it return
 | GET    | `/api/agent/v1/postings`             | Search, filter, sort and page the saved postings with the caller's marks                                                   |
 | GET    | `/api/agent/v1/postings/{id}`        | One posting with its plain-text detail content and analysis                                                                |
 | PUT    | `/api/agent/v1/postings/{id}/state`  | Body `{state}` (`interested`, `applied`, `not_interested` or `null`)                                                       |
-| PUT    | `/api/agent/v1/postings/{id}/viewed` | Body `{viewed: true                                                                                                        | false}` |
+| PUT    | `/api/agent/v1/postings/{id}/viewed` | Body `{viewed: true}` or `{viewed: false}`                                                                                 |
 
 Admins and members get the same member-visible data: no admin-only field (refresh capability, Duo challenge, pacing, credentials, settings, logs) is exposed here.
 
