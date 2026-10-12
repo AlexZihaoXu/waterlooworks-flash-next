@@ -1,9 +1,18 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { fileURLToPath } from 'node:url';
+
+const page = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rolldownOptions: {
+      // The agent API docs (Swagger UI) are a separate page at /docs/.
+      input: { main: page('index.html'), docs: page('docs/index.html') },
+    },
+  },
   server: {
     host: '127.0.0.1',
     fs: {
