@@ -26,6 +26,7 @@ from waterlooworks_flash_next.database import (
 )
 
 BASE = "/api/agent/v1"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 SUPPRESSED = {"detail": "Invalid request; input diagnostics suppressed."}
 
 
@@ -90,14 +91,74 @@ def test_router_exposes_only_read_and_mark_routes(tmp_path: Path) -> None:
         (f"{BASE}/postings/{{posting_id}}", "GET"),
         (f"{BASE}/postings/{{posting_id}}/state", "PUT"),
         (f"{BASE}/postings/{{posting_id}}/viewed", "PUT"),
+        (f"{BASE}/openapi.json", "GET"),
+        (f"{BASE}/guide", "GET"),
     }
     assert not any(method in {"POST", "DELETE", "PATCH"} for _, method in routes)
     assert spec["components"]["securitySchemes"]["AgentToken"]["scheme"] == "bearer"
+    public = {f"{BASE}/openapi.json", f"{BASE}/guide"}
     for path, method in routes:
         operation = spec["paths"][path][method.lower()]
         assert operation["operationId"]
         assert operation["description"]
-        assert operation["security"] == [{"AgentToken": []}]
+        if path in public:
+            assert "security" not in operation
+        else:
+            assert operation["security"] == [{"AgentToken": []}]
+
+
+def _refs(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "$ref" and isinstance(value, str):
+                yield value
+            else:
+                yield from _refs(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _refs(value)
+
+
+def test_public_agent_schema_lists_only_agent_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WW_PROJECT_ROOT", str(REPO_ROOT))
+    with session_client(tmp_path / "db.sqlite3") as client:
+        client.cookies.clear()
+        _public_routes(client)
+
+
+def _public_routes(client: TestClient) -> None:
+    response = client.get(f"{BASE}/openapi.json")
+    assert response.status_code == 200
+    schema = response.json()
+    assert schema["openapi"].startswith("3.")
+    assert schema["paths"]
+    assert all(path.startswith(f"{BASE}/") for path in schema["paths"])
+    assert f"{BASE}/postings" in schema["paths"]
+    assert set(schema["components"]["securitySchemes"]) == {"AgentToken"}
+    names = set(schema["components"]["schemas"])
+    for ref in _refs(schema):
+        assert ref.removeprefix("#/components/schemas/") in names
+    # Only the closure of agent references: no admin or settings shapes.
+    assert not any("Admin" in name or "AISettings" in name for name in names)
+    assert "Agent API" in schema["info"]["description"]
+
+
+def test_public_agent_guide_is_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WW_PROJECT_ROOT", str(REPO_ROOT))
+    with session_client(tmp_path / "db.sqlite3") as client:
+        client.cookies.clear()
+        _public_markdown(client)
+
+
+def _public_markdown(client: TestClient) -> None:
+    response = client.get(f"{BASE}/guide")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert response.text.startswith("# Agent API")
 
 
 def test_missing_bad_replaced_and_revoked_tokens_are_generic_401(

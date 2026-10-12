@@ -28,6 +28,7 @@ COPY --from=sidecar /sidecar /app/inference-sidecar
 COPY scripts/*.mjs ./scripts/
 COPY benchmarks/optimized/v7-salary.txt benchmarks/optimized/v7-keywords.txt ./benchmarks/optimized/
 COPY backend/src ./backend/src
+COPY docs/agent-api.md ./docs/agent-api.md
 COPY deployment/backend-entrypoint.sh /usr/local/bin/backend-entrypoint
 ENV PATH=/opt/venv/bin:$PATH UV_PROJECT_ENVIRONMENT=/opt/venv \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \

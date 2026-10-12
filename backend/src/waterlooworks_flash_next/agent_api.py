@@ -17,6 +17,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Response
 from fastapi import Path as ApiPath
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from waterlooworks_flash_next.agent_search import (
@@ -70,8 +71,13 @@ def install_agent_api(
     postings: Callable[[], list[PostingResponse]],
     service: RefreshService,
     verifier: FirebaseVerifier,
+    guide: Path | None = None,
 ) -> None:
-    """``postings`` returns the cached, identity-free member workspace listing."""
+    """``postings`` returns the cached, identity-free member workspace listing.
+
+    ``guide`` is the tracked ``docs/agent-api.md``; its text describes the
+    public agent schema and is served verbatim at ``/guide``.
+    """
     tokens = TokenStore(path)
     marks = MarkStore(path)
     limiter = RequestLimiter(limit=RATE_LIMIT, window_seconds=RATE_WINDOW_SECONDS)
@@ -341,4 +347,88 @@ def install_agent_api(
         except UnknownPosting:
             raise HTTPException(404, NOT_FOUND, headers=no_store_headers) from None
 
+    def guide_text() -> str | None:
+        try:
+            return guide.read_text(encoding="utf-8") if guide else None
+        except OSError:
+            return None
+
+    public = APIRouter(prefix=AGENT_PREFIX.rstrip("/"), tags=["agent"])
+    schema_cache: list[dict[str, Any]] = []
+
+    @public.get(
+        "/openapi.json",
+        operation_id="getAgentOpenApi",
+        response_class=JSONResponse,
+        description=(
+            "Public OpenAPI 3 schema of the agent API only (no admin or "
+            "session routes), with the agent guide as its description. "
+            "No token needed; every data route still requires one."
+        ),
+    )
+    def agent_openapi() -> dict[str, Any]:
+        if not schema_cache:
+            schema_cache.append(agent_schema(app.openapi(), guide_text()))
+        return schema_cache[0]
+
+    @public.get(
+        "/guide",
+        operation_id="getAgentGuide",
+        response_class=PlainTextResponse,
+        responses={200: {"content": {"text/markdown": {}}}},
+        description="Public Markdown guide to the agent API (docs/agent-api.md).",
+    )
+    def agent_guide() -> PlainTextResponse:
+        text = guide_text()
+        if text is None:
+            raise HTTPException(404, "Agent guide is unavailable.")
+        return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+
     app.include_router(router)
+    app.include_router(public)
+
+
+def _schema_refs(node: object) -> set[str]:
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "$ref" and isinstance(value, str):
+                found.add(value.removeprefix("#/components/schemas/"))
+            else:
+                found |= _schema_refs(value)
+    elif isinstance(node, list):
+        for value in node:
+            found |= _schema_refs(value)
+    return found
+
+
+def agent_schema(full: dict[str, Any], guide: str | None) -> dict[str, Any]:
+    """The agent paths of the app schema plus only the components they reach."""
+    paths = {
+        path: operations
+        for path, operations in full["paths"].items()
+        if path.startswith(AGENT_PREFIX)
+    }
+    available = full.get("components", {}).get("schemas", {})
+    pending, kept = _schema_refs(paths), {}
+    while pending:
+        name = pending.pop()
+        if name in kept or name not in available:
+            continue
+        kept[name] = available[name]
+        pending |= _schema_refs(kept[name])
+    return {
+        "openapi": full["openapi"],
+        "info": {
+            "title": "WaterlooWorks Flash agent API",
+            "version": full["info"]["version"],
+            "description": guide or "Agent API: see docs/agent-api.md.",
+        },
+        "paths": paths,
+        "components": {
+            "schemas": dict(sorted(kept.items())),
+            "securitySchemes": {
+                "AgentToken": full["components"]["securitySchemes"]["AgentToken"]
+            },
+        },
+    }

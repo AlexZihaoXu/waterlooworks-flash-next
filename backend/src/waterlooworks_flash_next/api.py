@@ -641,7 +641,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         return workspace_cache.get(workspace_variants)[0].postings
 
     install_agent_api(
-        app, path=path, postings=member_postings, service=service, verifier=verifier
+        app,
+        path=path,
+        postings=member_postings,
+        service=service,
+        verifier=verifier,
+        guide=root / "docs" / "agent-api.md",
     )
     app.include_router(protected)
     app.state.event_streams = event_streams
