@@ -1,13 +1,13 @@
 import { useCallback, useRef, useState } from 'react';
 import { LuCopy, LuKeyRound } from 'react-icons/lu';
 import {
+  Accordion,
   Alert,
   AlertDialog,
   Button,
   Card,
   Chip,
   Description,
-  Disclosure,
   Input,
   Label,
   TextField,
@@ -173,33 +173,35 @@ export function ApiTokenPanel({ token }: { token: ApiTokenSettings }) {
           </div>
         </Card.Content>
       </Card>
-      <Disclosure>
-        <Disclosure.Heading>
-          <Disclosure.Trigger>
-            How to use it
-            <Disclosure.Indicator />
-          </Disclosure.Trigger>
-        </Disclosure.Heading>
-        <Disclosure.Content>
-          <Disclosure.Body>
-            <div className="grid gap-2">
-              <Description>
-                Send it as a bearer token to the agent API. Keep it secret: it
-                acts as you. One token per account; resetting or revoking it
-                stops the old one immediately.
-              </Description>
-              <div className="overflow-x-auto">
-                <Typography type="code">
-                  {`curl -sS ${origin}/api/agent/v1/postings?q=python -H 'Authorization: Bearer wwf_…'`}
-                </Typography>
+      <Accordion>
+        <Accordion.Item id="token-usage">
+          <Accordion.Heading>
+            <Accordion.Trigger>
+              How to use it
+              <Accordion.Indicator />
+            </Accordion.Trigger>
+          </Accordion.Heading>
+          <Accordion.Panel>
+            <Accordion.Body>
+              <div className="grid gap-2">
+                <Description>
+                  Send it as a bearer token to the agent API. Keep it secret: it
+                  acts as you. One token per account; resetting or revoking it
+                  stops the old one immediately.
+                </Description>
+                <div className="overflow-x-auto">
+                  <Typography type="code">
+                    {`curl -sS '${origin}/api/agent/v1/postings?q=python' -H 'Authorization: Bearer wwf_…'`}
+                  </Typography>
+                </div>
+                <Description>
+                  Full reference: docs/agent-api.md in the project repository.
+                </Description>
               </div>
-              <Description>
-                Full reference: docs/agent-api.md in the project repository.
-              </Description>
-            </div>
-          </Disclosure.Body>
-        </Disclosure.Content>
-      </Disclosure>
+            </Accordion.Body>
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
       {portal && (
         <AlertDialog.Backdrop
           isOpen={confirm !== null}
