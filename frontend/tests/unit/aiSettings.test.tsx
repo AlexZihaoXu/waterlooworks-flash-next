@@ -253,4 +253,44 @@ describe('AI settings tab', () => {
       ),
     );
   });
+  it('lists the Codex catalog inside the modal after Load models', async () => {
+    const connected = {
+      configured: true,
+      updated_at: '2026-10-10T00:00:00+00:00',
+      expires_at: '2026-10-21T00:00:00+00:00',
+    };
+    fakeServer({
+      'GET /api/admin/ai': () =>
+        view({
+          credentials: { ...view().credentials, codex_device: connected },
+        }),
+      'GET /api/admin/ai/login': () => ({ login: null }),
+      'GET /api/admin/ai/models?mode=codex_device': () => ({
+        models: [
+          {
+            id: 'gpt-5.5',
+            name: 'GPT-5.5',
+            loaded: null,
+            context_window: 272000,
+            supports_tools: true,
+            efforts: ['off', 'low', 'medium', 'high'],
+            default_effort: null,
+            reasoning_field: null,
+            disable_with: null,
+          },
+        ],
+      }),
+    });
+    await openAiTab();
+    fireEvent.click(screen.getByRole('radio', { name: /Codex/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load models' }));
+    await screen.findByText('Models loaded.');
+    fireEvent.click(screen.getByRole('button', { name: /Model/ }));
+    expect(
+      await screen.findByRole('option', { name: /GPT-5\.5/ }),
+    ).toBeVisible();
+    // A native modal dialog sits in the top layer: a popover portaled to
+    // <body> renders beneath it, so the list must live inside the dialog.
+    expect(screen.getByRole('listbox').closest('dialog')).not.toBeNull();
+  });
 });

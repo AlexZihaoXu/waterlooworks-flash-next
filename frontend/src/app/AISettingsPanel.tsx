@@ -95,7 +95,7 @@ export function AISettingsPanel({
   const [confirming, setConfirming] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const anchor = useCallback((node: HTMLDivElement | null) => {
-    // Portal the confirmation into the native modal so it stays interactive.
+    // Portal overlays into the native modal: <body> sits beneath its top layer.
     setPortal(node?.closest('dialog') ?? null);
   }, []);
   const { draft, view } = ai;
@@ -492,7 +492,7 @@ export function AISettingsPanel({
               <Select.Value />
               <Select.Indicator />
             </Select.Trigger>
-            <Select.Popover>
+            <Select.Popover UNSTABLE_portalContainer={portal ?? undefined}>
               <ListBox>
                 {options.map((model) => (
                   <ListBox.Item
@@ -533,7 +533,7 @@ export function AISettingsPanel({
             <Select.Value />
             <Select.Indicator />
           </Select.Trigger>
-          <Select.Popover>
+          <Select.Popover UNSTABLE_portalContainer={portal ?? undefined}>
             <ListBox>
               {efforts.map((effort) => (
                 <ListBox.Item key={effort} id={effort} textValue={effort}>
