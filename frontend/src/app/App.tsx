@@ -1430,7 +1430,7 @@ const WorkspaceView = memo(function WorkspaceView({
               aria-level={1}
               aria-label="WaterlooWorks Flash Next"
             >
-              Flash
+              WaterlooWorks Flash
             </Typography>
           </div>
           <div className="inline-layout header-actions">
@@ -1857,27 +1857,57 @@ const WorkspaceView = memo(function WorkspaceView({
           >
             {!compact && (
               <div className="postings-heading">
-                <Typography type="h2">Postings</Typography>
-                <Button
-                  size="sm"
-                  variant={refreshing || requesting ? 'secondary' : 'tertiary'}
-                  isDisabled={!canRefresh}
-                  isPending={requesting}
-                  onPress={() => void requestRefresh()}
-                >
-                  <LuRefreshCw
-                    aria-hidden="true"
-                    color={
-                      refreshing || requesting ? 'currentColor' : 'var(--muted)'
-                    }
-                  />
-                  <Typography
-                    type="body-sm"
-                    color={refreshing || requesting ? 'default' : 'muted'}
-                  >
-                    {refreshing ? 'Refreshing…' : 'Refresh postings'}
+                <div className="postings-title">
+                  <Typography type="h2">Postings</Typography>
+                  <Typography type="body-sm" color="muted" role="status">
+                    {connected
+                      ? `${countText} · Page ${currentPage}/${pages} · Showing ${visible.length} on this page`
+                      : loading
+                        ? 'Loading saved postings…'
+                        : 'Waiting for saved postings'}
                   </Typography>
-                </Button>
+                  {connected && hasFilters && (
+                    <Button
+                      size="sm"
+                      variant="tertiary"
+                      onPress={() => {
+                        setQuery('');
+                        setFilters(emptyFilters);
+                        setMarkFilters(defaultMarkFilters);
+                        setPage(1);
+                      }}
+                    >
+                      Clear search and filters
+                    </Button>
+                  )}
+                </div>
+                <div className="postings-actions">
+                  <div className="sort-control">{sortSelect}</div>
+                  <Button
+                    size="sm"
+                    variant={
+                      refreshing || requesting ? 'secondary' : 'tertiary'
+                    }
+                    isDisabled={!canRefresh}
+                    isPending={requesting}
+                    onPress={() => void requestRefresh()}
+                  >
+                    <LuRefreshCw
+                      aria-hidden="true"
+                      color={
+                        refreshing || requesting
+                          ? 'currentColor'
+                          : 'var(--muted)'
+                      }
+                    />
+                    <Typography
+                      type="body-sm"
+                      color={refreshing || requesting ? 'default' : 'muted'}
+                    >
+                      {refreshing ? 'Refreshing…' : 'Refresh postings'}
+                    </Typography>
+                  </Button>
+                </div>
               </div>
             )}
             {!compact && (
@@ -1947,32 +1977,6 @@ const WorkspaceView = memo(function WorkspaceView({
           aria-label="Posting browser"
           aria-busy={loading}
         >
-          {!compact && (
-            <div className="workspace-toolbar">
-              <Typography type="body-sm" color="muted" role="status">
-                {connected
-                  ? `${countText} · Page ${currentPage}/${pages} · Showing ${visible.length} on this page`
-                  : loading
-                    ? 'Loading saved postings…'
-                    : 'Waiting for saved postings'}
-              </Typography>
-              {connected && hasFilters && (
-                <Button
-                  size="sm"
-                  variant="tertiary"
-                  onPress={() => {
-                    setQuery('');
-                    setFilters(emptyFilters);
-                    setMarkFilters(defaultMarkFilters);
-                    setPage(1);
-                  }}
-                >
-                  Clear search and filters
-                </Button>
-              )}
-              {!compact && <div className="sort-control">{sortSelect}</div>}
-            </div>
-          )}
           {!compact && payNotes}
           {signedOut ? (
             <div className="auth-results">

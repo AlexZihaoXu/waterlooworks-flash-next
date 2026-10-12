@@ -54,7 +54,7 @@ describe('phone workspace chrome', () => {
       name: 'WaterlooWorks Flash Next',
       level: 1,
     });
-    expect(title).toHaveTextContent(/^Flash$/);
+    expect(title).toHaveTextContent(/^WaterlooWorks Flash$/);
     expect(banner).not.toHaveTextContent(/Updated|Find your next role/);
     expect(
       within(banner).getByRole('button', { name: 'Account menu' }),

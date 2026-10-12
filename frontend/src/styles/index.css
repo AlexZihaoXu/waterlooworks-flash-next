@@ -63,9 +63,22 @@ body {
 }
 .postings-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.5rem 1rem;
+}
+/* Desktop header row: title + live count, then sort + refresh. */
+.postings-title,
+.postings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+}
+.postings-actions {
+  flex-wrap: nowrap;
 }
 .brand-heading {
   display: flex;
@@ -432,7 +445,7 @@ body {
   gap: 0.5rem;
 }
 .sort-control {
-  width: 16rem;
+  width: 19rem;
   max-width: 100%;
 }
 .horizontal-overflow {

@@ -29,9 +29,15 @@ describe('App', () => {
   it('places refresh beside Postings and names search without a visible label', () => {
     render(<App state={{ status: 'disconnected' }} />);
     const heading = screen.getByRole('heading', { name: 'Postings', level: 2 });
-    expect(heading.parentElement).toContainElement(
+    // One header row: title + live count, then sort + refresh.
+    const row = heading.closest('.postings-heading');
+    expect(row).toContainElement(
       screen.getByRole('button', { name: 'Refresh postings' }),
     );
+    expect(row).toContainElement(
+      screen.getByText('Waiting for saved postings'),
+    );
+    expect(row).toHaveTextContent('Sort by');
     expect(
       screen.getByRole('searchbox', {
         name: 'Search titles, companies, locations, and posting IDs',
