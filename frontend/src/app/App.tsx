@@ -105,6 +105,26 @@ import { useWindowScrolled } from '../lib/useWindowScrolled';
 import { isThemeChoice } from '../lib/themeControl';
 import { themeMenuSection } from './themeMenu';
 import { JobDetailContent } from './JobDetail';
+import {
+  MarkFiltersCard,
+  PostingMarkChip,
+  PostingMarkControls,
+  PostingMarkMenu,
+  type MarkMenuTarget,
+} from './PostingMarks';
+import { usePostingMarks, type PostingMarksApi } from '../lib/usePostingMarks';
+import {
+  defaultMarkFilters,
+  filterByMarks,
+  hiddenNotInterested,
+  markFilterCount,
+  type MarkFilters,
+  type MarkState,
+} from '../lib/postingMarks';
+import {
+  useContextMenuGesture,
+  type MenuPoint,
+} from '../lib/useContextMenuGesture';
 
 const PAGE_SIZE = 18;
 const NO_POSTINGS: readonly Posting[] = [];
@@ -162,6 +182,20 @@ export function App({
     () => latestRefresh.current?.retry_after ?? 0,
     [],
   );
+  // Per-user marks: loaded once per signed-in App (keyed by account).
+  const markState = usePostingMarks(!signedOut && live);
+  const { status: markStatus, marks: markMap } = markState;
+  const { setState, setViewed, markViewed } = markState;
+  const marks = useMemo(
+    () => ({
+      status: markStatus,
+      marks: markMap,
+      setState,
+      setViewed,
+      markViewed,
+    }),
+    [markStatus, markMap, setState, setViewed, markViewed],
+  );
   return (
     <RefreshContext value={refresh}>
       <WorkspaceView
@@ -184,6 +218,7 @@ export function App({
         refreshRetryAfter={refreshRetryAfter}
         signedOutContent={signedOutContent}
         account={account}
+        marks={marks}
       />
     </RefreshContext>
   );
@@ -207,6 +242,7 @@ const WorkspaceView = memo(function WorkspaceView({
   onOpenAdminSettings,
   nextScheduledAt = null,
   scheduledFailedAt = null,
+  marks,
 }: {
   state: WorkspaceState;
   live: boolean;
@@ -227,6 +263,7 @@ const WorkspaceView = memo(function WorkspaceView({
   /** Member-safe schedule summary from the shared refresh snapshot. */
   nextScheduledAt?: string | null;
   scheduledFailedAt?: string | null;
+  marks: PostingMarksApi;
 }) {
   const signedOut = signedOutContent !== undefined;
   const { theme, setTheme } = useTheme('system');
@@ -269,6 +306,9 @@ const WorkspaceView = memo(function WorkspaceView({
   const [query, setQuery] = useState(initialView.query);
   const appliedQuery = useDebouncedValue(query, 125);
   const [filters, setFilters] = useState<PostingFilters>(initialView.filters);
+  const [markFilters, setMarkFilters] = useState<MarkFilters>(
+    initialView.marks,
+  );
   const [pagination, setPagination] = useState({
     page: initialView.page,
     query: initialView.query,
@@ -292,6 +332,7 @@ const WorkspaceView = memo(function WorkspaceView({
       navigation.current = true;
       setQuery(next.query);
       setFilters(next.filters);
+      setMarkFilters(next.marks);
       setSort(next.sort);
       setPagination({ page: next.page, query: next.query });
       setPickerOpen(false);
@@ -472,15 +513,21 @@ const WorkspaceView = memo(function WorkspaceView({
   const pickerOptionCount = pickerRows.filter(
     (row) => row.kind === 'option',
   ).length;
+  const searched = useMemo(
+    () => filterPostings(presentedPostings, appliedQuery, activeFilters),
+    [presentedPostings, appliedQuery, activeFilters],
+  );
+  const markMap = marks.marks;
   const filtered = useMemo(
     () =>
-      sortPostings(
-        filterPostings(presentedPostings, appliedQuery, activeFilters),
-        sort,
-        now,
-      ),
-    [presentedPostings, appliedQuery, activeFilters, sort, now],
+      sortPostings(filterByMarks(searched, markMap, markFilters), sort, now),
+    [searched, markMap, markFilters, sort, now],
   );
+  const hiddenCount = useMemo(
+    () => hiddenNotInterested(searched, markMap, markFilters),
+    [searched, markMap, markFilters],
+  );
+  const markFilterTotal = markFilterCount(markFilters);
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, pages);
   useEffect(() => {
@@ -489,6 +536,7 @@ const WorkspaceView = memo(function WorkspaceView({
     const target = writeBrowseUrl(window.location.href, {
       query: appliedQuery,
       filters,
+      marks: markFilters,
       sort,
       page: currentPage,
     });
@@ -505,7 +553,7 @@ const WorkspaceView = memo(function WorkspaceView({
       readBrowseUrl(window.location.search),
     );
     navigation.current = false;
-  }, [connected, query, appliedQuery, filters, sort, currentPage]);
+  }, [connected, query, appliedQuery, filters, markFilters, sort, currentPage]);
   const visible = filtered.slice(
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
@@ -523,7 +571,8 @@ const WorkspaceView = memo(function WorkspaceView({
   );
   const hasFilters = Boolean(
     appliedQuery.trim() ||
-    Object.values(activeFilters).some((values) => values.length > 0),
+    Object.values(activeFilters).some((values) => values.length > 0) ||
+    markFilterTotal > 0,
   );
   const emptyText = !connected
     ? 'No posting data loaded'
@@ -538,7 +587,14 @@ const WorkspaceView = memo(function WorkspaceView({
     else if (node?.scrollTo)
       node.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
     else if (node) node.scrollTop = 0;
-  }, [currentPage, appliedQuery, activeFilters, sort, reducedMotion]);
+  }, [
+    currentPage,
+    appliedQuery,
+    activeFilters,
+    markFilters,
+    sort,
+    reducedMotion,
+  ]);
   const canRefresh =
     live &&
     state.status === 'ready' &&
@@ -549,7 +605,7 @@ const WorkspaceView = memo(function WorkspaceView({
 
   const activeFilterCount = Object.values(activeFilters).reduce(
     (count, values) => count + values.length,
-    0,
+    markFilterTotal,
   );
   const sortSelect = (
     <Select
@@ -593,7 +649,63 @@ const WorkspaceView = memo(function WorkspaceView({
       </Select.Popover>
     </Select>
   );
-  const countText = `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'}`;
+  const countText = `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'}${hiddenCount ? ` · ${hiddenCount.toLocaleString('en-CA')} not interested hidden` : ''}`;
+  // Marks: optimistic changes, an Undo toast when a posting leaves the list,
+  // and a rollback notice when the server refuses a change.
+  const notSaved = () =>
+    toast.danger('Mark not saved', {
+      description:
+        'Your change was undone. Check your connection and try again.',
+    });
+  const changeState = (id: string, state: MarkState | null) => {
+    const previous = markMap[id]?.state ?? null;
+    if (previous === state) return;
+    if (
+      state === 'not_interested' &&
+      markFilters.hideNotInterested &&
+      !markFilters.states.includes('not_interested')
+    ) {
+      const toastId = toast('Marked not interested', {
+        description: 'Hidden from the list. Show it again under Your marks.',
+        actionProps: {
+          children: 'Undo',
+          variant: 'tertiary',
+          onPress: () => {
+            toast.close(toastId);
+            void marks.setState(id, previous).then((ok) => ok || notSaved());
+          },
+        },
+      });
+    }
+    void marks.setState(id, state).then((ok) => ok || notSaved());
+  };
+  const changeViewed = (id: string, viewed: boolean) => {
+    void marks.setViewed(id, viewed).then((ok) => ok || notSaved());
+  };
+  const [menuTarget, setMenuTarget] = useState<MarkMenuTarget | null>(null);
+  const [menuPoint, setMenuPoint] = useState<MenuPoint>({ x: 0, y: 0 });
+  const menuAnchor = useRef<HTMLSpanElement>(null);
+  const markGesture = useContextMenuGesture((id, point) => {
+    const posting = postings.find((item) => item.posting_id === id);
+    setMenuPoint(point);
+    setMenuTarget({
+      id,
+      label: displayValue(posting?.listing.title),
+    });
+  });
+  const marksReady = marks.status === 'ready';
+  // Opening a posting marks it viewed once; unmarking it while it stays open
+  // is respected until another posting (or this one again) is opened.
+  const autoViewed = useRef<string | null>(null);
+  const detailReady =
+    detail?.status === 'ready' && detail.id === jobId && jobId !== null;
+  useEffect(() => {
+    if (!detailOpen) autoViewed.current = null;
+    if (!detailReady || !jobId || autoViewed.current === jobId) return;
+    if (marks.status !== 'ready') return;
+    autoViewed.current = jobId;
+    marks.markViewed(jobId);
+  }, [detailOpen, detailReady, jobId, marks]);
   const payNotes = (
     <>
       {connected && !paySortAvailable && (
@@ -649,12 +761,14 @@ const WorkspaceView = memo(function WorkspaceView({
               aria-label="Clear filters"
               isDisabled={
                 !connected ||
-                !Object.values(activeFilters).some(
+                (!Object.values(activeFilters).some(
                   (values) => values.length > 0,
-                )
+                ) &&
+                  markFilterTotal === 0)
               }
               onPress={() => {
                 setFilters(emptyFilters);
+                setMarkFilters(defaultMarkFilters);
                 setPage(1);
               }}
             >
@@ -732,6 +846,16 @@ const WorkspaceView = memo(function WorkspaceView({
           </div>
         </Card.Content>
       </Card>
+      <MarkFiltersCard
+        filters={markFilters}
+        onChange={(next) => {
+          setMarkFilters(next);
+          setPage(1);
+        }}
+        status={marks.status}
+        hiddenCount={hiddenCount}
+        isDisabled={!connected}
+      />
       <Card>
         <Card.Header>
           <Card.Title>Options</Card.Title>
@@ -1182,84 +1306,106 @@ const WorkspaceView = memo(function WorkspaceView({
                     posting.listing.openings,
                     'opening',
                   );
+                  const mark = markMap[posting.posting_id];
+                  const viewed = Boolean(mark?.viewed_at);
+                  const markBadges = (
+                    <span className="posting-badges">
+                      {deadlineInfo}
+                      <PostingMarkChip state={mark?.state ?? null} />
+                      {viewed && <span className="sr-only">Viewed</span>}
+                    </span>
+                  );
                   return (
-                    <Card
+                    // Native wrapper: dims viewed postings and owns the
+                    // right-click / long-press gesture; the Card is unchanged.
+                    <div
                       key={posting.posting_id}
-                      role="article"
-                      aria-labelledby={`posting-${posting.posting_id}`}
+                      className="posting-item"
+                      data-viewed={viewed ? 'true' : 'false'}
+                      {...(marksReady ? markGesture(posting.posting_id) : {})}
                     >
-                      {compact ? (
-                        // Phones: key facts first (title, company, pay with deadline,
-                        // location); ID and counts share one compact caption line.
-                        <>
-                          <Card.Header>
-                            {title}
-                            {company}
-                          </Card.Header>
-                          <Card.Content>
-                            <div className="posting-details">
-                              <div className="posting-key-line">
-                                {pay}
-                                {deadlineInfo}
-                              </div>
-                              {location}
-                              <Typography type="body-xs" color="muted">
-                                #{posting.posting_id} · {applications} ·{' '}
-                                {openings}
-                              </Typography>
-                            </div>
-                          </Card.Content>
-                        </>
-                      ) : (
-                        <>
-                          <Card.Header>
-                            {title}
-                            {company}
-                            <div className="posting-identity">
-                              <div className="posting-field">
-                                <LuHash
-                                  size={16}
-                                  color="var(--muted)"
-                                  role="img"
-                                  aria-label="Posting ID"
-                                />
-                                <Typography type="body-sm" color="muted">
-                                  {posting.posting_id}
-                                </Typography>
-                              </div>
-                              {deadlineInfo}
-                            </div>
-                          </Card.Header>
-                          <Separator />
-                          <Card.Content>
-                            <div className="posting-details">
-                              {pay}
-                              {location}
-                              <div className="posting-field">
-                                <LuUsers
-                                  size={16}
-                                  color="var(--muted)"
-                                  aria-hidden="true"
-                                />
-                                <Typography type="body-sm" color="muted">
-                                  {applications}
-                                </Typography>
-                              </div>
-                              <div className="posting-field">
-                                <LuCalendarDays
-                                  size={16}
-                                  color="var(--muted)"
-                                  aria-hidden="true"
-                                />
-                                <Typography type="body-sm" color="muted">
+                      <Card
+                        role="article"
+                        aria-labelledby={`posting-${posting.posting_id}`}
+                      >
+                        {compact ? (
+                          // Phones: key facts first (title, company, pay with deadline,
+                          // location); ID and counts share one compact caption line.
+                          <>
+                            <Card.Header>
+                              {title}
+                              {company}
+                            </Card.Header>
+                            <Card.Content>
+                              <div className="posting-details">
+                                <div className="posting-key-line">
+                                  {pay}
+                                  {markBadges}
+                                </div>
+                                {location}
+                                <Typography type="body-xs" color="muted">
+                                  #{posting.posting_id} · {applications} ·{' '}
                                   {openings}
                                 </Typography>
                               </div>
-                            </div>
-                          </Card.Content>
-                        </>
-                      )}
-                    </Card>
+                            </Card.Content>
+                          </>
+                        ) : (
+                          <>
+                            <Card.Header>
+                              {title}
+                              {company}
+                              <div className="posting-identity">
+                                <div className="posting-field">
+                                  <LuHash
+                                    size={16}
+                                    color="var(--muted)"
+                                    role="img"
+                                    aria-label="Posting ID"
+                                  />
+                                  <Typography type="body-sm" color="muted">
+                                    {posting.posting_id}
+                                  </Typography>
+                                </div>
+                                {/* Separate wrapping items keep the deadline beside the ID. */}
+                                {deadlineInfo}
+                                <PostingMarkChip state={mark?.state ?? null} />
+                                {viewed && (
+                                  <span className="sr-only">Viewed</span>
+                                )}
+                              </div>
+                            </Card.Header>
+                            <Separator />
+                            <Card.Content>
+                              <div className="posting-details">
+                                {pay}
+                                {location}
+                                <div className="posting-field">
+                                  <LuUsers
+                                    size={16}
+                                    color="var(--muted)"
+                                    aria-hidden="true"
+                                  />
+                                  <Typography type="body-sm" color="muted">
+                                    {applications}
+                                  </Typography>
+                                </div>
+                                <div className="posting-field">
+                                  <LuCalendarDays
+                                    size={16}
+                                    color="var(--muted)"
+                                    aria-hidden="true"
+                                  />
+                                  <Typography type="body-sm" color="muted">
+                                    {openings}
+                                  </Typography>
+                                </div>
+                              </div>
+                            </Card.Content>
+                          </>
+                        )}
+                      </Card>
+                    </div>
                   );
                 })}
               </div>
@@ -1545,6 +1691,21 @@ const WorkspaceView = memo(function WorkspaceView({
   return (
     <main className="workspace">
       <Toast.Provider placement="top" maxVisibleToasts={1} />
+      {/* Native zero-size anchor at the pointer for the mark context menu. */}
+      <span
+        ref={menuAnchor}
+        className="posting-menu-anchor"
+        style={{ left: menuPoint.x, top: menuPoint.y }}
+        aria-hidden="true"
+      />
+      <PostingMarkMenu
+        target={menuTarget}
+        anchorRef={menuAnchor}
+        mark={menuTarget ? markMap[menuTarget.id] : undefined}
+        onClose={() => setMenuTarget(null)}
+        onState={changeState}
+        onViewed={changeViewed}
+      />
       <AlertDialog.Backdrop isOpen={recentOpen} onOpenChange={setRecentOpen}>
         <AlertDialog.Container size="sm">
           <AlertDialog.Dialog>
@@ -1802,6 +1963,7 @@ const WorkspaceView = memo(function WorkspaceView({
                   onPress={() => {
                     setQuery('');
                     setFilters(emptyFilters);
+                    setMarkFilters(defaultMarkFilters);
                     setPage(1);
                   }}
                 >
@@ -2001,6 +2163,15 @@ const WorkspaceView = memo(function WorkspaceView({
                       </Breadcrumbs.Item>
                     </Breadcrumbs>
                   </div>
+                  {detailReady && jobId && (
+                    <PostingMarkControls
+                      mark={markMap[jobId]}
+                      isDisabled={!marksReady}
+                      compact={compact}
+                      onState={(state) => changeState(jobId, state)}
+                      onViewed={(viewed) => changeViewed(jobId, viewed)}
+                    />
+                  )}
                 </div>
                 <div className="detail-scroll" key={jobId}>
                   <AnimatePresence initial={false} mode="sync">

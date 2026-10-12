@@ -1,11 +1,18 @@
 import { sortLabels, type PostingSort } from './sorting';
 import type { PostingFilters } from './workspace';
+import {
+  defaultMarkFilters,
+  isMarkStateFilter,
+  type MarkFilters,
+} from './postingMarks';
 
 export type BrowseView = {
   query: string;
   page: number;
   sort: PostingSort;
   filters: PostingFilters;
+  /** Per-user mark filters; not-interested postings stay hidden by default. */
+  marks: MarkFilters;
 };
 const filterParameters = {
   organization: 'organization',
@@ -22,6 +29,7 @@ export function readBrowseUrl(search: string): BrowseView {
       ? Number(rawPage)
       : 1;
   const rawSort = params.get('sort') ?? 'id';
+  const rawViewed = params.get('viewed');
   const values = (key: string) => [
     ...new Set(
       params
@@ -40,12 +48,28 @@ export function readBrowseUrl(search: string): BrowseView {
       location: values('city'),
       targeted_disciplines: values('target'),
     },
+    marks: {
+      states: values('mark').filter(isMarkStateFilter),
+      viewed:
+        rawViewed === 'viewed' || rawViewed === 'unviewed'
+          ? rawViewed
+          : defaultMarkFilters.viewed,
+      hideNotInterested: !params.getAll('show').includes('not_interested'),
+    },
   };
 }
 
 export function writeBrowseUrl(href: string, view: BrowseView): string {
   const url = new URL(href);
-  for (const key of ['q', 'page', 'sort', ...Object.values(filterParameters)])
+  for (const key of [
+    'q',
+    'page',
+    'sort',
+    ...Object.values(filterParameters),
+    'mark',
+    'viewed',
+    'show',
+  ])
     url.searchParams.delete(key);
   if (view.query) url.searchParams.set('q', view.query);
   if (view.page > 1) url.searchParams.set('page', String(view.page));
@@ -54,5 +78,10 @@ export function writeBrowseUrl(href: string, view: BrowseView): string {
     for (const value of view.filters[key as keyof PostingFilters])
       url.searchParams.append(param, value);
   }
+  for (const state of view.marks.states) url.searchParams.append('mark', state);
+  if (view.marks.viewed !== 'any')
+    url.searchParams.set('viewed', view.marks.viewed);
+  if (!view.marks.hideNotInterested)
+    url.searchParams.set('show', 'not_interested');
   return url.pathname + url.search + url.hash;
 }

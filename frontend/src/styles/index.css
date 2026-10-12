@@ -377,6 +377,56 @@ body {
   align-items: center;
   gap: 0.5rem;
 }
+/* Native list-item wrapper for marks: viewed postings read as visited, like
+   followed links, and return to full strength under keyboard focus.
+   Only this app-owned element is styled; the HeroUI Card is unchanged. */
+.posting-item {
+  display: grid;
+  min-width: 0;
+}
+.posting-item[data-viewed='true'] {
+  opacity: 0.62;
+}
+.posting-item[data-viewed='true']:has(:focus-visible) {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .posting-item {
+    transition: opacity 0.15s ease;
+  }
+}
+/* Touch: a long-press opens the mark menu instead of the native link
+   callout or a text selection. */
+@media (hover: none) and (pointer: coarse) {
+  .posting-item {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+/* Zero-size native anchor the mark context menu is positioned against. */
+.posting-menu-anchor {
+  position: fixed;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+/* Deadline and mark chips share one wrapping row. */
+.posting-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+/* Detail mark controls: the state group and Viewed toggle wrap on phones. */
+.mark-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
 .posting-details {
   display: grid;
   gap: 0.5rem;

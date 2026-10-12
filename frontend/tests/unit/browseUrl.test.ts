@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readBrowseUrl, writeBrowseUrl } from '../../src/lib/browseUrl';
+import { defaultMarkFilters } from '../../src/lib/postingMarks';
 
 // Generic URL encoding and selection values; no posting/API fixtures.
 describe('browse URL', () => {
@@ -18,7 +19,33 @@ describe('browse URL', () => {
         country: ['d'],
         targeted_disciplines: [],
       },
+      marks: defaultMarkFilters,
     });
+  });
+  it('restores mark filters, keeping not-interested postings hidden by default', () => {
+    expect(readBrowseUrl('').marks).toEqual(defaultMarkFilters);
+    expect(
+      readBrowseUrl(
+        '?mark=applied&mark=none&mark=applied&mark=bogus&viewed=unviewed&show=not_interested',
+      ).marks,
+    ).toEqual({
+      states: ['applied', 'none'],
+      viewed: 'unviewed',
+      hideNotInterested: false,
+    });
+    expect(readBrowseUrl('?viewed=sometimes').marks.viewed).toBe('any');
+    const view = readBrowseUrl('?mark=interested&viewed=viewed');
+    const url = writeBrowseUrl('https://local.invalid/?keep=yes', view);
+    expect(url).toBe('/?keep=yes&mark=interested&viewed=viewed');
+    expect(
+      writeBrowseUrl(
+        'https://local.invalid/?mark=applied&show=not_interested',
+        {
+          ...view,
+          marks: defaultMarkFilters,
+        },
+      ),
+    ).toBe('/');
   });
   it('rejects invalid pages/sorts and removes empty or repeated selections', () => {
     for (const page of ['0', '-1', '1.5', 'NaN', '999999999999999999999'])
