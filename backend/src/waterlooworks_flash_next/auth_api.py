@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
 from waterlooworks_flash_next.account_profile import AccountProfile
+from waterlooworks_flash_next.agent_api import AGENT_PREFIX
 from waterlooworks_flash_next.api_models import RefreshRequest
 from waterlooworks_flash_next.app_auth import (
     COOKIE,
@@ -73,14 +74,20 @@ def install_auth(
             if len(origins) > 1 or (origins and origins[0] not in transport.origins):
                 return refuse(403, "Origin is not allowed.")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
-            if request.headers.get("origin") not in transport.origins:
+            # Bearer-token agent routes ignore cookies, so the cookie CSRF
+            # headers do not apply there; JSON and size bounds still do.
+            bearer_api = request.url.path.startswith(AGENT_PREFIX)
+            if (
+                not bearer_api
+                and request.headers.get("origin") not in transport.origins
+            ):
                 return refuse(403, "Origin is required and must be allowed.")
             if (
                 request.headers.get("content-type", "").split(";")[0].lower()
                 != "application/json"
             ):
                 return refuse(415, "Explicit application/json is required.")
-            if request.headers.get("x-ww-request") != "1":
+            if not bearer_api and request.headers.get("x-ww-request") != "1":
                 return refuse(403, "Explicit application request required.")
             size = 0
             chunks = []

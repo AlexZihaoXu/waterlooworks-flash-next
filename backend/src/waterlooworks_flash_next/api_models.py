@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from waterlooworks_flash_next.account_profile import AccountProfile
 from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import StoredListing
@@ -558,4 +559,84 @@ class PostingViewedRequest(Contract):
 class PostingMarksResponse(Contract):
     marks: dict[str, PostingMark] = Field(
         description="The caller's marks keyed by posting ID; unmarked IDs are absent."
+    )
+
+
+class AgentPostingSummary(Contract):
+    """Compact member-visible posting for agents, with the caller's marks."""
+
+    posting_id: str
+    title: str | None
+    organization: str | None
+    division: JsonValue = None
+    location: str | None = Field(description="Stored listing city/location text.")
+    openings: JsonValue = Field(default=None, description="Source value as stored.")
+    level: JsonValue = None
+    application_count: JsonValue = Field(
+        default=None, description="Source value as stored."
+    )
+    deadline: JsonValue = Field(
+        default=None,
+        description="Source text, Eastern Time, e.g. 'Oct 15, 2026 11:59 PM'.",
+    )
+    work_arrangement: Literal["Remote", "Hybrid", "In-person"] | None
+    country_code: str | None = Field(
+        description="Accepted inferred ISO country code; never derived from city."
+    )
+    country_name: str | None
+    targeted_disciplines: list[str]
+    compensation: CompensationSort | None = Field(
+        description="Source-grounded pay summary; null when none is available."
+    )
+    first_seen_at: str
+    last_seen_at: str
+    state: PostingState | None = Field(description="The caller's state, if any.")
+    viewed_at: str | None = Field(description="The caller's explicit view time.")
+
+
+class AgentPostingPage(Contract):
+    page: int
+    page_size: int
+    total: int = Field(description="Matching postings across all pages.")
+    total_pages: int
+    postings: list[AgentPostingSummary]
+
+
+class AgentPostingDetail(AgentPostingSummary):
+    """Everything a member sees on the web job page, read-only."""
+
+    content: StoredPostingContent | None = Field(
+        description="Saved plain-text detail fields; null before detail collection."
+    )
+    content_observed_at: str | None
+    analysis: PostingAnalysisResponse
+
+
+class AgentRefreshStatus(Contract):
+    """Read-only refresh facts; nothing here starts or schedules a refresh."""
+
+    running: bool
+    status: Literal["idle", "running", "completed", "failed", "interrupted"]
+    last_refreshed_at: str | None = Field(
+        description=(
+            "UTC ISO time the saved listings were last observed (the web "
+            "header's 'Refreshed … ago'); null before the first refresh."
+        )
+    )
+    last_run_finished_at: str | None = Field(
+        description="UTC ISO finish time of the most recent run of any outcome."
+    )
+    next_scheduled_at: str | None = Field(
+        description=(
+            "UTC ISO time of the next scheduled refresh; null when scheduling "
+            "is off, has no times or is inactive on this server."
+        )
+    )
+
+
+class AgentIdentityResponse(Contract):
+    uid: str
+    role: Literal["admin", "member"]
+    profile: AccountProfile | None = Field(
+        description="Display name/email/photo as shown in the app; null if unavailable."
     )

@@ -17,6 +17,7 @@ from starlette.background import BackgroundTask
 from starlette.middleware.gzip import GZipMiddleware
 
 from waterlooworks_flash_next.account_api import install_account
+from waterlooworks_flash_next.agent_api import install_agent_api
 from waterlooworks_flash_next.ai_settings_api import install_ai_settings
 from waterlooworks_flash_next.analysis_read import (
     read_analysis,
@@ -135,7 +136,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     docs = os.environ.get("WW_API_DOCS") == "1"
     verifier = FirebaseVerifier(root if database_path is None else path.parent)
     sessions = SessionStore(path)
-    workspace_cache = SnapshotCache[tuple[bytes, bytes]](path)
+    workspace_cache = SnapshotCache[tuple[WorkspaceResponse, bytes, bytes]](path)
     keyword_cache = SnapshotCache[tuple[bytes, str]](path)
     event_streams = StreamLimiter()
     shutdown = ShutdownNotice()
@@ -295,7 +296,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         try:
             # Cache identity-free bytes for both capability variants; choose per
             # request so neither role nor UID enters the shared cache.
-            member, admin = workspace_cache.get(workspace_variants)
+            _, member, admin = workspace_cache.get(workspace_variants)
             return Response(
                 admin if enabled and request.state.identity.role == "admin" else member,
                 media_type="application/json",
@@ -308,9 +309,10 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                 "Stored workspace is unavailable; diagnostics suppressed."
             ) from None
 
-    def workspace_variants() -> tuple[bytes, bytes]:
+    def workspace_variants() -> tuple[WorkspaceResponse, bytes, bytes]:
         snapshot = workspace_snapshot()
         return (
+            snapshot,
             snapshot.model_dump_json().encode(),
             snapshot.model_copy(update={"manual_refresh_available": True})
             .model_dump_json()
@@ -634,6 +636,13 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             background=BackgroundTask(lease.release),
         )
 
+    def member_postings() -> list[PostingResponse]:
+        # The identity-free member listing; marks are overlaid per caller.
+        return workspace_cache.get(workspace_variants)[0].postings
+
+    install_agent_api(
+        app, path=path, postings=member_postings, service=service, verifier=verifier
+    )
     app.include_router(protected)
     app.state.event_streams = event_streams
     return app
