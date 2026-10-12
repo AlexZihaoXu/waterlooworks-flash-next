@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.middleware.gzip import GZipMiddleware
 
+from waterlooworks_flash_next.account_api import install_account
 from waterlooworks_flash_next.ai_settings_api import install_ai_settings
 from waterlooworks_flash_next.analysis_read import (
     read_analysis,
@@ -205,6 +206,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     install_openai_usage(app, path)
     install_ai_settings(app, path)
     install_refresh_schedule(app, scheduler)
+    install_account(app, path)
     protected = APIRouter(dependencies=[Depends(require_session)])
 
     @app.exception_handler(RequestValidationError)

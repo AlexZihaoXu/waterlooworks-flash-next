@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import StoredListing
+from waterlooworks_flash_next.posting_marks import PostingMark, PostingState
 
 
 class Contract(BaseModel):
@@ -517,4 +518,44 @@ class RefreshScheduleView(Contract):
     last: list[ScheduleSlotView] = Field(description="Most recent slot decisions.")
     failure: ScheduleFailureView | None = Field(
         description="Scheduled-run failure that turned scheduling off, if any."
+    )
+
+
+class EmptyRequest(Contract):
+    """Explicit ``{}`` JSON body for session mutations that carry no fields."""
+
+    model_config = ConfigDict(strict=True)
+
+
+class ApiTokenIssued(Contract):
+    """The plaintext token, returned exactly once; store it now."""
+
+    token: str = Field(
+        repr=False,
+        description=(
+            "Bearer token for /api/agent/v1/. Shown only in this response; "
+            "the server keeps a hash."
+        ),
+    )
+    hint: str = Field(description="Prefix and last four characters, e.g. wwf_…ab12.")
+    created_at: str = Field(description="UTC ISO 8601.")
+
+
+class PostingStateRequest(Contract):
+    model_config = ConfigDict(strict=True)
+    state: PostingState | None = Field(
+        description="interested, applied or not_interested; null clears the state."
+    )
+
+
+class PostingViewedRequest(Contract):
+    model_config = ConfigDict(strict=True)
+    viewed: bool = Field(
+        description=("true records the first view time (idempotent); false clears it.")
+    )
+
+
+class PostingMarksResponse(Contract):
+    marks: dict[str, PostingMark] = Field(
+        description="The caller's marks keyed by posting ID; unmarked IDs are absent."
     )
