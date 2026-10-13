@@ -46,6 +46,11 @@ import { AISettingsPanel } from './AISettingsPanel';
 import { RefreshScheduleTab } from './RefreshScheduleTab';
 import { ApiTokenPanel } from './ApiTokenPanel';
 import { uncopiedTokenDiscard, useApiToken } from '../lib/useApiToken';
+import { DiscordAlertsPanel } from './DiscordAlertsPanel';
+import {
+  unsavedWebhookDiscard,
+  useDiscordWebhooks,
+} from '../lib/useDiscordWebhooks';
 import { useRefreshSchedule } from '../lib/useRefreshSchedule';
 
 function localTime(value: string | null): string | null {
@@ -361,7 +366,15 @@ function MemberAccountMenu({
   signOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const token = useApiToken(open, uid);
+  const [tab, setTab] = useState('api-token');
+  // Leaving a tab disables its hook, which clears a shown token or URL draft.
+  const token = useApiToken(open && tab === 'api-token', uid);
+  const discord = useDiscordWebhooks(open && tab === 'discord', uid);
+  const tokenUncopied = token.issued !== null && !token.copied;
+  const openSettings = () => {
+    setTab('api-token');
+    setOpen(true);
+  };
   return (
     <>
       <Dropdown>
@@ -378,7 +391,7 @@ function MemberAccountMenu({
           <Dropdown.Menu
             aria-label="Account actions"
             onAction={(key) => {
-              if (key === 'settings') setOpen(true);
+              if (key === 'settings') openSettings();
               if (key === 'sign-out') signOut();
             }}
           >
@@ -395,8 +408,8 @@ function MemberAccountMenu({
         <AdminSettingsDialog
           title="Settings"
           onDismiss={() => setOpen(false)}
-          dirty={token.issued !== null && !token.copied}
-          discard={uncopiedTokenDiscard}
+          dirty={tokenUncopied || discord.url !== ''}
+          discard={tokenUncopied ? uncopiedTokenDiscard : unsavedWebhookDiscard}
           footer={(requestDismiss) => (
             <>
               <Button
@@ -419,7 +432,32 @@ function MemberAccountMenu({
             </>
           )}
         >
-          <ApiTokenPanel token={token} />
+          <Tabs
+            selectedKey={tab}
+            onSelectionChange={(key) => {
+              if (key !== 'api-token') token.hide();
+              setTab(String(key));
+            }}
+          >
+            <Tabs.ListContainer>
+              <Tabs.List aria-label="Settings sections">
+                <Tabs.Tab id="api-token">
+                  API token
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="discord">
+                  Discord alerts
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+              </Tabs.List>
+            </Tabs.ListContainer>
+            <Tabs.Panel id="api-token">
+              <ApiTokenPanel token={token} />
+            </Tabs.Panel>
+            <Tabs.Panel id="discord">
+              <DiscordAlertsPanel discord={discord} />
+            </Tabs.Panel>
+          </Tabs>
         </AdminSettingsDialog>
       )}
     </>
@@ -464,6 +502,10 @@ function AdminAccountMenu({
     uid,
   );
   const tokenUncopied = token.issued !== null && !token.copied;
+  const discord = useDiscordWebhooks(
+    settings.isOpen && selectedTab === 'discord',
+    uid,
+  );
   // Workspace notices open straight to the Refresh (Duo) or Schedule tab.
   // Never reopen an open dialog: opening clears and rereads credential state.
   useImperativeHandle(settingsRef, () => ({
@@ -542,9 +584,16 @@ function AdminAccountMenu({
             settings.password !== '' ||
             openai.draft !== '' ||
             ai.dirty ||
-            tokenUncopied
+            tokenUncopied ||
+            discord.url !== ''
           }
-          discard={tokenUncopied ? uncopiedTokenDiscard : undefined}
+          discard={
+            tokenUncopied
+              ? uncopiedTokenDiscard
+              : discord.url !== ''
+                ? unsavedWebhookDiscard
+                : undefined
+          }
           notification={
             refresh.challenge?.approval_required && (
               <div className="flex flex-wrap items-center gap-4">
@@ -620,6 +669,10 @@ function AdminAccountMenu({
                 </Tabs.Tab>
                 <Tabs.Tab id="api-token">
                   API token
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="discord">
+                  Discord alerts
                   <Tabs.Indicator />
                 </Tabs.Tab>
               </Tabs.List>
@@ -1026,6 +1079,9 @@ function AdminAccountMenu({
             </Tabs.Panel>
             <Tabs.Panel id="api-token">
               <ApiTokenPanel token={token} />
+            </Tabs.Panel>
+            <Tabs.Panel id="discord">
+              <DiscordAlertsPanel discord={discord} />
             </Tabs.Panel>
           </Tabs>
         </AdminSettingsDialog>
