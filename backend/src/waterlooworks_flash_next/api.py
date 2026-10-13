@@ -65,6 +65,11 @@ from waterlooworks_flash_next.database import (
     StoredListing,
     open_database,
 )
+from waterlooworks_flash_next.discord_alerts import (
+    DiscordAlerts,
+    configured_public_base_url,
+)
+from waterlooworks_flash_next.discord_api import install_discord_webhooks
 from waterlooworks_flash_next.event_streams import (
     StreamLease,
     StreamLimiter,
@@ -79,6 +84,7 @@ from waterlooworks_flash_next.refresh import (
     RECENT_HEADER,
     RefreshConflict,
     RefreshService,
+    RunOutcome,
     configured_detail_limit,
     configured_full_refetch,
 )
@@ -128,8 +134,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         active=scheduling,
         min_interval_minutes=pacing.min_interval_minutes,
     )
-    # Scheduled runs that fail sign-in or hit a ban-risk signal turn it off.
-    service.on_finished = scheduler.run_finished
+    # Links and the avatar in Discord alerts; unset omits them (never guessed).
+    public_base_url = (
+        configured_public_base_url(os.environ.get("WW_PUBLIC_BASE_URL"))
+        if database_path is None
+        else None
+    )
 
     # Interactive docs load third-party CDN script on the app origin and expose
     # the API surface unauthenticated, so they are opt-in for local work only.
@@ -639,6 +649,31 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     def member_postings() -> list[PostingResponse]:
         # The identity-free member listing; marks are overlaid per caller.
         return workspace_cache.get(workspace_variants)[0].postings
+
+    def reference_rates() -> dict[str, str] | None:
+        rates = exchange_rates.read().get("cad_per_unit")
+        return (
+            {str(key): str(value) for key, value in rates.items()}
+            if isinstance(rates, dict)
+            else None
+        )
+
+    # New-job alerts use the member-visible workspace and run off the refresh
+    # worker after each run is finalized; the agent API has no trigger.
+    alerts = DiscordAlerts(
+        path, member_postings, base_url=public_base_url, fx=reference_rates
+    )
+    app.state.discord_alerts = alerts
+    install_discord_webhooks(app, alerts)
+
+    def run_finished(outcome: RunOutcome) -> None:
+        try:
+            # Scheduled runs that fail sign-in or hit a ban-risk signal turn it off.
+            scheduler.run_finished(outcome)
+        finally:
+            alerts.run_finished(outcome)
+
+    service.on_finished = run_finished
 
     install_agent_api(
         app,

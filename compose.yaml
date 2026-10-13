@@ -48,6 +48,8 @@ services:
       FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase_service_account
       WW_CREDENTIALS_KEY_FILE: /run/secrets/ww_credentials_key
       WW_AUTH_ORIGINS: https://${WW_PUBLIC_HOST:?Set the exact public TLS host}
+      # Links and the avatar in Discord new-job alerts.
+      WW_PUBLIC_BASE_URL: https://${WW_PUBLIC_HOST:?Set the exact public TLS host}
       WW_AUTH_TRUSTED_PROXY: 172.30.87.2
       WW_AUTH_ALLOW_LOOPBACK_HTTP: '0'
       # Only this verified Google owner can become the first (sole) admin of an

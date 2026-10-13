@@ -13,7 +13,10 @@ from waterlooworks_flash_next.data_generation import EXCLUDED_TABLES
 from waterlooworks_flash_next.database import open_database, start_collection_run
 
 
-def test_fresh_database_reaches_v18_with_empty_tables(tmp_path: Path) -> None:
+def test_fresh_database_reaches_v18_with_empty_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 18)
     connection = open_database(tmp_path / "fresh.sqlite3")
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
     for table in ("api_tokens", "posting_marks"):
@@ -41,6 +44,7 @@ def test_v17_database_migrates_to_v18_preserving_rows(
         if not str(row[1]).startswith("data_generation")
     }
     connection.close()
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 18)
     connection = open_database(path)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
     assert objects <= {

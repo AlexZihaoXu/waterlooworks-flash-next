@@ -2,12 +2,20 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SecretStr,
+    model_validator,
+)
 
 from waterlooworks_flash_next.account_profile import AccountProfile
 from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
 from waterlooworks_flash_next.content import StoredPostingContent
 from waterlooworks_flash_next.database import StoredListing
+from waterlooworks_flash_next.discord_webhooks import DiscordWebhook
 from waterlooworks_flash_next.posting_marks import PostingMark, PostingState
 
 
@@ -639,4 +647,40 @@ class AgentIdentityResponse(Contract):
     role: Literal["admin", "member"]
     profile: AccountProfile | None = Field(
         description="Display name/email/photo as shown in the app; null if unavailable."
+    )
+
+
+class DiscordWebhookCreate(Contract):
+    """A new alert destination; the URL is encrypted and never returned."""
+
+    model_config = ConfigDict(strict=True)
+    label: str = Field(max_length=200, description="Your name for it, 1-60 chars.")
+    url: SecretStr = Field(
+        max_length=2000,
+        repr=False,
+        description=(
+            "Discord webhook URL: https://discord.com/api/webhooks/<id>/<token> "
+            "(discordapp.com, ptb. and canary. hosts are normalised)."
+        ),
+    )
+
+
+class DiscordWebhookUpdate(Contract):
+    model_config = ConfigDict(strict=True)
+    label: str | None = Field(default=None, max_length=200)
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def some_change(self) -> "DiscordWebhookUpdate":
+        if self.label is None and self.enabled is None:
+            raise ValueError("Nothing to update.")
+        return self
+
+
+class DiscordWebhookList(Contract):
+    webhooks: list[DiscordWebhook]
+    limit: int = Field(description="Most webhooks one account may add.")
+    available: bool = Field(
+        description="False when the backend encryption key is not configured, "
+        "so webhooks cannot be added or delivered."
     )

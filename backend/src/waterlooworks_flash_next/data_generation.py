@@ -24,6 +24,8 @@ EXCLUDED_TABLES = frozenset(
         "api_tokens",
         "app_sessions",
         "app_users",
+        # Per-user encrypted Discord webhook destinations and send bookkeeping.
+        "discord_webhooks",
         # Per-user posting marks never enter the identity-free shared snapshots.
         "posting_marks",
         "openai_reauth_challenges",
