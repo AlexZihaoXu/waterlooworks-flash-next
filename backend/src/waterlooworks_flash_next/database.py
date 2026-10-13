@@ -28,7 +28,10 @@ from waterlooworks_flash_next.country_schema import migrate_country_inference
 from waterlooworks_flash_next.credentials import migrate_credentials
 from waterlooworks_flash_next.data_generation import ensure_data_generation
 from waterlooworks_flash_next.detail_schema import migrate_details
-from waterlooworks_flash_next.discord_schema import migrate_discord_webhooks
+from waterlooworks_flash_next.discord_schema import (
+    migrate_discord_announced,
+    migrate_discord_webhooks,
+)
 from waterlooworks_flash_next.inference_schema import migrate_inference
 from waterlooworks_flash_next.normalized_schema import migrate_normalized_storage
 from waterlooworks_flash_next.observations import migrate_observations, utc_timestamp
@@ -38,7 +41,7 @@ from waterlooworks_flash_next.refresh_schedule_schema import migrate_refresh_sch
 from waterlooworks_flash_next.runtime_secrets import is_private_owned_file
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class DatabaseError(Exception):
@@ -522,6 +525,15 @@ def open_database(path: Path) -> sqlite3.Connection:
                 if connection.execute("PRAGMA user_version").fetchone()[0] == 18:
                     migrate_discord_webhooks(connection)
                     connection.execute("PRAGMA user_version = 19")
+        if (
+            SCHEMA_VERSION >= 20
+            and connection.execute("PRAGMA user_version").fetchone()[0] == 19
+        ):
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 19:
+                    migrate_discord_announced(connection)
+                    connection.execute("PRAGMA user_version = 20")
         # Idempotent cache-invalidation triggers, outside the versioned contract.
         ensure_data_generation(connection)
         connection.execute("PRAGMA journal_mode = WAL")

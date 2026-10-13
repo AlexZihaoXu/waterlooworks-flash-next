@@ -1,4 +1,4 @@
-"""Schema v19: per-user Discord webhook destinations for new job alerts.
+"""Schema v19/v20: per-user Discord webhooks and the postings each announced.
 
 Purely additive and dependency-free so ``database`` can import it eagerly.
 """
@@ -33,3 +33,22 @@ def migrate_discord_webhooks(connection: sqlite3.Connection) -> None:
         ) STRICT
     """)
     connection.execute("CREATE INDEX idx_discord_webhooks_uid ON discord_webhooks(uid)")
+
+
+def migrate_discord_announced(connection: sqlite3.Connection) -> None:
+    """Schema v20: which postings each webhook no longer needs to announce.
+
+    Caller owns the transaction. A row means either Discord accepted a message
+    counting that posting, or the posting went stale before it was ready to
+    alert. Rows follow the webhook row.
+    """
+    connection.execute("""
+        CREATE TABLE discord_webhook_announced (
+            webhook_id INTEGER NOT NULL
+                REFERENCES discord_webhooks(id) ON DELETE CASCADE,
+            posting_id TEXT NOT NULL CHECK(length(posting_id) BETWEEN 1 AND 20
+                AND posting_id NOT GLOB '*[^0-9]*'),
+            announced_at INTEGER NOT NULL CHECK(announced_at>0),
+            PRIMARY KEY(webhook_id, posting_id)
+        ) STRICT, WITHOUT ROWID
+    """)

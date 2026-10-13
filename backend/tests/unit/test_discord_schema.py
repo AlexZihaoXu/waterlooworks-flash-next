@@ -27,11 +27,11 @@ COLUMNS = {
 
 
 def test_fresh_database_reaches_v19_with_an_empty_webhook_table(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 19)
     connection = open_database(tmp_path / "fresh.sqlite3")
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 19
-    assert database.SCHEMA_VERSION == 19
     assert (
         connection.execute("SELECT count(*) FROM discord_webhooks").fetchone()[0] == 0
     )
@@ -58,6 +58,7 @@ def test_v18_database_migrates_to_v19_preserving_rows(
         if not str(row[1]).startswith("data_generation")
     }
     connection.close()
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 19)
     connection = open_database(path)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 19
     assert objects <= {
