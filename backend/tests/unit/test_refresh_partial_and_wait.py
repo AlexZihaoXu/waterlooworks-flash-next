@@ -195,5 +195,4 @@ def test_analysis_batches_never_exceed_job_bound() -> None:
 
 def test_analysis_selects_only_postings_observed_in_this_run() -> None:
     source = inspect.getsource(RefreshService._analyze_saved_data)
-    assert "posting_observations" in source
-    assert "FROM posting_contents ORDER BY" not in source
+    assert "analysis_order(connection, run_id)" in source

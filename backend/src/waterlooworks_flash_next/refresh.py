@@ -13,7 +13,7 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -174,19 +174,24 @@ def select_detail_queue(
 ) -> tuple[list[StoredListing], dict[str, int]]:
     """Detail queue and counts of postings skipped per reason.
 
-    Postings without any saved detail content come first (listing order within
-    each group), so a run stopped by a request cap still makes progress on new
-    postings and the next refresh continues where it stopped.
+    Postings without any saved detail content come first, newest first
+    sighting first, so a run stopped by a request cap still makes progress on
+    new postings (and their alerts) and the next refresh continues where it
+    stopped. Re-fetches of saved postings follow in listing order.
     """
     from waterlooworks_flash_next.content_storage import EXTRACTOR_VERSION
 
     queue: list[StoredListing] = []
     saved_ids: set[str] = set()
+    first_seen: dict[str, str] = {}
     skipped: dict[str, int] = {}
     for listing in listings:
         current = connection.execute(
-            "SELECT content_hash FROM postings WHERE posting_id=?", (listing.id,)
+            "SELECT content_hash,first_seen_at FROM postings WHERE posting_id=?",
+            (listing.id,),
         ).fetchone()
+        if current is not None:
+            first_seen[listing.id] = str(current[1])
         reason = None
         if connection.execute(
             "SELECT 1 FROM posting_contents WHERE posting_id=?", (listing.id,)
@@ -210,16 +215,36 @@ def select_detail_queue(
             queue.append(listing)
         else:
             skipped[reason] = skipped.get(reason, 0) + 1
-    return prefer_unsaved(queue, saved_ids), skipped
+    return prefer_unsaved(queue, saved_ids, first_seen), skipped
+
+
+def _sighting(value: str | None) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value) if value else None
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def prefer_unsaved(
-    queue: list[StoredListing], saved_ids: set[str]
+    queue: list[StoredListing],
+    saved_ids: set[str],
+    first_seen: Mapping[str, str] | None = None,
 ) -> list[StoredListing]:
-    """Stable order: postings without saved detail content first."""
-    return [item for item in queue if item.id not in saved_ids] + [
-        item for item in queue if item.id in saved_ids
-    ]
+    """Postings without saved detail content first, newest first sighting first.
+
+    Stable: ties (and unknown sightings, which go last in the group) keep
+    listing order; saved postings follow in listing order.
+    """
+    sightings = first_seen or {}
+    unsaved = sorted(
+        (item for item in queue if item.id not in saved_ids),
+        key=lambda item: _sighting(sightings.get(item.id)),
+        reverse=True,
+    )
+    return unsaved + [item for item in queue if item.id in saved_ids]
 
 
 def lead_with_visible(
@@ -246,6 +271,30 @@ def lead_with_visible(
     ordered = rest if lead is None else [lead, *rest]
     queue = ordered if limit is None else ordered[:limit]
     return queue, sum(item.id in queued for item in queue) < len(eligible)
+
+
+def analysis_order(connection: sqlite3.Connection, run_id: str) -> list[str]:
+    """Postings with saved details listed in this run, in extraction order.
+
+    The per-run posting cap (``postings_per_run``) is spent in this order, so
+    postings whose current content was never analysed come first, newest
+    first sighting first, before re-analysis of earlier outcomes (rejected or
+    failed facts retried). History never grows a job: only this run's listing.
+    """
+    return [
+        str(row[0])
+        for row in connection.execute(
+            "SELECT c.posting_id FROM posting_contents c "
+            "JOIN posting_observations o ON o.posting_id=c.posting_id "
+            "JOIN postings p ON p.posting_id=c.posting_id "
+            "WHERE o.run_id=? ORDER BY EXISTS (SELECT 1 FROM inference_job_items i "
+            "WHERE i.posting_id=c.posting_id "
+            "AND i.selected_content_hash=c.content_hash "
+            "AND i.status IN ('accepted','rejected','failed')), "
+            "julianday(p.first_seen_at) DESC, c.posting_id",
+            (run_id,),
+        )
+    ]
 
 
 def analysis_batches(ids: list[str]) -> list[list[str]]:
@@ -800,16 +849,8 @@ class RefreshService:
                 f"{normalized.projections_created} updated, "
                 f"{normalized.projections_reused} reused."
             )
-            # Only postings in this run's listing pass; history never grows a job.
-            ids = [
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT c.posting_id FROM posting_contents c "
-                    "JOIN posting_observations o ON o.posting_id=c.posting_id "
-                    "WHERE o.run_id=? ORDER BY c.posting_id",
-                    (run_id,),
-                )
-            ]
+            # Only postings in this run's listing pass; new content first.
+            ids = analysis_order(connection, run_id)
             total = connection.execute(
                 "SELECT count(*) FROM posting_observations WHERE run_id=?", (run_id,)
             ).fetchone()[0]
