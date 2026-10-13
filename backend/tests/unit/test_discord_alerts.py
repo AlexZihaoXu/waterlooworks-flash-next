@@ -243,45 +243,36 @@ def test_alert_matches_the_fixed_format() -> None:
         "489802",
         title="Title B",
         organization="Organization B",
-        rates=[rate("33.26", minimum="26.63", currency=None)],
+        rates=[rate("53.26", minimum="26.63", currency=None)],
         openings=1,
         applications=1,
     )
-    payload = build_alert([second, first], 664, base_url=BASE)
+    payload = build_alert([first, second], 664, base_url=BASE)
     assert payload == {
         "username": "WaterlooWorks Flash",
         "avatar_url": f"{BASE}/discord-avatar.png",
         "content": ":rotating_light: **New job alert**\n**2 new jobs**, ranked by pay",
         "embeds": [
             {
-                "color": None,
-                "fields": [
-                    {
-                        "name": "Title B",
-                        "value": "**Organization B**\n\n"
-                        f"#️⃣ **ID:** [#489802]({BASE}/?job=489802)\n"
-                        "📍 **Location:** Not listed\n"
-                        "💵 **Pay:** 26.63–33.26 CAD/hr\\*\n\n"
-                        "🗓️ 1 opening\n💼 1 application",
-                        "inline": True,
-                    },
-                    {
-                        "name": "Title A",
-                        "value": "**Organization A**\n\n"
-                        f"#️⃣ **ID:** [#489801]({BASE}/?job=489801)\n"
-                        "📍 **Location:** City A, Country A · Remote\n"
-                        "💵 **Pay:** 32 CAD/hr\n\n"
-                        "🗓️ 3 openings\n💼 32 applications",
-                        "inline": True,
-                    },
-                    {
-                        "name": "​",
-                        "value": f"🔗 [See all new jobs on flash.example]({BASE}/)",
-                        "inline": False,
-                    },
-                ],
-                "footer": {"text": "2 new jobs · 664 jobs on the site"},
-            }
+                "title": "Title B",
+                "url": f"{BASE}/?job=489802",
+                "color": 0xD6A3FF,
+                "description": "**Organization B**\n"
+                "💵 26.63–53.26 CAD/hr\\*\n"
+                "🗓️ 1 opening · 💼 1 application",
+                "footer": {"text": "#489802"},
+            },
+            {
+                "title": "Title A",
+                "url": f"{BASE}/?job=489801",
+                "color": 0x8AB4FF,
+                "description": "**Organization A**\n"
+                "📍 City A, Country A · Remote\n"
+                "💵 32 CAD/hr\n"
+                "🗓️ 3 openings · 💼 32 applications\n"
+                f"🔗 [See all new jobs on flash.example]({BASE}/)",
+                "footer": {"text": "#489801 · 2 new jobs · 664 jobs on the site"},
+            },
         ],
         "allowed_mentions": {"parse": []},
     }
@@ -292,32 +283,67 @@ def test_alert_lists_only_the_top_five_and_summarises_the_rest() -> None:
         hourly(str(20 + index), posting_id=str(100 + index), title=f"Title {index}")
         for index in range(7)
     ]
-    payload = build_alert(postings, 1234, base_url=BASE)
+    payload = build_alert(postings, 1234, base_url=BASE, pending=12)
     assert payload["content"] == (
         ":rotating_light: **New job alert**\n**7 new jobs** · top 5 by pay"
     )
-    embed = payload["embeds"][0]
-    names = [field["name"] for field in embed["fields"]]
-    assert names == ["Title 6", "Title 5", "Title 4", "Title 3", "Title 2", "​"]
-    assert embed["footer"] == {
-        "text": "Showing 5 of 7 new jobs · 1,234 jobs on the site"
+    embeds = payload["embeds"]
+    assert [embed["title"] for embed in embeds] == [
+        "Title 6",
+        "Title 5",
+        "Title 4",
+        "Title 3",
+        "Title 2",
+    ]
+    assert [embed["footer"]["text"] for embed in embeds[:4]] == [
+        "#106",
+        "#105",
+        "#104",
+        "#103",
+    ]
+    assert embeds[4]["footer"] == {
+        "text": "#102 · Showing 5 of 7 new jobs · 1,234 jobs on the site"
+        " · 12 still being analysed"
     }
+    assert embeds[4]["description"].endswith(
+        f"\n🔗 [See all new jobs on flash.example]({BASE}/)"
+    )
+    assert all("🔗" not in embed["description"] for embed in embeds[:4])
+
+
+def test_embed_color_follows_the_web_salary_tiers() -> None:
+    def color(*args: Any, **kwargs: Any) -> object:
+        return build_alert([hourly(*args, **kwargs)], 1, base_url=None)["embeds"][0][
+            "color"
+        ]
+
+    assert color("19.99") is None
+    assert color("20") == 0x75DFA1
+    assert color("30") == 0x8AB4FF
+    assert color("40") == 0xFFD166
+    assert color("50") == 0xD6A3FF
+    assert color("65") == 0xFF5252
+    assert color("80") == 0xFF5252
+    assert color("100", currency="USD") is None  # no reference rate
+    assert build_alert([posting("1")], 1, base_url=None)["embeds"][0]["color"] is None
 
 
 def test_single_job_and_missing_details_read_naturally() -> None:
     payload = build_alert([posting("7")], 1, base_url=None)
     assert payload["content"] == ":rotating_light: **New job alert**\n**1 new job**"
     assert "avatar_url" not in payload
-    embed = payload["embeds"][0]
-    assert embed["fields"] == [
+    assert payload["embeds"] == [
         {
-            "name": "Untitled posting",
-            "value": "#️⃣ **ID:** #7\n📍 **Location:** Not listed\n"
-            "💵 **Pay:** Not listed",
-            "inline": True,
+            "title": "Untitled posting",
+            "color": None,
+            "description": "💵 Not listed",
+            "footer": {"text": "#7 · 1 new job · 1 job on the site"},
         }
     ]
-    assert embed["footer"] == {"text": "1 new job · 1 job on the site"}
+    only_applications = build_alert(
+        [posting("8", city="City", applications=2)], 1, base_url=None
+    )["embeds"][0]["description"]
+    assert only_applications == "📍 City\n💵 Not listed\n💼 2 applications"
 
 
 def test_source_text_is_escaped_and_cannot_mention() -> None:
@@ -333,13 +359,14 @@ def test_source_text_is_escaped_and_cannot_mention() -> None:
         1,
         base_url=BASE,
     )
-    field = payload["embeds"][0]["fields"][0]
-    assert field["name"] == (
+    embed = payload["embeds"][0]
+    assert embed["title"] == (
         "\\*\\*Bold\\*\\* \\_x\\_ \\@everyone \\<\\@123\\> "
         "\\# \\[link\\]\\(https\\://x.example\\)"
     )
-    assert field["value"].startswith("**Org \\~\\~a\\~\\~ \\`b\\` \\| \\> c**\n\n")
-    assert "📍 **Location:** City\\: A\n" in field["value"]
+    assert embed["description"].startswith(
+        "**Org \\~\\~a\\~\\~ \\`b\\` \\| \\> c**\n📍 City\\: A\n"
+    )
     assert payload["allowed_mentions"] == {"parse": []}
 
 
@@ -359,14 +386,20 @@ def test_long_source_text_stays_within_discord_limits() -> None:
         )
         for index in range(1, 8)
     ]
-    payload = build_alert(postings, 10**9, base_url=BASE)
-    embed = payload["embeds"][0]
-    total = len(embed["footer"]["text"])
-    for field in embed["fields"]:
-        assert len(field["name"]) <= 256
-        assert len(field["value"]) <= 1024
-        assert not field["name"].endswith("\\")
-        total += len(field["name"]) + len(field["value"])
+    payload = build_alert(postings, 10**9, base_url=BASE, pending=10**9)
+    embeds = payload["embeds"]
+    assert len(embeds) == 5
+    total = 0
+    for embed in embeds:
+        assert len(embed["title"]) <= 256
+        assert len(embed["description"]) <= 4096
+        assert len(embed["footer"]["text"]) <= 2048
+        assert not embed["title"].endswith("\\")
+        total += (
+            len(embed["title"])
+            + len(embed["description"])
+            + len(embed["footer"]["text"])
+        )
     assert total <= 6000
     assert len(payload["content"]) <= 2000
 

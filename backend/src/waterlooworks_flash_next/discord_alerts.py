@@ -39,16 +39,26 @@ TOP_COUNT = 5
 TIMEOUT_SECONDS = 10.0
 RETRY_AFTER_CAP_SECONDS = 10.0
 MAX_WORKERS = 4
-# Discord limits: field name 256, field value 1024, all embed text 6000.
-# Per-part budgets keep five full fields, the link field and the footer well
-# inside the 6000-character total without dropping listed postings.
-TITLE_BUDGET = 200
+# Discord limits: title 256, description 4096, footer 2048, 10 embeds and
+# 6000 characters across all embeds. Per-part budgets keep five full job
+# embeds (about 1000 characters each at most) inside the 6000 total.
+TITLE_LIMIT = 256
+DESCRIPTION_LIMIT = 4096
+FOOTER_LIMIT = 2048
 ORGANIZATION_BUDGET = 200
 CITY_BUDGET = 100
 COUNTRY_BUDGET = 60
 PAY_BUDGET = 120
-FIELD_VALUE_LIMIT = 1024
-ZERO_WIDTH_SPACE = "​"
+# The web app's salary tiers (frontend/src/lib/salaryTier.ts) by maximum
+# CAD/hour, using the dark-theme colors from .salary-* in index.css (Discord's
+# default theme is dark). Below 20 CAD/hour, or without comparable pay: none.
+TIER_COLORS = (
+    (Decimal(65), 0xFF5252),  # red and top
+    (Decimal(50), 0xD6A3FF),  # purple
+    (Decimal(40), 0xFFD166),  # gold
+    (Decimal(30), 0x8AB4FF),  # blue
+    (Decimal(20), 0x75DFA1),  # green
+)
 TEST_TITLE = "Test alert from WaterlooWorks Flash"
 TEST_DESCRIPTION = (
     "This webhook is connected. New job alerts are sent here after each "
@@ -289,18 +299,25 @@ def _plural(count: int, word: str) -> str:
     return f"{count:,} {word}{'' if count == 1 else 's'}"
 
 
-def _field(posting: PostingResponse, base_url: str | None) -> dict[str, Any]:
+def tier_color(
+    pay: CompensationSort | None, fx: Mapping[str, str] | None
+) -> int | None:
+    """The web app's salary tier color for the maximum CAD/hour, else None."""
+    value = max_cad_per_hour(pay, fx)
+    if value is None:
+        return None
+    for threshold, color in TIER_COLORS:
+        if value >= threshold:
+            return color
+    return None
+
+
+def _description(posting: PostingResponse) -> list[str]:
     listing = posting.listing
     lines: list[str] = []
     organization = _text(listing.organization)
     if organization:
-        lines += [f"**{escape_markdown(organization, ORGANIZATION_BUDGET)}**", ""]
-    posting_id = posting.posting_id
-    reference = (
-        f"[#{posting_id}]({base_url}/?job={posting_id})"
-        if base_url
-        else f"#{posting_id}"
-    )
+        lines.append(f"**{escape_markdown(organization, ORGANIZATION_BUDGET)}**")
     city, country, arrangement = _location_parts(posting)
     place = ", ".join(
         part
@@ -311,12 +328,11 @@ def _field(posting: PostingResponse, base_url: str | None) -> dict[str, Any]:
         if part
     )
     location = " · ".join(part for part in (place, arrangement) if part)
-    pay = escape_markdown(pay_label(posting.compensation_sort), PAY_BUDGET)
-    lines += [
-        f"#️⃣ **ID:** {reference}",
-        f"📍 **Location:** {location or 'Not listed'}",
-        f"💵 **Pay:** {pay}",
-    ]
+    if location:
+        lines.append(f"📍 {location}")
+    lines.append(
+        f"💵 {escape_markdown(pay_label(posting.compensation_sort), PAY_BUDGET)}"
+    )
     counts = []
     openings = count_value(listing.openings)
     if openings is not None:
@@ -325,15 +341,31 @@ def _field(posting: PostingResponse, base_url: str | None) -> dict[str, Any]:
     if applications is not None:
         counts.append(f"💼 {_plural(applications, 'application')}")
     if counts:
-        lines += ["", *counts]
-    value = "\n".join(lines)
-    return {
-        "name": escape_markdown(
-            _text(listing.title) or "Untitled posting", TITLE_BUDGET
-        ),
-        "value": value[:FIELD_VALUE_LIMIT],
-        "inline": True,
+        lines.append(" · ".join(counts))
+    return lines
+
+
+def _embed(
+    posting: PostingResponse,
+    base_url: str | None,
+    fx: Mapping[str, str] | None,
+    *,
+    footer: str,
+    extra: str | None = None,
+) -> dict[str, Any]:
+    posting_id = posting.posting_id
+    embed: dict[str, Any] = {
+        "title": escape_markdown(
+            _text(posting.listing.title) or "Untitled posting", TITLE_LIMIT
+        )
     }
+    if base_url:
+        embed["url"] = f"{base_url}/?job={posting_id}"
+    lines = _description(posting) + ([extra] if extra else [])
+    embed["color"] = tier_color(posting.compensation_sort, fx)
+    embed["description"] = "\n".join(lines)[:DESCRIPTION_LIMIT]
+    embed["footer"] = {"text": f"#{posting_id}{footer}"[:FOOTER_LIMIT]}
+    return embed
 
 
 def _identity(base_url: str | None) -> dict[str, Any]:
@@ -349,8 +381,14 @@ def build_alert(
     *,
     base_url: str | None,
     fx: Mapping[str, str] | None = None,
+    pending: int = 0,
 ) -> dict[str, Any]:
-    """The fixed alert message for one refresh run's new postings."""
+    """One webhook's alert: an embed for each of the top five ready postings.
+
+    ``new_postings`` are the ready, not yet announced postings for this
+    webhook; ``pending`` counts newer postings still waiting for details or
+    extraction, mentioned in the last footer.
+    """
     count = len(new_postings)
     listed = rank_by_pay(new_postings, fx)[:TOP_COUNT]
     if count == 1:
@@ -359,26 +397,34 @@ def build_alert(
         summary = f"**{count:,} new jobs**, ranked by pay"
     else:
         summary = f"**{count:,} new jobs** · top {TOP_COUNT} by pay"
-    fields = [_field(posting, base_url) for posting in listed]
-    if base_url:
-        host = urlsplit(base_url).netloc
-        fields.append(
-            {
-                "name": ZERO_WIDTH_SPACE,
-                "value": f"🔗 [See all new jobs on {host}]({base_url}/)",
-                "inline": False,
-            }
-        )
     site = _plural(total_jobs, "job") + " on the site"
     footer = (
-        f"Showing {len(listed)} of {_plural(count, 'new job')} · {site}"
+        f" · Showing {len(listed)} of {_plural(count, 'new job')} · {site}"
         if len(listed) < count
-        else f"{_plural(count, 'new job')} · {site}"
+        else f" · {_plural(count, 'new job')} · {site}"
     )
+    if pending > 0:
+        footer += f" · {pending:,} still being analysed"
+    link = (
+        f"🔗 [See all new jobs on {urlsplit(base_url).netloc}]({base_url}/)"
+        if base_url
+        else None
+    )
+    last = len(listed) - 1
+    embeds = [
+        _embed(
+            posting,
+            base_url,
+            fx,
+            footer=footer if index == last else "",
+            extra=link if index == last else None,
+        )
+        for index, posting in enumerate(listed)
+    ]
     return {
         **_identity(base_url),
         "content": f":rotating_light: **New job alert**\n{summary}",
-        "embeds": [{"color": None, "fields": fields, "footer": {"text": footer}}],
+        "embeds": embeds,
         "allowed_mentions": {"parse": []},
     }
 
