@@ -5,8 +5,10 @@ import {
   formatCount,
   filterOptions,
   filterPostings,
+  filterValue,
   matchesSearch,
   pageNumbers,
+  type Posting,
 } from '../../src/lib/workspace';
 import { parseRefresh, parseWorkspace } from '../../src/lib/useWorkspace';
 
@@ -49,6 +51,17 @@ describe('workspace logic', () => {
     expect(filter).toContain('posting.listing.organization');
     expect(matchesSearch(['001234', 'Alpha'], '1234 alpha')).toBe(true);
   });
+  it('filters by the recorded work arrangement only', () => {
+    // Structural objects carrying just the field under test.
+    const remote = { work_arrangement: 'Remote' } as Posting;
+    const unknown = { work_arrangement: null } as unknown as Posting;
+    expect(filterValue(remote, 'work_arrangement')).toBe('Remote');
+    expect(filterValue(unknown, 'work_arrangement')).toBeNull();
+    expect(filterOptions([remote, unknown], 'work_arrangement')).toEqual([
+      'Remote',
+    ]);
+  });
+
   it('does not manufacture filter options or records', () => {
     expect(filterPostings([], '')).toEqual([]);
     expect(filterOptions([], 'country')).toEqual([]);

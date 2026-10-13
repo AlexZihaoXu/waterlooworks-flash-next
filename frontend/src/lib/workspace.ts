@@ -12,19 +12,25 @@ export type WorkspaceState =
   | WorkspaceResponse
   | { status: 'disconnected' | 'loading' | 'error' | 'signed-out' };
 export type FilterKey =
-  'location' | 'country' | 'organization' | 'targeted_disciplines';
+  | 'location'
+  | 'country'
+  | 'organization'
+  | 'targeted_disciplines'
+  | 'work_arrangement';
 export type PostingFilters = Record<FilterKey, readonly string[]>;
 export const emptyFilters: PostingFilters = {
   location: [],
   country: [],
   organization: [],
   targeted_disciplines: [],
+  work_arrangement: [],
 };
 export const filterLabels = {
   organization: 'Organization',
   country: 'Country',
   location: 'City',
   targeted_disciplines: 'Targeted disciplines',
+  work_arrangement: 'Work arrangement',
 } as const;
 export const listingFields = [
   ['id', 'Posting ID'],
@@ -100,7 +106,9 @@ export function filterValue(
       ? posting.listing.organization
       : key === 'country'
         ? inferredCountryName(posting.country_inference)
-        : posting.location;
+        : key === 'work_arrangement'
+          ? posting.work_arrangement
+          : posting.location;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 

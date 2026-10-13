@@ -482,6 +482,7 @@ const WorkspaceView = memo(function WorkspaceView({
       country: filterOptions(postings, 'country'),
       organization: filterOptions(postings, 'organization'),
       targeted_disciplines: filterOptions(postings, 'targeted_disciplines'),
+      work_arrangement: filterOptions(postings, 'work_arrangement'),
     }),
     [postings],
   );
@@ -818,7 +819,7 @@ const WorkspaceView = memo(function WorkspaceView({
                         weight={activeFilters[key].length ? 'medium' : 'normal'}
                       >
                         {activeFilters[key].length === 0
-                          ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : 'organizations'}`
+                          ? `All ${key === 'country' ? 'countries' : key === 'location' ? 'cities' : key === 'targeted_disciplines' ? 'targeted disciplines' : key === 'work_arrangement' ? 'arrangements' : 'organizations'}`
                           : activeFilters[key].length === 1
                             ? activeFilters[key][0]
                             : `${activeFilters[key].length} selected`}

@@ -78,6 +78,7 @@ describe('App', () => {
       'Country All countries',
       'City All cities',
       'Targeted disciplines All targeted disciplines',
+      'Work arrangement All arrangements',
     ];
     for (const name of names) {
       const button = card.getByRole('button', { name });
@@ -92,7 +93,7 @@ describe('App', () => {
       card
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label')),
-    ).toEqual(['Clear filters', null, null, null, null]);
+    ).toEqual(['Clear filters', null, null, null, null, null]);
   });
   it('shows an honest disconnected workspace without starting collection', () => {
     render(<App state={{ status: 'disconnected' }} />);

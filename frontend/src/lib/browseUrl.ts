@@ -19,6 +19,7 @@ const filterParameters = {
   country: 'country',
   location: 'city',
   targeted_disciplines: 'target',
+  work_arrangement: 'arrangement',
 } as const;
 
 export function readBrowseUrl(search: string): BrowseView {
@@ -47,6 +48,7 @@ export function readBrowseUrl(search: string): BrowseView {
       country: values('country'),
       location: values('city'),
       targeted_disciplines: values('target'),
+      work_arrangement: values('arrangement'),
     },
     marks: {
       states: values('mark').filter(isMarkStateFilter),

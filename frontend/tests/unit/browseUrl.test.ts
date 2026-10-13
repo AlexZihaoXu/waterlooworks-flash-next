@@ -7,7 +7,7 @@ describe('browse URL', () => {
   it('restores all browsing controls and repeated values', () => {
     expect(
       readBrowseUrl(
-        '?q=a%26b&page=3&sort=newest&organization=a&organization=b&city=c&country=d',
+        '?q=a%26b&page=3&sort=newest&organization=a&organization=b&city=c&country=d&arrangement=Remote',
       ),
     ).toEqual({
       query: 'a&b',
@@ -18,6 +18,7 @@ describe('browse URL', () => {
         location: ['c'],
         country: ['d'],
         targeted_disciplines: [],
+        work_arrangement: ['Remote'],
       },
       marks: defaultMarkFilters,
     });
