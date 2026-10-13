@@ -575,6 +575,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/account/discord-webhooks': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Webhooks
+     * @description The caller's Discord new-job alert webhooks: label, hint, enabled state and last delivery result. Never the webhook URL.
+     */
+    get: operations['listDiscordWebhooks'];
+    put?: never;
+    /**
+     * Add Webhook
+     * @description Add a Discord webhook for new-job alerts. The URL is validated, encrypted with the backend key and never returned. At most 10 per account; duplicates are refused.
+     */
+    post: operations['addDiscordWebhook'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/account/discord-webhooks/{webhook_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete Webhook
+     * @description Delete the caller's webhook; returns the remaining list.
+     */
+    delete: operations['deleteDiscordWebhook'];
+    options?: never;
+    head?: never;
+    /**
+     * Update Webhook
+     * @description Rename the caller's webhook or turn its alerts on or off.
+     */
+    patch: operations['updateDiscordWebhook'];
+    trace?: never;
+  };
+  '/api/account/discord-webhooks/{webhook_id}/test': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Test Webhook
+     * @description Send a fixed test message to the caller's webhook and record the result. At most 3 tests per minute per account.
+     */
+    post: operations['testDiscordWebhook'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/agent/v1/me': {
     parameters: {
       query?: never;
@@ -1529,6 +1597,82 @@ export interface components {
        * Format: password
        */
       token: string;
+    };
+    /**
+     * DiscordWebhook
+     * @description Safe metadata only; never the URL, its token or ciphertext.
+     */
+    DiscordWebhook: {
+      /** Id */
+      id: number;
+      /** Label */
+      label: string;
+      /**
+       * Hint
+       * @description Last four digits of the webhook ID, e.g. …1234.
+       */
+      hint: string;
+      /** Enabled */
+      enabled: boolean;
+      /**
+       * Created At
+       * @description UTC ISO 8601.
+       */
+      created_at: string;
+      /**
+       * Last Sent At
+       * @description UTC ISO 8601 of the latest successful delivery.
+       */
+      last_sent_at: string | null;
+      /**
+       * Last Status
+       * @description Result of the latest delivery attempt; gone means Discord reported the webhook deleted, so it was disabled.
+       */
+      last_status: ('ok' | 'failed' | 'gone') | null;
+      /**
+       * Last Error At
+       * @description UTC ISO 8601 of the latest failed delivery.
+       */
+      last_error_at: string | null;
+    };
+    /**
+     * DiscordWebhookCreate
+     * @description A new alert destination; the URL is encrypted and never returned.
+     */
+    DiscordWebhookCreate: {
+      /**
+       * Label
+       * @description Your name for it, 1-60 chars.
+       */
+      label: string;
+      /**
+       * Url
+       * Format: password
+       * @description Discord webhook URL: https://discord.com/api/webhooks/<id>/<token> (discordapp.com, ptb. and canary. hosts are normalised).
+       */
+      url: string;
+    };
+    /** DiscordWebhookList */
+    DiscordWebhookList: {
+      /** Webhooks */
+      webhooks: components['schemas']['DiscordWebhook'][];
+      /**
+       * Limit
+       * @description Most webhooks one account may add.
+       */
+      limit: number;
+      /**
+       * Available
+       * @description False when the backend encryption key is not configured, so webhooks cannot be added or delivered.
+       */
+      available: boolean;
+    };
+    /** DiscordWebhookUpdate */
+    DiscordWebhookUpdate: {
+      /** Label */
+      label?: string | null;
+      /** Enabled */
+      enabled?: boolean | null;
     };
     /**
      * EmptyRequest
@@ -5069,6 +5213,394 @@ export interface operations {
       };
       /** @description Unprocessable Entity */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listDiscordWebhooks: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DiscordWebhookList'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  addDiscordWebhook: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DiscordWebhookCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DiscordWebhook'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  deleteDiscordWebhook: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        webhook_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DiscordWebhookList'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  updateDiscordWebhook: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        webhook_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DiscordWebhookUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DiscordWebhook'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  testDiscordWebhook: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        webhook_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['EmptyRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DiscordWebhook'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
         headers: {
           [name: string]: unknown;
         };
