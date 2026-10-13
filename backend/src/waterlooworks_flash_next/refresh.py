@@ -112,7 +112,7 @@ _INTERRUPT_ATTEMPTS = tuple(
     "error_category='cancelled' WHERE run_id=? AND status='running'"
     for table in ("posting_content_attempts", "posting_fetch_attempts")
 )
-UNCHANGED = "unchanged"
+SAVED = "saved"
 FAILED_SAME_REVISION = "failed_same_revision"
 _ITEM_FAILURES = frozenset(category.value for category in ITEM_FAILURE_CATEGORIES)
 # Latest terminal content attempt and the listing hash observed in that attempt's run.
@@ -126,34 +126,27 @@ _LATEST_ATTEMPT = (
     "ORDER BY a.rowid DESC LIMIT 1"
 )
 # Listing hash observed in the run of the latest successful content capture.
-_LATEST_SUCCESS = (
-    "SELECT r.content_hash FROM posting_content_attempts a "
-    "JOIN posting_observations o ON o.posting_id=a.posting_id AND o.run_id=a.run_id "
-    "JOIN posting_revisions r ON r.revision_id=o.revision_id "
-    "WHERE a.posting_id=? AND a.status='succeeded' "
-    "ORDER BY a.rowid DESC LIMIT 1"
-)
 
 
 def detail_skip_reason(
     current_hash: str,
     latest_attempt: tuple[str, str | None, str | None] | None,
     *,
-    success_hash: str | None = None,
     content_current: bool = False,
     full_refetch: bool = False,
 ) -> str | None:
     """Why a listed posting needs no detail request this run, or None to fetch it.
 
-    Saved content from the current extractor whose last successful capture saw
-    the same listing hash is reused. A posting whose own response failed
+    Saved content from the current extractor is always reused: listings change
+    constantly (application counts), descriptions rarely, and every re-fetch
+    is another WaterlooWorks request. A posting whose own response failed
     validation on the unchanged listing revision would fail identically again,
     so it waits for a listing change. ``full_refetch`` disables both skips.
     """
     if full_refetch:
         return None
-    if content_current and success_hash is not None and success_hash == current_hash:
-        return UNCHANGED
+    if content_current:
+        return SAVED
     if latest_attempt is not None:
         status, category, listing_hash = latest_attempt
         if (
@@ -199,7 +192,6 @@ def select_detail_queue(
             saved_ids.add(listing.id)
         if current is not None and not full_refetch:
             latest = connection.execute(_LATEST_ATTEMPT, (listing.id,)).fetchone()
-            success = connection.execute(_LATEST_SUCCESS, (listing.id,)).fetchone()
             content = connection.execute(
                 "SELECT 1 FROM posting_contents "
                 "WHERE posting_id=? AND extractor_version=?",
@@ -208,7 +200,6 @@ def select_detail_queue(
             reason = detail_skip_reason(
                 str(current[0]),
                 tuple(latest) if latest is not None else None,
-                success_hash=str(success[0]) if success is not None else None,
                 content_current=content is not None,
             )
         if reason is None:
@@ -1205,10 +1196,10 @@ class RefreshService:
                         "Full detail refetch enabled by the server; "
                         "unchanged postings are requested again."
                     )
-                elif skipped.get(UNCHANGED):
+                elif skipped.get(SAVED):
                     self.emit(
-                        f"{skipped[UNCHANGED]} postings skipped: listing unchanged "
-                        "since their last successful detail capture."
+                        f"{skipped[SAVED]} postings skipped: their description "
+                        "is already saved."
                     )
                 if skipped.get(FAILED_SAME_REVISION):
                     self.emit(

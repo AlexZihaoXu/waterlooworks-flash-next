@@ -20,7 +20,7 @@ from waterlooworks_flash_next.database import (
 )
 from waterlooworks_flash_next.refresh import (
     FAILED_SAME_REVISION,
-    UNCHANGED,
+    SAVED,
     analysis_order,
     configured_full_refetch,
     detail_skip_reason,
@@ -68,47 +68,57 @@ def test_queue_selection_runs_on_real_empty_schema(tmp_path: Path) -> None:
         connection.close()
 
 
-def test_unchanged_listing_with_current_content_is_skipped() -> None:
+def test_unchanged_listing_with_saved_content_is_skipped() -> None:
     assert (
         detail_skip_reason(
             CURRENT,
             ("succeeded", None, CURRENT),
-            success_hash=CURRENT,
             content_current=True,
         )
-        == UNCHANGED
+        == SAVED
     )
     # A later session-level failure does not invalidate the saved content.
     assert (
         detail_skip_reason(
             CURRENT,
             ("failed", "timeout", CURRENT),
-            success_hash=CURRENT,
             content_current=True,
         )
-        == UNCHANGED
+        == SAVED
     )
 
 
-def test_changed_listing_or_outdated_extraction_is_fetched() -> None:
+def test_saved_content_is_never_refetched_when_the_listing_changes() -> None:
+    # Application counts change the listing constantly; the saved
+    # description is reused regardless, so WaterlooWorks sees no re-fetch.
     assert (
         detail_skip_reason(
             CURRENT,
             ("succeeded", None, OLDER),
-            success_hash=OLDER,
             content_current=True,
         )
-        is None
+        == SAVED
     )
     assert (
         detail_skip_reason(
             CURRENT,
+            ("failed", "response_schema", CURRENT),
+            content_current=True,
+        )
+        == SAVED
+    )
+
+
+def test_outdated_extraction_or_missing_content_is_fetched() -> None:
+    assert (
+        detail_skip_reason(
+            CURRENT,
             ("succeeded", None, CURRENT),
-            success_hash=CURRENT,
             content_current=False,
         )
         is None
     )
+    assert detail_skip_reason(CURRENT, None, content_current=False) is None
 
 
 def test_full_refetch_bypasses_every_skip() -> None:
@@ -116,7 +126,6 @@ def test_full_refetch_bypasses_every_skip() -> None:
         detail_skip_reason(
             CURRENT,
             ("succeeded", None, CURRENT),
-            success_hash=CURRENT,
             content_current=True,
             full_refetch=True,
         )
