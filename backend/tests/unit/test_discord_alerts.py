@@ -8,13 +8,16 @@ use random tokens; every HTTP exchange goes through an injected
 import json
 import secrets
 import sqlite3
+import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from alert_support import analysed, collect, first_seen
 from cryptography.fernet import Fernet
 
 from waterlooworks_flash_next.api_models import (
@@ -571,6 +574,9 @@ def alerts_for(
     postings: Callable[[], list[PostingResponse]],
     transport: httpx.MockTransport,
     messages: list[str] | None = None,
+    *,
+    ai_active: bool = False,
+    now: datetime | None = None,
 ) -> DiscordAlerts:
     log = messages if messages is not None else []
     return DiscordAlerts(
@@ -581,28 +587,55 @@ def alerts_for(
         sleep=lambda _: None,
         spawn=lambda work: work(),
         log=lambda message, level: log.append(f"{level}: {message}"),
+        ai_active=lambda: ai_active,
+        clock=lambda: now or datetime.now(UTC),
     )
 
 
-def test_dispatch_sends_one_message_per_enabled_webhook_for_new_postings(
+def announced(path: Path) -> set[tuple[int, str]]:
+    connection = sqlite3.connect(path)
+    try:
+        return {
+            (row[0], row[1])
+            for row in connection.execute(
+                "SELECT webhook_id,posting_id FROM discord_webhook_announced"
+            )
+        }
+    finally:
+        connection.close()
+
+
+def board(*ids: str) -> list[PostingResponse]:
+    return [hourly(str(20 + int(pid)), posting_id=pid) for pid in ids]
+
+
+EARLIER = int(time.time()) - 60
+
+
+def test_dispatch_sends_each_webhook_its_ready_unannounced_postings(
     path: Path,
 ) -> None:
     run_with(path, "1", "2")
-    run_id = run_with(path, "2", "3", "4")
     store = WebhookStore(path)
     urls = [webhook_url("11"), webhook_url("22"), webhook_url("33")]
-    first = store.add("u1", "One", urls[0])
-    second = store.add("u2", "Two", urls[1])
-    disabled = store.add("u2", "Off", urls[2])
+    first = store.add("u1", "One", urls[0], now=EARLIER)
+    second = store.add("u2", "Two", urls[1], now=EARLIER)
+    disabled = store.add("u2", "Off", urls[2], now=EARLIER)
     store.update("u2", disabled.id, enabled=False)
-    snapshot = [hourly(str(20 + int(pid)), posting_id=pid) for pid in "1234"]
+    run_id = run_with(path, "2", "3", "4", "5")
+    collect(path, run_id, "2", "3", "4")
+    snapshot = board("1", "2", "3", "4", "5")
     transport, requests = transport_of(httpx.Response(204))
     messages: list[str] = []
     alerts = alerts_for(path, lambda: snapshot, transport, messages)
     assert alerts.dispatch(run_id) == 2
     assert sorted(str(request.url) for request in requests) == sorted(urls[:2])
+    # "2" is from the baseline collection, "5" has no detail content yet.
     body = json.loads(requests[0].content)
-    assert body == build_alert(snapshot[2:], 4, base_url=BASE)
+    assert body == build_alert(snapshot[2:4], 5, base_url=BASE, pending=1)
+    assert announced(path) == {
+        (webhook, pid) for webhook in (first.id, second.id) for pid in ("3", "4")
+    }
     assert [item.last_status for item in store.for_user("u1")] == ["ok"]
     assert [item.last_status for item in store.for_user("u2")] == ["ok", None]
     output = "\n".join(messages)
@@ -610,44 +643,143 @@ def test_dispatch_sends_one_message_per_enabled_webhook_for_new_postings(
         assert url not in output
         assert url.rsplit("/", 1)[1] not in output
     assert first.hint in output and second.hint in output
+    # Nothing new is ready: nothing is sent, even after a later run.
+    later = run_with(path, "2", "3", "4", "5")
+    assert alerts.dispatch(later) == 0
+    assert len(requests) == 2
+    # Once "5" is ready, the next run announces only "5".
+    collect(path, later, "5")
+    assert alerts.dispatch(later) == 2
+    assert json.loads(requests[-1].content) == build_alert(
+        snapshot[4:], 5, base_url=BASE
+    )
 
 
-def test_dispatch_sends_nothing_without_new_postings_or_on_a_first_run(
-    path: Path,
-) -> None:
-    initial = run_with(path, "1", "2")
-    repeat = run_with(path, "1", "2")
-    WebhookStore(path).add("u1", "One", webhook_url())
-    transport, requests = transport_of(httpx.Response(204))
-    alerts = alerts_for(path, lambda: [posting("1"), posting("2")], transport)
-    assert alerts.dispatch(repeat) == 0
-    assert alerts.dispatch(initial) == 0
-    assert requests == []
-
-
-def test_dispatch_marks_gone_webhooks_disabled_and_survives_failures(
+def test_ai_extraction_must_finish_before_a_posting_is_announced(
     path: Path,
 ) -> None:
     run_with(path, "1")
+    WebhookStore(path).add("u1", "One", webhook_url(), now=EARLIER)
+    run_id = run_with(path, "2", "3")
+    collect(path, run_id, "2", "3")
+    analysed(path, "2", "not_needed", error_category="stopped")
+    analysed(path, "3", "rejected", error_category="evidence_rejected")
+    transport, requests = transport_of(httpx.Response(204))
+    alerts = alerts_for(path, lambda: board("2", "3"), transport, ai_active=True)
+    assert alerts.dispatch(run_id) == 1
+    body = json.loads(requests[0].content)
+    assert [embed["footer"]["text"].split(" ")[0] for embed in body["embeds"]] == ["#3"]
+    assert body["embeds"][0]["footer"]["text"].endswith(" · 1 still being analysed")
+
+
+def test_a_new_webhook_never_receives_the_existing_backlog(path: Path) -> None:
+    run_with(path, "1")
     run_id = run_with(path, "2")
+    collect(path, run_id, "2")
+    WebhookStore(path).add("u1", "One", webhook_url(), now=int(time.time()) + 5)
+    transport, requests = transport_of(httpx.Response(204))
+    assert alerts_for(path, lambda: board("1", "2"), transport).dispatch(run_id) == 0
+    assert requests == [] and announced(path) == set()
+
+
+def test_the_first_collection_into_an_empty_database_sends_nothing(
+    path: Path,
+) -> None:
+    WebhookStore(path).add("u1", "One", webhook_url(), now=EARLIER)
+    initial = run_with(path, "1", "2")
+    collect(path, initial, "1", "2")
+    transport, requests = transport_of(httpx.Response(204))
+    alerts = alerts_for(path, lambda: board("1", "2"), transport)
+    assert alerts.dispatch(initial) == 0
+    repeat = run_with(path, "1", "2")
+    assert alerts.dispatch(repeat) == 0
+    assert requests == [] and announced(path) == set()
+
+
+def test_postings_off_the_board_or_missing_from_the_workspace_wait(
+    path: Path,
+) -> None:
+    run_with(path, "1")
+    WebhookStore(path).add("u1", "One", webhook_url(), now=EARLIER)
+    run_id = run_with(path, "2", "3")
+    collect(path, run_id, "2", "3")
+    closed = run_with(path, "3")  # "2" is no longer listed
+    transport, requests = transport_of(httpx.Response(204))
+    # "3" is missing from the (possibly older) workspace snapshot.
+    assert alerts_for(path, lambda: board("1", "2"), transport).dispatch(closed) == 0
+    assert alerts_for(path, lambda: board("2", "3"), transport).dispatch(closed) == 1
+    body = json.loads(requests[0].content)
+    assert [embed["footer"]["text"][:2] for embed in body["embeds"]] == ["#3"]
+
+
+def test_stale_postings_are_marked_silently_and_never_sent(path: Path) -> None:
+    now = datetime.now(UTC)
+    run_with(path, "1")
     store = WebhookStore(path)
-    store.add("u1", "One", webhook_url("11"))
-    transport, _ = transport_of(httpx.Response(404))
-    alerts_for(path, lambda: [posting("1"), posting("2")], transport).dispatch(run_id)
+    webhook = store.add(
+        "u1", "One", webhook_url(), now=int((now - timedelta(days=30)).timestamp())
+    )
+    run_id = run_with(path, "2", "3", "4")
+    collect(path, run_id, "2", "3")
+    first_seen(path, "2", now - timedelta(days=7, minutes=1))
+    first_seen(path, "4", now - timedelta(days=8))  # stale before it was ready
+    first_seen(path, "3", now - timedelta(days=6))
+    transport, requests = transport_of(httpx.Response(204))
+    alerts = alerts_for(path, lambda: board("2", "3", "4"), transport, now=now)
+    assert alerts.dispatch(run_id) == 1
+    body = json.loads(requests[0].content)
+    assert [embed["footer"]["text"][:2] for embed in body["embeds"]] == ["#3"]
+    assert body["embeds"][0]["footer"]["text"].endswith("on the site")
+    assert announced(path) == {(webhook.id, pid) for pid in ("2", "3", "4")}
+
+
+def test_failed_deliveries_retry_and_gone_webhooks_stop(path: Path) -> None:
+    run_with(path, "1")
+    store = WebhookStore(path)
+    store.add("u1", "One", webhook_url("11"), now=EARLIER)
+    run_id = run_with(path, "2")
+    collect(path, run_id, "2")
+    broken, attempts = transport_of(httpx.ConnectError("down"))
+    alerts_for(path, lambda: board("2"), broken).dispatch(run_id)
+    assert store.for_user("u1")[0].last_status == "failed"
+    assert announced(path) == set()
+    later = run_with(path, "2")
+    gone, attempts = transport_of(httpx.Response(404))
+    assert alerts_for(path, lambda: board("2"), gone).dispatch(later) == 1
     item = store.for_user("u1")[0]
     assert (item.last_status, item.enabled) == ("gone", False)
+    assert announced(path) == set()
+    assert alerts_for(path, lambda: board("2"), gone).dispatch(later) == 0
+    assert len(attempts) == 1
     store.update("u1", item.id, enabled=True)
-    broken, _ = transport_of(httpx.ConnectError("down"))
-    alerts_for(path, lambda: [posting("1"), posting("2")], broken).dispatch(run_id)
-    assert store.for_user("u1")[0].last_status == "failed"
+    ok, _ = transport_of(httpx.Response(204))
+    assert alerts_for(path, lambda: board("2"), ok).dispatch(later) == 1
+    assert announced(path) == {(item.id, "2")}
+
+
+def test_a_webhook_deleted_during_delivery_leaves_no_rows(path: Path) -> None:
+    run_with(path, "1")
+    store = WebhookStore(path)
+    webhook = store.add("u1", "One", webhook_url(), now=EARLIER)
+    run_id = run_with(path, "2")
+    collect(path, run_id, "2")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        store.delete("u1", webhook.id)
+        return httpx.Response(204)
+
+    transport = httpx.MockTransport(handler)
+    assert alerts_for(path, lambda: board("2"), transport).dispatch(run_id) == 1
+    assert announced(path) == set()
 
 
 def test_run_finished_spawns_off_the_refresh_thread_and_never_raises(
     path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_with(path, "1")
+    WebhookStore(path).add("u1", "One", webhook_url(), now=EARLIER)
     run_id = run_with(path, "2")
-    WebhookStore(path).add("u1", "One", webhook_url())
+    collect(path, run_id, "2")
     spawned: list[Callable[[], None]] = []
     transport, requests = transport_of(httpx.Response(204))
     alerts = DiscordAlerts(

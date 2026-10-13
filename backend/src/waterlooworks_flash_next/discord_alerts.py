@@ -1,11 +1,15 @@
-"""Fixed-format Discord new-job alerts, sent after a refresh finds new postings.
+"""Fixed-format Discord new-job alerts for postings ready to show.
 
-The message lists the top five new postings by maximum CAD/hour pay using the
-member-visible workspace data; the rest are summarised in the footer. Delivery
-runs on a background thread after the refresh run is finalized, never on a
-request path and never able to fail the refresh. Webhook URLs are secrets:
-they are only decrypted for delivery and never logged; logs carry the stored
-hint (last digits of the webhook ID) and a fixed status only.
+After every completed or partial refresh, each enabled webhook gets at most
+one message about postings first seen since it was added that are now ready
+(details saved and AI extraction finished; see ``alert_readiness``) and not
+yet announced to it. The message has one embed for each of the top five by
+maximum CAD/hour pay, using the member-visible workspace data; the rest are
+summarised in the last footer. Delivery runs on a background thread after the
+refresh run is finalized, never on a request path and never able to fail the
+refresh. Webhook URLs are secrets: they are only decrypted for delivery and
+never logged; logs carry the stored hint (last digits of the webhook ID), a
+fixed status and a job count only.
 """
 
 import logging
@@ -15,6 +19,8 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -23,11 +29,16 @@ from urllib.parse import urlsplit
 import httpx
 
 from waterlooworks_flash_next.agent_search import count_value
+from waterlooworks_flash_next.alert_readiness import (
+    ai_extraction_active,
+    ready_posting_ids,
+)
 from waterlooworks_flash_next.api_models import CompensationSort, PostingResponse
 from waterlooworks_flash_next.discord_webhooks import (
     DiscordWebhook,
     WebhookStatus,
     WebhookStore,
+    WebhookTarget,
     WebhookUnavailable,
 )
 from waterlooworks_flash_next.logging import stage_logger
@@ -39,6 +50,8 @@ TOP_COUNT = 5
 TIMEOUT_SECONDS = 10.0
 RETRY_AFTER_CAP_SECONDS = 10.0
 MAX_WORKERS = 4
+# Postings first seen longer ago are never alerted (retired silently).
+STALE_AFTER = timedelta(days=7)
 # Discord limits: title 256, description 4096, footer 2048, 10 embeds and
 # 6000 characters across all embeds. Per-part budgets keep five full job
 # embeds (about 1000 characters each at most) inside the 6000 total.
@@ -499,8 +512,32 @@ def _default_spawn(work: Callable[[], None]) -> None:
     threading.Thread(target=work, name="discord-alerts", daemon=True).start()
 
 
+@dataclass(frozen=True)
+class _RunPostings:
+    """Postings listed in one run, from a single read snapshot."""
+
+    first_seen: dict[str, datetime]
+    ready: set[str]
+
+
+@dataclass(frozen=True)
+class _Plan:
+    target: WebhookTarget
+    candidates: list[PostingResponse]
+    pending: int
+    stale: set[str]
+
+
+def _parse_time(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 class DiscordAlerts:
-    """Sends one alert per enabled webhook after each run with new postings."""
+    """After each run, alerts every enabled webhook about its ready new postings."""
 
     def __init__(
         self,
@@ -514,6 +551,8 @@ class DiscordAlerts:
         spawn: Callable[[Callable[[], None]], None] = _default_spawn,
         log: Callable[[str, str], None] | None = None,
         max_workers: int = MAX_WORKERS,
+        ai_active: Callable[[], bool] | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.path = path
         self.store = WebhookStore(path)
@@ -524,6 +563,8 @@ class DiscordAlerts:
         self.sleep = sleep
         self.spawn = spawn
         self.max_workers = max_workers
+        self.ai_active = ai_active or (lambda: ai_extraction_active(path))
+        self.clock = clock
         self._log = log or self._stage_log
         self._lock = threading.Lock()
 
@@ -556,24 +597,40 @@ class DiscordAlerts:
         except Exception:
             self._log("Discord alerts failed; diagnostics suppressed.", "warning")
 
-    def _new_posting_ids(self, run_id: str) -> tuple[set[str], bool]:
+    def _run_postings(self, run_id: str, ai_active: bool) -> _RunPostings:
+        """Postings listed in this run, excluding the first collection's.
+
+        The earliest run that saved postings is the baseline: everything it
+        saved already existed, so none of it is ever alerted.
+        """
         connection = sqlite3.connect(
             self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5
         )
         try:
             connection.execute("BEGIN")
-            new = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT posting_id FROM postings WHERE first_seen_run_id=?",
-                    (run_id,),
-                )
-            }
-            earlier = connection.execute(
-                "SELECT EXISTS(SELECT 1 FROM postings WHERE first_seen_run_id<>?)",
+            baseline = connection.execute(
+                "SELECT r.id FROM collection_runs r WHERE EXISTS "
+                "(SELECT 1 FROM postings p WHERE p.first_seen_run_id=r.id) "
+                "ORDER BY r.started_at, r.rowid LIMIT 1"
+            ).fetchone()
+            first_seen: dict[str, datetime] = {}
+            for posting_id, seen, first_run in connection.execute(
+                "SELECT p.posting_id,p.first_seen_at,p.first_seen_run_id "
+                "FROM posting_observations o JOIN postings p USING(posting_id) "
+                "WHERE o.run_id=?",
                 (run_id,),
-            ).fetchone()[0]
-            return new, bool(earlier)
+            ):
+                parsed = _parse_time(seen)
+                if parsed is not None and (
+                    baseline is None or first_run != baseline[0]
+                ):
+                    first_seen[str(posting_id)] = parsed
+            ready = (
+                ready_posting_ids(connection, ai_active=ai_active) & first_seen.keys()
+                if first_seen
+                else set()
+            )
+            return _RunPostings(first_seen, ready)
         finally:
             connection.close()
 
@@ -591,20 +648,57 @@ class DiscordAlerts:
         except Exception:
             return None
 
-    def dispatch(self, run_id: str) -> int:
-        """Send this run's alert; returns the number of webhooks attempted.
+    def _plan(
+        self,
+        targets: Sequence[WebhookTarget],
+        run: _RunPostings,
+        snapshot: Mapping[str, PostingResponse],
+    ) -> list[_Plan]:
+        """Per webhook: ready unannounced postings, pending count, stale IDs.
 
-        Nothing is sent when the run added no postings, or when it is the
-        first collection (every saved posting would otherwise be "new").
+        Only postings first seen since the webhook was added count; those
+        first seen more than ``STALE_AFTER`` ago are retired silently.
+        """
+        cutoff = self.clock() - STALE_AFTER
+        done = self.store.announced([target.id for target in targets])
+        plans = []
+        for target in targets:
+            added = datetime.fromtimestamp(target.created_at, UTC).replace(
+                microsecond=0
+            )
+            unannounced = {
+                posting_id: seen
+                for posting_id, seen in run.first_seen.items()
+                if seen >= added and posting_id not in done[target.id]
+            }
+            stale = {pid for pid, seen in unannounced.items() if seen < cutoff}
+            fresh = unannounced.keys() - stale
+            ready = fresh & run.ready
+            plans.append(
+                _Plan(
+                    target,
+                    [
+                        snapshot[posting_id]
+                        for posting_id in sorted(ready, key=int)
+                        if posting_id in snapshot
+                    ],
+                    len(fresh - ready),
+                    stale,
+                )
+            )
+        return plans
+
+    def dispatch(self, run_id: str) -> int:
+        """Alert each enabled webhook; returns the number of webhooks sent to.
+
+        Candidates for a webhook are postings listed in this run, first seen
+        since the webhook was added (never the first collection's), ready
+        (``alert_readiness``), in the member workspace, not yet announced to
+        it, and first seen within ``STALE_AFTER``. They are marked announced
+        only after Discord accepts the message, so a failed delivery retries
+        after the next run. Webhooks without candidates get nothing.
         """
         with self._lock:
-            new_ids, earlier = self._new_posting_ids(run_id)
-            if not new_ids or not earlier:
-                return 0
-            snapshot = self.postings()
-            new = [posting for posting in snapshot if posting.posting_id in new_ids]
-            if not new:
-                return 0
             try:
                 targets = self.store.enabled_targets()
             except WebhookUnavailable:
@@ -616,24 +710,49 @@ class DiscordAlerts:
                 return 0
             if not targets:
                 return 0
-            payload = build_alert(
-                new, len(snapshot), base_url=self.base_url, fx=self._rates(new)
-            )
+            run = self._run_postings(run_id, self.ai_active())
+            if not run.first_seen:
+                return 0
+            snapshot_list = self.postings()
+            snapshot = {posting.posting_id: posting for posting in snapshot_list}
+            plans = self._plan(targets, run, snapshot)
+            for plan in plans:
+                self.store.mark_announced(plan.target.id, plan.stale)
+            sending = [plan for plan in plans if plan.candidates]
+            if not sending:
+                return 0
+            fx = self._rates([p for plan in sending for p in plan.candidates])
+            payloads = [
+                build_alert(
+                    plan.candidates,
+                    len(snapshot_list),
+                    base_url=self.base_url,
+                    fx=fx,
+                    pending=plan.pending,
+                )
+                for plan in sending
+            ]
             with ThreadPoolExecutor(
-                max_workers=max(1, min(self.max_workers, len(targets))),
+                max_workers=max(1, min(self.max_workers, len(sending))),
                 thread_name_prefix="discord-alert",
             ) as pool:
                 results = list(
                     pool.map(
-                        lambda target: self._send(
-                            target.url.get_secret_value(), payload
+                        lambda plan, payload: self._send(
+                            plan.target.url.get_secret_value(), payload
                         ),
-                        targets,
+                        sending,
+                        payloads,
                     )
                 )
-            for target, status in zip(targets, results, strict=True):
+            for plan, status in zip(sending, results, strict=True):
+                target = plan.target
                 try:
                     self.store.record(target.id, status)
+                    if status == "ok":
+                        self.store.mark_announced(
+                            target.id, (p.posting_id for p in plan.candidates)
+                        )
                 except Exception:
                     self._log(
                         f"Could not record the Discord alert result for webhook "
@@ -641,10 +760,11 @@ class DiscordAlerts:
                         "warning",
                     )
                 self._log(
-                    f"Discord alert to webhook {target.hint}: {status}.",
+                    f"Discord alert to webhook {target.hint}: {status} "
+                    f"({_plural(len(plan.candidates), 'job')}).",
                     "info" if status == "ok" else "warning",
                 )
-            return len(targets)
+            return len(sending)
 
     def send_test(self, uid: str, webhook_id: int) -> DiscordWebhook:
         """Send the fixed test message to one of the caller's own webhooks."""

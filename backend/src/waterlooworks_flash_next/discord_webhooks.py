@@ -12,6 +12,7 @@ import json
 import re
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,6 +128,7 @@ class WebhookTarget:
     uid: str
     hint: str
     url: SecretStr = field(repr=False)
+    created_at: int = 0
 
 
 def _iso(epoch: int | None) -> str | None:
@@ -318,7 +320,7 @@ class WebhookStore:
         connection = self._connect(readonly=True)
         try:
             row = connection.execute(
-                "SELECT id,uid,hint,ciphertext FROM discord_webhooks "
+                "SELECT id,uid,hint,ciphertext,created_at FROM discord_webhooks "
                 "WHERE uid=? AND id=?",
                 (uid, webhook_id),
             ).fetchone()
@@ -332,6 +334,7 @@ class WebhookStore:
             uid=row["uid"],
             hint=row["hint"],
             url=self._decrypt(cipher, uid, row["ciphertext"]),
+            created_at=row["created_at"],
         )
 
     def enabled_targets(self) -> list[WebhookTarget]:
@@ -343,7 +346,8 @@ class WebhookStore:
         connection = self._connect(readonly=True)
         try:
             rows = connection.execute(
-                "SELECT w.id,w.uid,w.hint,w.ciphertext FROM discord_webhooks w "
+                "SELECT w.id,w.uid,w.hint,w.ciphertext,w.created_at "
+                "FROM discord_webhooks w "
                 "JOIN app_users u ON u.uid=w.uid WHERE w.enabled=1 ORDER BY w.id"
             ).fetchall()
         finally:
@@ -359,7 +363,13 @@ class WebhookStore:
                 self.record(row["id"], "failed")
                 continue
             targets.append(
-                WebhookTarget(id=row["id"], uid=row["uid"], hint=row["hint"], url=url)
+                WebhookTarget(
+                    id=row["id"],
+                    uid=row["uid"],
+                    hint=row["hint"],
+                    url=url,
+                    created_at=row["created_at"],
+                )
             )
         return targets
 
@@ -384,5 +394,46 @@ class WebhookStore:
                         "WHERE id=?",
                         (status, now, status, webhook_id),
                     )
+        finally:
+            connection.close()
+
+    def announced(self, webhook_ids: list[int]) -> dict[int, set[str]]:
+        """Postings each webhook already announced (or skipped as stale)."""
+        result: dict[int, set[str]] = {webhook_id: set() for webhook_id in webhook_ids}
+        if not webhook_ids:
+            return result
+        connection = self._connect(readonly=True)
+        try:
+            marks = ",".join("?" * len(webhook_ids))
+            for webhook_id, posting_id in connection.execute(
+                "SELECT webhook_id,posting_id FROM discord_webhook_announced "
+                f"WHERE webhook_id IN ({marks})",
+                webhook_ids,
+            ):
+                result[webhook_id].add(posting_id)
+        finally:
+            connection.close()
+        return result
+
+    def mark_announced(
+        self, webhook_id: int, posting_ids: Iterable[str], *, now: int | None = None
+    ) -> None:
+        """Never announce these postings to this webhook again.
+
+        A webhook deleted meanwhile gets no rows (and no foreign-key error).
+        """
+        now = int(time.time()) if now is None else now
+        rows = [(webhook_id, posting_id, now, webhook_id) for posting_id in posting_ids]
+        if not rows:
+            return
+        connection = self._connect()
+        try:
+            with connection:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO discord_webhook_announced"
+                    "(webhook_id,posting_id,announced_at) SELECT ?,?,? WHERE EXISTS "
+                    "(SELECT 1 FROM discord_webhooks WHERE id=?)",
+                    rows,
+                )
         finally:
             connection.close()
