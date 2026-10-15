@@ -36,7 +36,8 @@ from waterlooworks_flash_next.source_enrichment import (
 WW_JOB_BOARD = "https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm"
 
 
-# Current deterministic projection whose listing/content are still source-current.
+# Latest deterministic projection of the current saved description. Listing
+# revisions (application counts) churn every pass and never hide saved pay.
 _CURRENT_PROJECTION = """FROM posting_projection_current pointer
            JOIN analysis_projections a
              ON a.projection_id=pointer.deterministic_projection_id
@@ -45,9 +46,7 @@ _CURRENT_PROJECTION = """FROM posting_projection_current pointer
            JOIN postings p USING(posting_id)
            JOIN posting_contents c USING(posting_id)
            WHERE a.producer_kind='deterministic_parser'
-             AND a.listing_hash=p.content_hash AND a.content_hash=c.content_hash
-             AND a.listing_revision_id=(SELECT max(revision_id)
-                 FROM posting_revisions WHERE posting_id=a.posting_id)
+             AND a.content_hash=c.content_hash
              AND a.content_revision_id=(SELECT max(revision_id)
                  FROM posting_content_revisions WHERE posting_id=a.posting_id)"""
 
@@ -596,9 +595,7 @@ def read_comparisons(
            JOIN normalized_fixed_fields f USING(projection_id)
            JOIN postings p USING(posting_id) JOIN posting_contents c USING(posting_id)
            WHERE a.posting_id<>? AND a.producer_kind='deterministic_parser'
-             AND a.listing_hash=p.content_hash AND a.content_hash=c.content_hash
-             AND a.listing_revision_id=(SELECT max(revision_id)
-                 FROM posting_revisions WHERE posting_id=a.posting_id)
+             AND a.content_hash=c.content_hash
              AND a.content_revision_id=(SELECT max(revision_id)
                  FROM posting_content_revisions WHERE posting_id=a.posting_id)""",
         (posting_id,),
