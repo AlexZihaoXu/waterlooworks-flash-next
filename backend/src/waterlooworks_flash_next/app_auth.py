@@ -4,6 +4,7 @@ import base64
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -46,6 +47,10 @@ class AuthError(Exception):
 
 class BootstrapRefused(AuthError):
     """Empty database and the verified identity is not the pinned owner."""
+
+
+class NewAccountHeld(AuthError):
+    """WW_HOLD_NEW_USERS=1: an unknown identity may not become a member."""
 
 
 @dataclass(frozen=True)
@@ -346,6 +351,11 @@ class SessionStore:
                 ).fetchone()
                 if user is None:
                     if connection.execute("SELECT 1 FROM app_users LIMIT 1").fetchone():
+                        # Interim gate until approvals exist: never admit strangers.
+                        if os.environ.get("WW_HOLD_NEW_USERS") == "1":
+                            raise NewAccountHeld(
+                                "This account is waiting for approval."
+                            )
                         role = "member"
                     else:
                         owner = self.bootstrap or BootstrapOwner.from_environment()

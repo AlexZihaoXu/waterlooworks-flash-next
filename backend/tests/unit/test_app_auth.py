@@ -16,6 +16,7 @@ from waterlooworks_flash_next.app_auth import (
     AuthError,
     BootstrapOwner,
     BootstrapRefused,
+    NewAccountHeld,
     SessionStore,
     decode_service_account,
 )
@@ -303,3 +304,27 @@ def test_prepare_evicts_oldest_anonymous_rows_instead_of_refusing(
             is None
         )
     assert store.lookup(signed_in.cookie, now=150) == signed_in.identity
+
+
+def test_held_server_refuses_new_accounts_but_keeps_existing_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner-uid", email=None))
+    owner = store.issue(
+        store.prepare(None, now=100), "owner-uid", 500, auth_time=100, now=100
+    )
+    assert owner.identity.role == "admin"
+    monkeypatch.setenv("WW_HOLD_NEW_USERS", "1")
+    with pytest.raises(NewAccountHeld) as error:
+        store.issue(
+            store.prepare(None, now=100), "stranger-uid", 500, auth_time=100, now=100
+        )
+    assert str(error.value) == "This account is waiting for approval."
+    assert "stranger-uid" not in str(error.value)
+    assert _user_count(path) == 1
+    again = store.issue(
+        store.prepare(None, now=101), "owner-uid", 500, auth_time=101, now=101
+    )
+    assert again.identity.role == "admin"
