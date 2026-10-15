@@ -56,8 +56,24 @@ describe('authLifecycle', () => {
     expect(lifecycle.current(renew)).toBe(false);
   });
   it('rejects missing or expired identity instead of opening the gate', () => {
-    for (const value of [null, {}, { expires_at: 0 }])
+    const live = Math.floor(Date.now() / 1000) + 60;
+    for (const value of [
+      null,
+      {},
+      { expires_at: 0 },
+      // Admission state is part of the session contract, never assumed.
+      { uid: 'a', role: 'member', expires_at: live },
+      { uid: 'a', role: 'member', approval: 'declined', expires_at: live },
+    ])
       expect(() => parseSession(value)).toThrow('Session unavailable.');
+    expect(
+      parseSession({
+        uid: 'a',
+        role: 'member',
+        approval: 'pending',
+        expires_at: live,
+      }).approval,
+    ).toBe('pending');
   });
   it.each(['import', 'token', 'exchange'])(
     'releases a stalled %s at the whole-operation deadline and fences late completion',

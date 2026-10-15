@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthGate } from '../../src/app/AuthenticatedApp';
 
@@ -61,7 +61,12 @@ describe('AuthGate', () => {
       <AuthGate
         state={{
           status: 'ready',
-          session: { uid: 'internal-uid', role: 'member', expires_at: 1 },
+          session: {
+            uid: 'internal-uid',
+            role: 'member',
+            approval: 'approved',
+            expires_at: 1,
+          },
         }}
         signIn={() => {}}
       >
@@ -91,6 +96,7 @@ describe('AuthGate', () => {
     const session = {
       uid: 'internal-uid',
       role: 'member',
+      approval: 'approved',
       expires_at: 1,
     } as const;
     const { rerender } = render(
@@ -130,6 +136,39 @@ describe('AuthGate', () => {
       .closest('.alert') as HTMLElement;
     expect(alert).toHaveClass('alert--warning');
     expect(screen.getByText('Sign in to continue')).toBeInTheDocument();
+  });
+  it('holds a pending account on the waiting screen with sign-out only', () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const reader = vi.fn(() => <p>Protected workspace</p>);
+    const Reader = reader;
+    const signOut = vi.fn();
+    render(
+      <AuthGate
+        state={{
+          status: 'ready',
+          session: {
+            uid: 'internal-uid',
+            role: 'member',
+            approval: 'pending',
+            expires_at: 1,
+          },
+        }}
+        signIn={() => {}}
+        signOut={signOut}
+      >
+        <Reader />
+      </AuthGate>,
+    );
+    expect(reader).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.getByText('Waiting for approval')).toBeInTheDocument();
+    expect(screen.getByText(/someone who already uses/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Sign in with Google' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Sign in to continue')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(signOut).toHaveBeenCalledOnce();
   });
   it('shows no notice after an explicit sign-out', () => {
     render(

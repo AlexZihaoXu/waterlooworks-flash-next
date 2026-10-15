@@ -4,6 +4,7 @@ import { AuthGate } from '../../src/app/AuthenticatedApp';
 import {
   AuthHttpError,
   classifySignInError,
+  parseRefusalCode,
   type SignInFailure,
 } from '../../src/lib/authLifecycle';
 
@@ -26,6 +27,29 @@ describe('sign-in failure classification', () => {
     expect(classifySignInError(new AuthHttpError('exchange', 403))).toBe(
       'owner-required',
     );
+    expect(
+      classifySignInError(
+        new AuthHttpError('exchange', 403, null, 'owner_required'),
+      ),
+    ).toBe('owner-required');
+  });
+  it('reads the fixed admission refusal codes and ignores anything else', () => {
+    expect(
+      classifySignInError(
+        new AuthHttpError('exchange', 403, null, 'account_held'),
+      ),
+    ).toBe('held');
+    expect(
+      classifySignInError(
+        new AuthHttpError('exchange', 403, null, 'not_approved'),
+      ),
+    ).toBe('not-approved');
+    expect(parseRefusalCode({ detail: 'x', code: 'not_approved' })).toBe(
+      'not_approved',
+    );
+    expect(parseRefusalCode({ detail: 'x', code: 'banned' })).toBeNull();
+    expect(parseRefusalCode({ detail: 'x' })).toBeNull();
+    expect(parseRefusalCode('not_approved')).toBeNull();
   });
   it('keeps every other failure as service unavailable', () => {
     expect(classifySignInError(new AuthHttpError('exchange', 429))).toBe(
@@ -87,6 +111,23 @@ describe('sign-in failure presentation', () => {
     expect(alert).toHaveClass('alert--warning');
     expect(alert).toHaveTextContent(/configured owner/);
     expect(alert).not.toHaveTextContent(/approve/i);
+  });
+  it('tells a declined or removed account it is not approved', () => {
+    gate('not-approved');
+    const alert = screen
+      .getByText('Not approved')
+      .closest('.alert') as HTMLElement;
+    expect(alert).toHaveClass('alert--warning');
+    expect(alert).toHaveTextContent(/not been approved/i);
+    expect(alert).not.toHaveTextContent(/try again/i);
+  });
+  it('explains a held instance without inviting a retry loop', () => {
+    gate('held');
+    const alert = screen
+      .getByText('New accounts are on hold')
+      .closest('.alert') as HTMLElement;
+    expect(alert).toHaveClass('alert--warning');
+    expect(alert).toHaveTextContent(/not accepting new accounts/i);
   });
   it.each([undefined, 'unavailable'] as const)(
     'keeps service failures as a danger alert (%s)',

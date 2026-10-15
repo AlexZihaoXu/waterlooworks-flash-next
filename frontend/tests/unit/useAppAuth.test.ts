@@ -25,10 +25,11 @@ function json(body: object, status = 200, headers: HeadersInit = {}) {
   });
 }
 
-function session(secondsLeft: number) {
+function session(secondsLeft: number, approval = 'approved') {
   return {
     uid: 'session-a',
     role: 'member',
+    approval,
     expires_at: Math.floor(Date.now() / 1000) + secondsLeft,
   };
 }
@@ -119,6 +120,35 @@ describe('useAppAuth session checks', () => {
         notice: 'session-ended',
       }),
     );
+  });
+
+  it('continues a pending session with its new access once approved', async () => {
+    const responses = [json(session(3600, 'pending')), json(session(3600))];
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (url) =>
+        String(url).endsWith('/logout')
+          ? json({})
+          : (responses.shift() ?? json(session(3600))),
+      );
+    const { result } = renderHook(() => useAppAuth());
+    await waitFor(() => expect(result.current.state.status).toBe('ready'));
+    expect(
+      result.current.state.status === 'ready' &&
+        result.current.state.session.approval,
+    ).toBe('pending');
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() =>
+      expect(
+        result.current.state.status === 'ready' &&
+          result.current.state.session.approval,
+      ).toBe('approved'),
+    );
+    expect(
+      fetch.mock.calls.some(([url]) => String(url).endsWith('/logout')),
+    ).toBe(false);
   });
 
   it('retries a renewal refused with 503 instead of ending the session', async () => {

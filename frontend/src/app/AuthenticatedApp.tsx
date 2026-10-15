@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useImperativeHandle,
   useRef,
   useState,
@@ -12,6 +13,7 @@ import {
   Accordion,
   Alert,
   Avatar,
+  Badge,
   Button,
   Card,
   Chip,
@@ -52,6 +54,12 @@ import {
   useDiscordWebhooks,
 } from '../lib/useDiscordWebhooks';
 import { useRefreshSchedule } from '../lib/useRefreshSchedule';
+import { ApprovalsPanel } from './ApprovalsPanel';
+import {
+  useApprovalTree,
+  useApprovals,
+  type ApprovalSettings,
+} from '../lib/useApprovals';
 
 function localTime(value: string | null): string | null {
   return value === null ? null : new Date(value).toLocaleString();
@@ -164,15 +172,56 @@ export function RefreshPacingCard({
 export function AuthGate({
   state,
   signIn,
+  signOut,
   children,
 }: {
   state: AuthState;
   signIn: () => void;
+  /** Lets a waiting (pending) account sign out from its holding screen. */
+  signOut?: () => void;
   children: ReactNode;
 }) {
   // Renewal keeps the same verified session: never tear down the workspace.
-  if (state.status === 'ready' || state.status === 'refreshing')
-    return children;
+  if (state.status === 'ready' || state.status === 'refreshing') {
+    if (state.session.approval === 'approved') return children;
+    // Signed in but not admitted yet: nothing protected mounts or loads. The
+    // session check notices an approval and continues this same session.
+    return (
+      <App
+        key="pending"
+        state={{ status: 'signed-out' }}
+        signedOutContent={
+          <Card>
+            <Card.Header>
+              <Card.Title>Waiting for approval</Card.Title>
+              <Card.Description>
+                You are signed in, but this app is invitation-only: someone who
+                already uses it has to approve your account first. Ask the
+                person who told you about it to open their Settings › Approvals.
+              </Card.Description>
+            </Card.Header>
+            <Card.Content>
+              <Alert>
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>Nothing else to do here</Alert.Title>
+                  <Alert.Description>
+                    This page checks every few seconds and opens the saved jobs
+                    as soon as you are approved. You can also come back later.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert>
+            </Card.Content>
+            <Card.Footer>
+              <Button variant="secondary" onPress={signOut} fullWidth>
+                Sign out
+              </Button>
+            </Card.Footer>
+          </Card>
+        }
+      />
+    );
+  }
   const pending = state.status === 'checking';
   return (
     <App
@@ -221,6 +270,30 @@ export function AuthGate({
                     This instance has no administrator yet, and only its
                     configured owner can sign in first. Use the owner's Google
                     account.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert>
+            )}
+            {state.status === 'error' && state.reason === 'not-approved' && (
+              <Alert status="warning">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>Not approved</Alert.Title>
+                  <Alert.Description>
+                    This Google account has not been approved for this app. Only
+                    the administrator can change that.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert>
+            )}
+            {state.status === 'error' && state.reason === 'held' && (
+              <Alert status="warning">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>New accounts are on hold</Alert.Title>
+                  <Alert.Description>
+                    This app is not accepting new accounts right now. Accounts
+                    that already have access can still sign in.
                   </Alert.Description>
                 </Alert.Content>
               </Alert>
@@ -292,15 +365,27 @@ export function AccountMenu({
   const compact = useCompactLayout();
   const photo = googlePhotoUrl(profile?.photo_url);
   const name = profile?.display_name || 'Account';
+  // Who is waiting: loaded once per account for the badge, again while the
+  // Approvals section is open. The section reports when it is active.
+  const [approvalsActive, setApprovalsActive] = useState(false);
+  const approvals = useApprovals(uid, approvalsActive);
+  const waiting = approvals.pendingCount;
   const avatar = (
-    <Avatar size="sm">
-      {photo && (
-        <Avatar.Image src={photo} alt="" referrerPolicy="no-referrer" />
+    <Badge.Anchor>
+      <Avatar size="sm">
+        {photo && (
+          <Avatar.Image src={photo} alt="" referrerPolicy="no-referrer" />
+        )}
+        <Avatar.Fallback>
+          <LuUserRound aria-hidden="true" />
+        </Avatar.Fallback>
+      </Avatar>
+      {waiting > 0 && (
+        <Badge color="danger" size="sm">
+          {waiting > 99 ? '99+' : waiting}
+        </Badge>
       )}
-      <Avatar.Fallback>
-        <LuUserRound aria-hidden="true" />
-      </Avatar.Fallback>
-    </Avatar>
+    </Badge.Anchor>
   );
   const content = compact ? (
     avatar
@@ -337,6 +422,8 @@ export function AccountMenu({
         identity={identity}
         signOut={signOut}
         settingsRef={settingsRef}
+        approvals={approvals}
+        onApprovalsActive={setApprovalsActive}
       />
     );
   return (
@@ -347,7 +434,23 @@ export function AccountMenu({
       content={content}
       identity={identity}
       signOut={signOut}
+      approvals={approvals}
+      onApprovalsActive={setApprovalsActive}
     />
+  );
+}
+
+// Tab label with the number of people waiting, when any.
+function ApprovalsTabLabel({ waiting }: { waiting: number }) {
+  return (
+    <>
+      Approvals
+      {waiting > 0 && (
+        <Chip size="sm" color="danger" variant="soft">
+          {waiting > 99 ? '99+' : waiting}
+        </Chip>
+      )}
+    </>
   );
 }
 
@@ -358,18 +461,25 @@ function MemberAccountMenu({
   content,
   identity,
   signOut,
+  approvals,
+  onApprovalsActive,
 }: {
   uid: string;
   compact: boolean;
   content: ReactNode;
   identity: ReactNode;
   signOut: () => void;
+  approvals: ApprovalSettings;
+  onApprovalsActive: (active: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('api-token');
   // Leaving a tab disables its hook, which clears a shown token or URL draft.
   const token = useApiToken(open && tab === 'api-token', uid);
   const discord = useDiscordWebhooks(open && tab === 'discord', uid);
+  useEffect(() => {
+    onApprovalsActive(open && tab === 'approvals');
+  }, [open, tab, onApprovalsActive]);
   const tokenUncopied = token.issued !== null && !token.copied;
   const openSettings = () => {
     setTab('api-token');
@@ -449,6 +559,10 @@ function MemberAccountMenu({
                   Discord alerts
                   <Tabs.Indicator />
                 </Tabs.Tab>
+                <Tabs.Tab id="approvals">
+                  <ApprovalsTabLabel waiting={approvals.pendingCount} />
+                  <Tabs.Indicator />
+                </Tabs.Tab>
               </Tabs.List>
             </Tabs.ListContainer>
             <Tabs.Panel id="api-token">
@@ -456,6 +570,9 @@ function MemberAccountMenu({
             </Tabs.Panel>
             <Tabs.Panel id="discord">
               <DiscordAlertsPanel discord={discord} />
+            </Tabs.Panel>
+            <Tabs.Panel id="approvals">
+              <ApprovalsPanel approvals={approvals} />
             </Tabs.Panel>
           </Tabs>
         </AdminSettingsDialog>
@@ -475,6 +592,8 @@ function AdminAccountMenu({
   identity,
   signOut,
   settingsRef,
+  approvals,
+  onApprovalsActive,
 }: {
   uid: string;
   compact: boolean;
@@ -482,6 +601,8 @@ function AdminAccountMenu({
   identity: ReactNode;
   signOut: () => void;
   settingsRef?: Ref<AdminSettingsHandle>;
+  approvals: ApprovalSettings;
+  onApprovalsActive: (active: boolean) => void;
 }) {
   const [selectedTab, setSelectedTab] = useState('credentials');
   const settings = useAdminCredentials(uid);
@@ -506,6 +627,11 @@ function AdminAccountMenu({
     settings.isOpen && selectedTab === 'discord',
     uid,
   );
+  const approvalsOpen = settings.isOpen && selectedTab === 'approvals';
+  const tree = useApprovalTree(approvalsOpen, uid);
+  useEffect(() => {
+    onApprovalsActive(approvalsOpen);
+  }, [approvalsOpen, onApprovalsActive]);
   // Workspace notices open straight to the Refresh (Duo) or Schedule tab.
   // Never reopen an open dialog: opening clears and rereads credential state.
   useImperativeHandle(settingsRef, () => ({
@@ -673,6 +799,10 @@ function AdminAccountMenu({
                 </Tabs.Tab>
                 <Tabs.Tab id="discord">
                   Discord alerts
+                  <Tabs.Indicator />
+                </Tabs.Tab>
+                <Tabs.Tab id="approvals">
+                  <ApprovalsTabLabel waiting={approvals.pendingCount} />
                   <Tabs.Indicator />
                 </Tabs.Tab>
               </Tabs.List>
@@ -1083,6 +1213,9 @@ function AdminAccountMenu({
             <Tabs.Panel id="discord">
               <DiscordAlertsPanel discord={discord} />
             </Tabs.Panel>
+            <Tabs.Panel id="approvals">
+              <ApprovalsPanel approvals={approvals} tree={tree} />
+            </Tabs.Panel>
           </Tabs>
         </AdminSettingsDialog>
       )}
@@ -1103,7 +1236,7 @@ export function AuthenticatedApp() {
     [],
   );
   return (
-    <AuthGate state={state} signIn={signIn}>
+    <AuthGate state={state} signIn={signIn} signOut={signOut}>
       {session && (
         <App
           key={session.uid}

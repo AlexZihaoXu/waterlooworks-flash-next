@@ -109,24 +109,60 @@ export function scheduleSessionRenewal(
 export type AppSession = {
   uid: string;
   role: 'admin' | 'member';
+  // 'pending': signed in but not yet admitted; only the waiting screen shows.
+  approval: 'pending' | 'approved';
   expires_at: number;
 };
 // 'rejected': the exchange refused the Google identity or the prepared
 // reservation (401). 'owner-required': the empty instance accepts only its
-// configured owner as the first administrator (403).
+// configured owner as the first administrator (403). 'held': the server is
+// not taking new accounts at all right now (403). 'not-approved': this
+// identity was declined or removed (403).
 export type SignInFailure =
-  'cancelled' | 'rejected' | 'owner-required' | 'unavailable';
+  | 'cancelled'
+  | 'rejected'
+  | 'owner-required'
+  | 'held'
+  | 'not-approved'
+  | 'unavailable';
+
+/** Fixed refusal codes the exchange may add beside its detail text. */
+export type AuthRefusalCode =
+  'owner_required' | 'account_held' | 'not_approved';
+const refusalCodes: readonly AuthRefusalCode[] = [
+  'owner_required',
+  'account_held',
+  'not_approved',
+];
+
+/** The allowlisted refusal code from a JSON error body, else null. */
+export function parseRefusalCode(body: unknown): AuthRefusalCode | null {
+  if (typeof body !== 'object' || body === null || !('code' in body))
+    return null;
+  const code = body.code;
+  return typeof code === 'string' &&
+    (refusalCodes as readonly string[]).includes(code)
+    ? (code as AuthRefusalCode)
+    : null;
+}
 
 /** HTTP refusal from an auth route; never carries server-supplied text. */
 export class AuthHttpError extends Error {
   readonly path: string;
   readonly status: number;
   readonly retryAfter: number | null;
-  constructor(path: string, status: number, retryAfter: number | null = null) {
+  readonly code: AuthRefusalCode | null;
+  constructor(
+    path: string,
+    status: number,
+    retryAfter: number | null = null,
+    code: AuthRefusalCode | null = null,
+  ) {
     super('Authentication unavailable.');
     this.path = path;
     this.status = status;
     this.retryAfter = retryAfter;
+    this.code = code;
   }
 }
 
@@ -175,12 +211,17 @@ const cancelledCodes = new Set([
 ]);
 
 // Only the exchange's own refusals are specific; configuration, rate limits
-// and transport stay "unavailable".
+// and transport stay "unavailable". A 403 without a known code is read as
+// the owner pin, the only 403 older servers send.
 export function classifySignInError(error: unknown): SignInFailure {
   if (error instanceof AuthHttpError) {
     if (error.path !== 'exchange') return 'unavailable';
     if (error.status === 401) return 'rejected';
-    if (error.status === 403) return 'owner-required';
+    if (error.status === 403) {
+      if (error.code === 'account_held') return 'held';
+      if (error.code === 'not_approved') return 'not-approved';
+      return 'owner-required';
+    }
     return 'unavailable';
   }
   const code = errorCode(error);
@@ -206,6 +247,8 @@ export function parseSession(value: unknown): AppSession {
     !value.uid ||
     !('role' in value) ||
     !['admin', 'member'].includes(String(value.role)) ||
+    !('approval' in value) ||
+    !['pending', 'approved'].includes(String(value.approval)) ||
     !('expires_at' in value) ||
     typeof value.expires_at !== 'number' ||
     !Number.isSafeInteger(value.expires_at) ||
