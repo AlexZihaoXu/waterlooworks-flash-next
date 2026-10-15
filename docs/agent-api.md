@@ -53,7 +53,7 @@ At most **60 requests per minute per token** (fixed window). Exceeding it return
 | GET    | `/api/agent/v1/me`                   | `{uid, role, profile}`; `profile` is `{display_name, email, photo_url}` or `null` when the directory lookup is unavailable |
 | GET    | `/api/agent/v1/refresh`              | Read-only refresh facts (below)                                                                                            |
 | GET    | `/api/agent/v1/postings`             | Search, filter, sort and page the saved postings with the caller's marks                                                   |
-| GET    | `/api/agent/v1/postings/{id}`        | One posting with its plain-text detail content and analysis                                                                |
+| GET    | `/api/agent/v1/postings/{id}`        | One posting with its plain-text detail content, optional formatting and analysis                                           |
 | PUT    | `/api/agent/v1/postings/{id}/state`  | Body `{state}` (`interested`, `applied`, `not_interested` or `null`)                                                       |
 | PUT    | `/api/agent/v1/postings/{id}/viewed` | Body `{viewed: true}` or `{viewed: false}`                                                                                 |
 
@@ -153,6 +153,7 @@ curl -sS https://<your-host>/api/agent/v1/postings/<id> -H 'Authorization: Beare
 Returns every summary field above plus:
 
 - `content`: the saved plain-text detail fields (`{id, coverage, fields: {"Job Summary:": "…", …}}`) or `null` before detail collection; `content_observed_at` is when they were saved.
+- `formatting`: `null` or `{version: "rich-v1", fields: {label: blocks}}`, sanitized formatting for some labels of `content` (paragraphs of `text`/`link`/`break` runs with `bold`/`italic` flags, and `ordered` or unordered `list`s of block sequences). Links are absolute `http(s)` or plain `mailto:` targets only; never HTML. The plain text in `content` is always complete, so agents can ignore this field.
 - `analysis`: the same `PostingAnalysisResponse` as `GET /api/postings/{id}/analysis` (source facts, reconciled pay, keywords, skills, application route and extraction status).
 - `state` and `viewed_at`: the caller's marks. **Reading never marks a posting viewed**; only the explicit `viewed` route does.
 
