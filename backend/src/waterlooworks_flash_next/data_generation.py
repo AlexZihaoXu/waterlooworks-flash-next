@@ -24,6 +24,7 @@ EXCLUDED_TABLES = frozenset(
         "api_tokens",
         "app_sessions",
         "app_users",
+        "user_approvals",
         # Per-user encrypted Discord webhook destinations and send bookkeeping.
         "discord_webhooks",
         "discord_webhook_announced",

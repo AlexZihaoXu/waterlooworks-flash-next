@@ -17,6 +17,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from waterlooworks_flash_next.agent_schema import migrate_agent_access
+from waterlooworks_flash_next.approval_schema import migrate_user_approvals
 from waterlooworks_flash_next.auth_schema import migrate_app_auth
 from waterlooworks_flash_next.compact_history import (
     HistoryReader,
@@ -44,7 +45,7 @@ from waterlooworks_flash_next.refresh_schedule_schema import migrate_refresh_sch
 from waterlooworks_flash_next.runtime_secrets import is_private_owned_file
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 class DatabaseError(Exception):
@@ -546,6 +547,15 @@ def open_database(path: Path) -> sqlite3.Connection:
                 if connection.execute("PRAGMA user_version").fetchone()[0] == 20:
                     migrate_content_formatting(connection)
                     connection.execute("PRAGMA user_version = 21")
+        if (
+            SCHEMA_VERSION >= 22
+            and connection.execute("PRAGMA user_version").fetchone()[0] == 21
+        ):
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 21:
+                    migrate_user_approvals(connection)
+                    connection.execute("PRAGMA user_version = 22")
         # Idempotent cache-invalidation triggers, outside the versioned contract.
         ensure_data_generation(connection)
         connection.execute("PRAGMA journal_mode = WAL")

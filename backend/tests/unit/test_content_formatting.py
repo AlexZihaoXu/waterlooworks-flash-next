@@ -92,12 +92,12 @@ def _finish(connection: sqlite3.Connection, run_id: str) -> None:
         )
 
 
-def test_fresh_database_reaches_v21_with_an_empty_formatting_table(
+def test_fresh_database_includes_the_v21_formatting_table(
     tmp_path: Path,
 ) -> None:
     connection = open_database(tmp_path / "fresh.sqlite3")
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 21
-    assert database.SCHEMA_VERSION == 21
+    assert connection.execute("PRAGMA user_version").fetchone()[0] >= 21
+    assert database.SCHEMA_VERSION >= 21
     columns = {
         row[1]
         for row in connection.execute("PRAGMA table_info(posting_content_formatting)")
@@ -138,7 +138,7 @@ def test_v20_database_migrates_to_v21_preserving_saved_content(
         }
         connection.close()
     connection = open_database(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 21
+    assert connection.execute("PRAGMA user_version").fetchone()[0] >= 21
     assert objects <= {
         tuple(row)
         for row in connection.execute("SELECT type,name,sql FROM sqlite_master")
