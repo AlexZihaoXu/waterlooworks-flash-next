@@ -1,6 +1,8 @@
 """Conservative plain-text extraction from observed detail label/value markup.
 
 No scripts, attributes, hidden controls, raw HTML, or unreviewed labels are stored.
+Whitelisted formatting (``rich_text``) is derived from the same sanitized tree
+and kept beside, never inside, the plain text and its content hash.
 """
 
 import re
@@ -10,6 +12,16 @@ from html.parser import HTMLParser
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from waterlooworks_flash_next import rich_text
+from waterlooworks_flash_next.rich_text import (
+    FORMAT_VERSION,
+    Block,
+    ListBlock,
+    Paragraph,
+    safe_href,
+    validate_blocks,
+)
 
 CONTENT_LABELS = frozenset(
     {
@@ -78,10 +90,37 @@ class StoredPostingContent(BaseModel):
         return value
 
 
+class StoredPostingFormatting(BaseModel):
+    """Per-label sanitized formatting; labels without it show their plain text."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        hide_input_in_errors=True,
+        frozen=True,
+        json_schema_serialization_defaults_required=True,
+    )
+    version: Literal["rich-v1"] = FORMAT_VERSION
+    fields: dict[str, list[Block]] = Field(repr=False)
+
+    @field_validator("fields")
+    @classmethod
+    def reviewed_fields(
+        cls, value: dict[str, list[Paragraph | ListBlock]]
+    ) -> dict[str, list[Paragraph | ListBlock]]:
+        if not value.keys() <= CONTENT_LABELS:
+            raise ValueError("Formatting labels do not match reviewed content.")
+        for blocks in value.values():
+            validate_blocks(blocks)
+        return value
+
+
 @dataclass
 class _Node:
     tag: str
     children: list["_Node | str"] = field(default_factory=list)
+    # Only a whitelisted absolute link target; every other attribute is dropped.
+    href: str | None = None
 
 
 def _text(node: _Node | str) -> str:
@@ -228,6 +267,8 @@ class _ContentParser(HTMLParser):
                 self.suppressed.append(tag)
             return
         node = _Node(tag)
+        if tag == "a":
+            node.href = safe_href(dict(attrs).get("href"))
         self.stack[-1].children.append(node)
         if tag not in self.void:
             self.stack.append(node)
@@ -305,6 +346,44 @@ class _ContentParser(HTMLParser):
                 result[label] = value
         return result
 
+    def value_nodes(self, node: _Node | None = None) -> dict[str, _Node]:
+        """First value node per label, mirroring ``fields`` structure detection."""
+        node = self.root if node is None else node
+        children = [child for child in node.children if isinstance(child, _Node)]
+        result: dict[str, _Node] = {}
+        if (
+            node.tag == "div"
+            and len(children) >= 2
+            and children[0].tag == "span"
+            and children[1].tag == "p"
+        ):
+            result[" ".join(_text(children[0]).split())] = children[1]
+        for child in children:
+            for label, value in self.value_nodes(child).items():
+                result.setdefault(label, value)
+        return result
+
+    def formatting(
+        self, fields: dict[str, str], secrets: tuple[str, ...]
+    ) -> StoredPostingFormatting:
+        """Never raises: a field whose formatting fails shows its plain text."""
+        try:
+            nodes = self.value_nodes()
+            formatted: dict[str, list[Paragraph | ListBlock]] = {}
+            for label, plain in fields.items():
+                node = nodes.get(label)
+                if node is None or label == "Targeted Degrees and Disciplines:":
+                    continue
+                try:
+                    blocks = rich_text.build_blocks(node, plain, secrets)
+                except Exception:
+                    blocks = None
+                if blocks is not None:
+                    formatted[label] = blocks
+            return StoredPostingFormatting(fields=formatted)
+        except Exception:
+            return StoredPostingFormatting(fields={})
+
 
 def extract_content(
     markup: str,
@@ -314,6 +393,20 @@ def extract_content(
     *,
     secrets: tuple[str, ...] = (),
 ) -> StoredPostingContent:
+    """Plain-text content only; see ``extract_content_with_formatting``."""
+    return extract_content_with_formatting(
+        markup, posting_id, title, organization, secrets=secrets
+    )[0]
+
+
+def extract_content_with_formatting(
+    markup: str,
+    posting_id: str,
+    title: str,
+    organization: str | None,
+    *,
+    secrets: tuple[str, ...] = (),
+) -> tuple[StoredPostingContent, StoredPostingFormatting]:
     """Request-bound identity; verify text title/org, never infer metadata.
 
     Explicit hiding is excluded except the observed targeted widget's inline
@@ -342,7 +435,8 @@ def extract_content(
             for value in fields.values()
         ):
             raise ContentError("Session-bearing content was withheld.")
-        return StoredPostingContent(id=posting_id, fields=fields)
+        content = StoredPostingContent(id=posting_id, fields=fields)
+        return content, parser.formatting(fields, secrets)
     except Exception:
         raise ContentError(
             "Detail content validation failed; diagnostics suppressed."
