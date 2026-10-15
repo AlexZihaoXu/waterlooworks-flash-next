@@ -523,6 +523,126 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/approvals': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Listing
+     * @description Everyone waiting for approval (name, verified email, photo and when they first signed in) and the people the caller approved.
+     */
+    get: operations['listApprovals'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/approvals/{uid}/approve': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Approve
+     * @description Admit a pending user: they get access now and are listed under the caller. Returns the updated listing.
+     */
+    post: operations['approveUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/approvals/{uid}/decline': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Decline
+     * @description Decline a pending user: their waiting session ends and signing in again shows a fixed not-approved message until the administrator moves them back to pending. Returns the updated listing.
+     */
+    post: operations['declineUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/admin/approvals': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Tree
+     * @description Administrator only: the whole admission tree (who approved whom, with names and emails) plus declined and removed users.
+     */
+    get: operations['getApprovalTree'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/admin/approvals/{uid}/remove': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Remove
+     * @description Administrator only: an approved user loses access immediately. Their sessions, agent token, Discord webhooks and posting marks are deleted; people they approved move up under their approver. Returns the updated tree.
+     */
+    post: operations['removeUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/admin/approvals/{uid}/reinstate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reinstate
+     * @description Administrator only: move a declined or removed user back to pending so any approved user can admit them again.
+     */
+    post: operations['reinstateUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/admin/refresh-auth': {
     parameters: {
       query?: never;
@@ -1350,6 +1470,43 @@ export interface components {
       /** Evidence Text */
       evidence_text: string;
     };
+    /** ApprovalListing */
+    ApprovalListing: {
+      /**
+       * Pending
+       * @description Everyone waiting, oldest request first.
+       */
+      pending: components['schemas']['PendingUser'][];
+      /**
+       * Approved By Me
+       * @description People the caller approved who still have access.
+       */
+      approved_by_me: components['schemas']['ApprovedUser'][];
+    };
+    /** ApprovalTree */
+    ApprovalTree: {
+      /** @description The administrator with everyone approved beneath them. */
+      root: components['schemas']['TreeUser'] | null;
+      /**
+       * Declined
+       * @description Declined and removed users, most recent decision first.
+       */
+      declined: components['schemas']['DeclinedUser'][];
+    };
+    /**
+     * ApprovedUser
+     * @description Someone the caller approved: name and photo only, never the email.
+     */
+    ApprovedUser: {
+      /** Id */
+      id: string;
+      /** Display Name */
+      display_name: string | null;
+      /** Photo Url */
+      photo_url: string | null;
+      /** Approved At */
+      approved_at: string;
+    };
     /** CallbackPaste */
     CallbackPaste: {
       /** Callback Url */
@@ -1599,6 +1756,29 @@ export interface components {
        * Format: password
        */
       token: string;
+    };
+    /** DeclinedUser */
+    DeclinedUser: {
+      /** Id */
+      id: string;
+      /** Display Name */
+      display_name: string | null;
+      /** Email */
+      email: string | null;
+      /** Photo Url */
+      photo_url: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'declined' | 'removed';
+      /** Decided At */
+      decided_at: string;
+      /**
+       * Decided By
+       * @description Display label of who declined or removed them.
+       */
+      decided_by: string | null;
     };
     /**
      * DiscordWebhook
@@ -1996,6 +2176,31 @@ export interface components {
         | components['schemas']['LinkRun']
         | components['schemas']['LineBreak']
       )[];
+    };
+    /**
+     * PendingUser
+     * @description What an approver may see about someone waiting: the sign-in snapshot.
+     */
+    PendingUser: {
+      /**
+       * Id
+       * @description The pending user's app identifier.
+       */
+      id: string;
+      /** Display Name */
+      display_name: string | null;
+      /**
+       * Email
+       * @description Google-verified address, if any.
+       */
+      email: string | null;
+      /** Photo Url */
+      photo_url: string | null;
+      /**
+       * Requested At
+       * @description UTC ISO 8601 of the first sign-in.
+       */
+      requested_at: string;
     };
     /** PostingAnalysisResponse */
     PostingAnalysisResponse: {
@@ -2612,6 +2817,11 @@ export interface components {
        * @enum {string}
        */
       role: 'admin' | 'member';
+      /**
+       * Approval
+       * @enum {string}
+       */
+      approval: 'pending' | 'approved';
       /** Expires At */
       expires_at: number;
     };
@@ -2708,6 +2918,37 @@ export interface components {
     TokenExchange: {
       /** Id Token */
       id_token: string;
+    };
+    /**
+     * TreeUser
+     * @description One approved user and, nested, everyone they approved (admin view).
+     */
+    TreeUser: {
+      /** Id */
+      id: string;
+      /** Display Name */
+      display_name: string | null;
+      /** Email */
+      email: string | null;
+      /** Photo Url */
+      photo_url: string | null;
+      /**
+       * Role
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+      /**
+       * Approved At
+       * @description UTC ISO 8601; the administrator's bootstrap time for the root.
+       */
+      approved_at: string | null;
+      /**
+       * Approved By
+       * @description Display label of the approver (name, else email); null for root.
+       */
+      approved_by: string | null;
+      /** Children */
+      children: components['schemas']['TreeUser'][];
     };
     /** WorkspaceResponse */
     WorkspaceResponse: {
@@ -5056,6 +5297,528 @@ export interface operations {
       };
       /** @description Unprocessable Entity */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listApprovals: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalListing'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  approveUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        uid: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['EmptyRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalListing'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  declineUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        uid: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['EmptyRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalListing'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getApprovalTree: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalTree'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  removeUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        uid: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['EmptyRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalTree'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  reinstateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        uid: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['EmptyRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalTree'];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
         headers: {
           [name: string]: unknown;
         };

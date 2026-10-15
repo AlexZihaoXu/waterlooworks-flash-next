@@ -49,6 +49,7 @@ from waterlooworks_flash_next.app_auth import (
     require_admin,
     require_session,
 )
+from waterlooworks_flash_next.approvals_api import install_approvals
 from waterlooworks_flash_next.auth_api import install_auth
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
@@ -228,6 +229,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     install_ai_settings(app, path)
     install_refresh_schedule(app, scheduler)
     install_account(app, path)
+    install_approvals(app, path)
     protected = APIRouter(dependencies=[Depends(require_session)])
 
     @app.exception_handler(RequestValidationError)
