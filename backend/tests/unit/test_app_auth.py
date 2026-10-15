@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from waterlooworks_flash_next.account_profile import AccountProfile
 from waterlooworks_flash_next.api import create_app
 from waterlooworks_flash_next.app_auth import (
     ROTATION_GRACE_SECONDS,
     SESSION_ABSOLUTE_LIFETIME,
+    AccountNotApproved,
     AuthError,
     BootstrapOwner,
     BootstrapRefused,
@@ -324,7 +326,114 @@ def test_held_server_refuses_new_accounts_but_keeps_existing_ones(
     assert str(error.value) == "This account is waiting for approval."
     assert "stranger-uid" not in str(error.value)
     assert _user_count(path) == 1
+    with sqlite3.connect(path) as connection:
+        # Not even a pending admission row: the emergency switch admits nobody.
+        assert (
+            connection.execute("SELECT count(*) FROM user_approvals").fetchone()[0] == 1
+        )
     again = store.issue(
         store.prepare(None, now=101), "owner-uid", 500, auth_time=101, now=101
     )
     assert again.identity.role == "admin"
+
+
+def _admission(path: Path, uid: str) -> tuple[object, ...]:
+    with sqlite3.connect(path) as connection:
+        return tuple(
+            connection.execute(
+                "SELECT status, parent_uid, display_name, email, photo_url "
+                "FROM user_approvals WHERE uid=?",
+                (uid,),
+            ).fetchone()
+        )
+
+
+def test_new_identities_become_pending_with_a_profile_snapshot(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner-uid"))
+    owner = store.issue(
+        store.prepare(None, now=100), "owner-uid", 500, auth_time=100, now=100
+    )
+    assert owner.identity.role == "admin"
+    assert owner.identity.approval == "approved"
+    assert _admission(path, "owner-uid") == ("approved", None, None, None, None)
+    # Structural display fields, as a verified token would carry them.
+    profile = AccountProfile(
+        display_name="Person A",
+        email="person-a@example.invalid",
+        photo_url="https://lh3.googleusercontent.com/a/structural",
+    )
+    newcomer = store.issue(
+        store.prepare(None, now=101),
+        "new-uid",
+        500,
+        auth_time=101,
+        email=profile.email,
+        profile=profile,
+        now=101,
+    )
+    assert newcomer.identity.role == "member"
+    assert newcomer.identity.approval == "pending"
+    assert _admission(path, "new-uid") == (
+        "pending",
+        None,
+        "Person A",
+        "person-a@example.invalid",
+        "https://lh3.googleusercontent.com/a/structural",
+    )
+    # The session exists (for the waiting screen) and reports pending.
+    assert store.lookup(newcomer.cookie, now=102) == newcomer.identity
+    # A later sign-in refreshes the snapshot; an unverified email clears it.
+    again = store.issue(
+        store.prepare(None, now=103),
+        "new-uid",
+        500,
+        auth_time=103,
+        profile=AccountProfile(display_name="Person A2"),
+        now=103,
+    )
+    assert again.identity.approval == "pending"
+    assert _admission(path, "new-uid") == ("pending", None, "Person A2", None, None)
+
+
+@pytest.mark.parametrize("status", ["declined", "removed"])
+def test_declined_and_removed_identities_are_refused_without_changes(
+    tmp_path: Path, status: str
+) -> None:
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner-uid"))
+    store.issue(store.prepare(None, now=100), "owner-uid", 500, auth_time=100, now=100)
+    kept = store.issue(
+        store.prepare(None, now=100), "other-uid", 500, auth_time=100, now=100
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE user_approvals SET status=?, decided_by='owner-uid', "
+            "decided_at=101 WHERE uid='other-uid'",
+            (status,),
+        )
+    # An already-issued session stops resolving at once.
+    assert store.lookup(kept.cookie, now=102) is None
+    with pytest.raises(AccountNotApproved) as error:
+        store.issue(
+            store.prepare(None, now=103),
+            "other-uid",
+            500,
+            auth_time=103,
+            profile=AccountProfile(display_name="Changed"),
+            now=103,
+        )
+    assert str(error.value) == "This account is not approved."
+    assert "other-uid" not in str(error.value)
+    assert _admission(path, "other-uid") == (status, None, None, None, None)
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM app_sessions WHERE uid='other-uid'"
+            ).fetchone()[0]
+            == 1  # The refused attempt minted nothing new.
+        )

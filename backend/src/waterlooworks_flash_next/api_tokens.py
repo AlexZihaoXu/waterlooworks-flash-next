@@ -2,8 +2,9 @@
 
 Only a SHA-256 digest and a short display hint are stored. The plaintext is
 returned exactly once by ``reset`` and must never be logged, echoed in errors
-or written anywhere else. Authentication always rejoins ``app_users`` so a
-removed user (or a changed role) is reflected on the very next request.
+or written anywhere else. Authentication always rejoins ``app_users`` and
+the admission row, so a removed, declined or not-yet-approved user (or a
+changed role) is reflected on the very next request.
 """
 
 import hashlib
@@ -135,8 +136,9 @@ class TokenStore:
     ) -> AgentIdentity | None:
         """Resolve a presented token to a current app user, or None.
 
-        Membership and role are re-read from ``app_users`` on every call; the
-        stored digest is compared in constant time after the indexed lookup.
+        Membership, role and approval are re-read on every call; only an
+        approved user's token resolves. The stored digest is compared in
+        constant time after the indexed lookup.
         """
         if not isinstance(token, str) or TOKEN_PATTERN.match(token) is None:
             return None
@@ -148,7 +150,9 @@ class TokenStore:
                 connection.execute("BEGIN IMMEDIATE")
                 row = connection.execute(
                     "SELECT t.uid, t.token_hash, u.role FROM api_tokens t "
-                    "JOIN app_users u ON u.uid=t.uid WHERE t.token_hash=?",
+                    "JOIN app_users u ON u.uid=t.uid "
+                    "JOIN user_approvals a ON a.uid=t.uid "
+                    "WHERE t.token_hash=? AND a.status='approved'",
                     (digest,),
                 ).fetchone()
                 if row is None or not hmac.compare_digest(row["token_hash"], digest):

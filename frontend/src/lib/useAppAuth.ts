@@ -5,6 +5,7 @@ import {
   AuthQueue,
   classifySignInError,
   isTransientAuthFailure,
+  parseRefusalCode,
   parseRetryAfter,
   parseSession,
   renewalRetryDelayMs,
@@ -26,12 +27,23 @@ async function authRequest(path: string, body?: object, signal?: AbortSignal) {
     credentials: 'same-origin',
     cache: 'no-store',
   });
-  if (!response.ok)
+  if (!response.ok) {
+    // Only an allowlisted refusal code is read from the body, never its text.
+    let code = null;
+    if (response.status === 403) {
+      try {
+        code = parseRefusalCode(await response.json());
+      } catch {
+        code = null;
+      }
+    }
     throw new AuthHttpError(
       path,
       response.status,
       parseRetryAfter(response.headers.get('Retry-After')),
+      code,
     );
+  }
   return response.json() as Promise<unknown>;
 }
 
@@ -145,18 +157,26 @@ export function useAppAuth() {
     const check = async () => {
       try {
         const actual = parseSession(await authRequest('session'));
-        if (
-          active &&
-          (actual.uid !== session.uid || actual.role !== session.role)
-        )
+        if (!active) return;
+        if (actual.uid !== session.uid || actual.role !== session.role) {
           signOut(true, true);
+          return;
+        }
+        // Admission changed (someone approved this account): continue the
+        // same session with its new access; nothing is torn down.
+        if (actual.approval !== session.approval)
+          setState({ status: 'ready', session: actual });
       } catch (error) {
         // A rate limit or outage is not a verdict on the session; the next
         // poll or focus checks again, and expiry still ends it on time.
         if (active && !isTransientAuthFailure(error)) signOut(true, true);
       }
     };
-    const poll = window.setInterval(() => void check(), 30_000);
+    // A waiting account notices its approval sooner.
+    const poll = window.setInterval(
+      () => void check(),
+      session.approval === 'pending' ? 10_000 : 30_000,
+    );
     const focus = () => void check();
     window.addEventListener('focus', focus);
     return () => {

@@ -338,7 +338,10 @@ class WebhookStore:
         )
 
     def enabled_targets(self) -> list[WebhookTarget]:
-        """Every enabled webhook of a current app user, decrypted for one run.
+        """Every enabled webhook of an approved app user, decrypted for one run.
+
+        Pending, declined and removed users' webhooks are skipped (their rows
+        stay until removal deletes them).
 
         Raises ``WebhookUnavailable`` when the key is missing. Rows that fail
         authenticated decryption are skipped and recorded as failed.
@@ -348,7 +351,9 @@ class WebhookStore:
             rows = connection.execute(
                 "SELECT w.id,w.uid,w.hint,w.ciphertext,w.created_at "
                 "FROM discord_webhooks w "
-                "JOIN app_users u ON u.uid=w.uid WHERE w.enabled=1 ORDER BY w.id"
+                "JOIN app_users u ON u.uid=w.uid "
+                "JOIN user_approvals a ON a.uid=w.uid "
+                "WHERE w.enabled=1 AND a.status='approved' ORDER BY w.id"
             ).fetchall()
         finally:
             connection.close()

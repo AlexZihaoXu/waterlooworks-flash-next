@@ -1,5 +1,6 @@
 """Random secret primitives and empty databases only; no browser/provider I/O."""
 
+import hashlib
 import os
 import secrets
 import sqlite3
@@ -240,11 +241,15 @@ def test_schema12_additive_preserves_auth(
         legacy.setattr(database, "SCHEMA_VERSION", 13)
         open_database(path).close()
     store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
-    cookie = store.prepare(None)
+    cookie = secrets.token_urlsafe(32)
     now = int(time.time())
-    issued = store.issue(cookie, "owner", now + 300, auth_time=now)
-    cookie, identity = issued.cookie, issued.identity
     with sqlite3.connect(path) as connection:
+        # The owner signed in on the schema11 database: structural rows only.
+        connection.execute("INSERT INTO app_users VALUES ('owner','admin',?)", (now,))
+        connection.execute(
+            "INSERT INTO app_sessions VALUES (?,'owner',?)",
+            (hashlib.sha256(cookie.encode()).hexdigest(), now + 300),
+        )
         connection.execute("DROP TABLE openai_reauth_challenges")
         connection.execute("DROP TABLE openai_credentials")
         connection.execute("DROP TABLE waterlooworks_credentials")
@@ -262,7 +267,13 @@ def test_schema12_additive_preserves_auth(
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     connection.close()
-    assert store.lookup(cookie) == identity
+    identity = store.lookup(cookie)
+    assert identity is not None
+    assert (identity.uid, identity.role, identity.approval) == (
+        "owner",
+        "admin",
+        "approved",
+    )
 
 
 def test_key_cli_uses_explicit_empty_database_without_printing_key(

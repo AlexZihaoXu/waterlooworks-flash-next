@@ -8,7 +8,7 @@ records; no platform content is invented.
 import time
 from pathlib import Path
 
-from auth_support import session_client
+from auth_support import approve_member, session_client
 from fastapi.testclient import TestClient
 
 from waterlooworks_flash_next.api_tokens import TokenStore
@@ -36,6 +36,7 @@ def _member(client: TestClient, path: Path, uid: str = "member-uid") -> None:
     store = SessionStore(path)
     now = int(time.time())
     cookie = store.issue(store.prepare(None), uid, now + 300, auth_time=now).cookie
+    approve_member(path, uid)
     client.cookies.clear()
     client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
 

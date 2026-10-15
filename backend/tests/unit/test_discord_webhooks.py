@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
+from waterlooworks_flash_next.approvals import ApprovalStore
 from waterlooworks_flash_next.credentials import CredentialError, initialize_key
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.discord_webhooks import (
@@ -38,6 +39,7 @@ def path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         connection.execute("INSERT INTO app_users VALUES ('u1','admin',1)")
         connection.execute("INSERT INTO app_users VALUES ('u2','member',1)")
     connection.close()
+    ApprovalStore(database).approve("u1", "u2")
     return database
 
 
@@ -217,6 +219,24 @@ def test_enabled_targets_skip_disabled_and_undecryptable_rows(path: Path) -> Non
     targets = store.enabled_targets()
     assert [target.id for target in targets] == [on.id]
     assert [item.last_status for item in store.for_user("u2")] == [None, "failed"]
+
+
+def test_enabled_targets_skip_users_who_are_not_approved(path: Path) -> None:
+    store = WebhookStore(path)
+    mine = store.add("u1", "Admin", webhook_url(webhook_id="1"))
+    theirs = store.add("u2", "Member", webhook_url(webhook_id="2"))
+    assert [target.id for target in store.enabled_targets()] == [mine.id, theirs.id]
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute(
+            "UPDATE user_approvals SET status='pending', parent_uid=NULL, "
+            "decided_by=NULL, decided_at=NULL WHERE uid='u2'"
+        )
+    connection.close()
+    assert [target.id for target in store.enabled_targets()] == [mine.id]
+    # The row stays (not failed, not disabled); only removal deletes it.
+    assert [item.enabled for item in store.for_user("u2")] == [True]
+    assert [item.last_status for item in store.for_user("u2")] == [None]
 
 
 def test_key_initialization_refuses_existing_webhook_ciphertext(

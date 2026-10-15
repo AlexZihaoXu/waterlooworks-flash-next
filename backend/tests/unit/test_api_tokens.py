@@ -12,6 +12,7 @@ from waterlooworks_flash_next.api_tokens import (
     TokenStore,
     token_digest,
 )
+from waterlooworks_flash_next.approvals import ApprovalStore
 from waterlooworks_flash_next.database import open_database
 from waterlooworks_flash_next.request_limits import RequestLimiter
 
@@ -22,6 +23,7 @@ def _users(path: Path) -> None:
         connection.execute("INSERT INTO app_users VALUES ('owner','admin',1)")
         connection.execute("INSERT INTO app_users VALUES ('member','member',2)")
     connection.close()
+    ApprovalStore(path).approve("owner", "member")
 
 
 def test_reset_returns_plaintext_once_and_stores_only_its_digest(
@@ -98,7 +100,7 @@ def test_authenticate_rejects_malformed_unknown_and_tampered_tokens(
 
 
 def test_token_dies_with_the_user_row(tmp_path: Path) -> None:
-    # No removal exists today; simulate a future one to prove the recheck.
+    # Membership rows are immutable; prove the recheck against a raw deletion.
     path = tmp_path / "db.sqlite3"
     _users(path)
     store = TokenStore(path)
@@ -110,6 +112,31 @@ def test_token_dies_with_the_user_row(tmp_path: Path) -> None:
     assert connection.execute("SELECT count(*) FROM api_tokens").fetchone()[0] == 0
     connection.close()
     assert store.authenticate(issued.token) is None
+
+
+@pytest.mark.parametrize("status", ["pending", "declined", "removed"])
+def test_token_resolves_only_while_the_user_is_approved(
+    tmp_path: Path, status: str
+) -> None:
+    path = tmp_path / "db.sqlite3"
+    _users(path)
+    store = TokenStore(path)
+    issued = store.reset("member")
+    assert store.authenticate(issued.token) is not None
+    connection = open_database(path)
+    with connection:
+        connection.execute(
+            "UPDATE user_approvals SET status=?, parent_uid=NULL, decided_by=?, "
+            "decided_at=? WHERE uid='member'",
+            (
+                status,
+                None if status == "pending" else "owner",
+                None if status == "pending" else 3,
+            ),
+        )
+    connection.close()
+    assert store.authenticate(issued.token) is None
+    assert store.status("member").configured is True  # the row itself remains
 
 
 def test_request_limiter_is_per_key_and_reports_retry_after() -> None:
