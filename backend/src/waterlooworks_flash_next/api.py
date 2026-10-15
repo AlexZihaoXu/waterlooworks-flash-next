@@ -86,6 +86,7 @@ from waterlooworks_flash_next.refresh import (
     RefreshService,
     RunOutcome,
     configured_detail_limit,
+    configured_format_backfill,
     configured_full_refetch,
 )
 from waterlooworks_flash_next.refresh_schedule import RefreshScheduler, ScheduleStore
@@ -117,6 +118,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if database_path is None
         else False
     )
+    format_backfill = configured_format_backfill(
+        os.environ.get("WW_FORMAT_BACKFILL_PER_RUN") if database_path is None else None
+    )
     # Fails closed at startup with a fixed message on an invalid value.
     pacing = (
         PacingConfig.from_environment() if database_path is None else PacingConfig()
@@ -127,6 +131,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         detail_limit=detail_limit,
         full_refetch=full_refetch,
         pacing=pacing,
+        format_backfill=format_backfill,
     )
     scheduler = RefreshScheduler(
         ScheduleStore(path),
