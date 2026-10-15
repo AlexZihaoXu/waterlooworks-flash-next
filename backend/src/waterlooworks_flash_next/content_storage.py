@@ -1,5 +1,10 @@
-"""Atomic content-only checkpoints; legacy v3 metadata tables stay untouched."""
+"""Atomic content-only checkpoints; legacy v3 metadata tables stay untouched.
 
+Formatting (schema v21) is written in the same transaction into its own
+table, bound to the content hash; it never changes the saved text, the hash
+or the content revisions."""
+
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -7,9 +12,13 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from waterlooworks_flash_next.compact_history import HistoryReader, store_payload
-from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.content import (
+    StoredPostingContent,
+    StoredPostingFormatting,
+)
 from waterlooworks_flash_next.database import DatabaseError, canonical_snapshot
 from waterlooworks_flash_next.detail_schema import DETAIL_ERROR_CATEGORIES
+from waterlooworks_flash_next.rich_text import FORMAT_VERSION, same_characters
 
 EXTRACTOR_VERSION = "labels-text-v3"
 
@@ -110,8 +119,16 @@ def interrupt_content_attempt(connection: sqlite3.Connection, attempt_id: str) -
 
 
 def complete_content_attempt(
-    connection: sqlite3.Connection, attempt_id: str, content: StoredPostingContent
+    connection: sqlite3.Connection,
+    attempt_id: str,
+    content: StoredPostingContent,
+    formatting: StoredPostingFormatting | None = None,
 ) -> int:
+    """Save content (a new revision only when its hash changed) and formatting.
+
+    Identical text keeps the content row, hash and revisions; only its
+    sightings and, when supplied, the formatting row are updated.
+    """
     with _write(connection):
         posting_id, run_id = _pending(connection, attempt_id)
         row = connection.execute(
@@ -170,6 +187,8 @@ def complete_content_attempt(
                 "WHERE posting_id=?",
                 (now, run_id, posting_id),
             )
+        if formatting is not None:
+            _save_formatting(connection, posting_id, digest, formatting, run_id, now)
         row = connection.execute(
             "SELECT revision_id FROM posting_content_revisions WHERE posting_id=? "
             "ORDER BY revision_id DESC LIMIT 1",
@@ -189,3 +208,79 @@ def complete_content_attempt(
             (run_id,),
         )
         return revision_id
+
+
+def _save_formatting(
+    connection: sqlite3.Connection,
+    posting_id: str,
+    digest: str,
+    formatting: StoredPostingFormatting,
+    run_id: str,
+    now: str,
+) -> None:
+    """Caller owns the transaction; replaces this posting's current formatting."""
+    validated = StoredPostingFormatting.model_validate_json(
+        formatting.model_dump_json()
+    )
+    blocks = json.dumps(
+        validated.model_dump(exclude_defaults=True)["fields"],
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    connection.execute(
+        """INSERT INTO posting_content_formatting
+            (posting_id,content_hash,format_version,blocks_json,captured_at,run_id)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(posting_id) DO UPDATE SET
+                content_hash=excluded.content_hash,
+                format_version=excluded.format_version,
+                blocks_json=excluded.blocks_json,
+                captured_at=excluded.captured_at,
+                run_id=excluded.run_id""",
+        (posting_id, digest, validated.version, blocks, now, run_id),
+    )
+
+
+def formatting_from_row(
+    content: StoredPostingContent, blocks_json: str | None
+) -> StoredPostingFormatting | None:
+    """Validated formatting for labels whose text matches the saved content.
+
+    None (plain text only) when nothing is stored, the row does not validate,
+    or no label survives the same-characters check.
+    """
+    if blocks_json is None:
+        return None
+    try:
+        stored = StoredPostingFormatting.model_validate_json(
+            json.dumps({"version": FORMAT_VERSION, "fields": json.loads(blocks_json)})
+        )
+    except ValueError:
+        return None
+    kept = {
+        label: blocks
+        for label, blocks in stored.fields.items()
+        if label in content.fields and same_characters(content.fields[label], blocks)
+    }
+    return StoredPostingFormatting(fields=kept) if kept else None
+
+
+# Current content joined with formatting captured for that exact hash/version.
+FORMATTING_JOIN = (
+    "LEFT JOIN posting_content_formatting f ON f.posting_id=c.posting_id "
+    "AND f.content_hash=c.content_hash AND f.format_version=?"
+)
+
+
+def read_formatting(
+    connection: sqlite3.Connection, posting_id: str
+) -> StoredPostingFormatting | None:
+    row = connection.execute(
+        "SELECT c.content_json,f.blocks_json FROM posting_contents c "
+        f"{FORMATTING_JOIN} WHERE c.posting_id=?",
+        (FORMAT_VERSION, posting_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return formatting_from_row(StoredPostingContent.model_validate_json(row[0]), row[1])
