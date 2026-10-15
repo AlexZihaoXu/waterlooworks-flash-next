@@ -13,7 +13,10 @@ from pydantic import (
 
 from waterlooworks_flash_next.account_profile import AccountProfile
 from waterlooworks_flash_next.auth_challenge import AuthChallengeStatus
-from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.content import (
+    StoredPostingContent,
+    StoredPostingFormatting,
+)
 from waterlooworks_flash_next.database import StoredListing
 from waterlooworks_flash_next.discord_webhooks import DiscordWebhook
 from waterlooworks_flash_next.posting_marks import PostingMark, PostingState
@@ -119,6 +122,14 @@ class JobDetailResponse(Contract):
     listing: StoredListing
     content: StoredPostingContent | None
     content_observed_at: str | None
+    formatting: StoredPostingFormatting | None = Field(
+        default=None,
+        description=(
+            "Sanitized formatting (paragraphs, lists, bold/italic, http(s)/mailto "
+            "links, line breaks) for labels of the saved content; null or a "
+            "missing label means show the plain text. Never HTML."
+        ),
+    )
 
 
 AnalysisState = Literal["recognized", "unknown", "needs_analysis"]
@@ -617,6 +628,14 @@ class AgentPostingDetail(AgentPostingSummary):
         description="Saved plain-text detail fields; null before detail collection."
     )
     content_observed_at: str | None
+    formatting: StoredPostingFormatting | None = Field(
+        default=None,
+        description=(
+            "Sanitized formatting (paragraphs, lists, bold/italic, http(s)/mailto "
+            "links, line breaks) for labels of the saved content; null or a "
+            "missing label means show the plain text. Never HTML."
+        ),
+    )
     analysis: PostingAnalysisResponse
 
 
