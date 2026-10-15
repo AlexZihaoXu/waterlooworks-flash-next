@@ -14,7 +14,7 @@ No token is needed to read these; they describe the API, not anyone's data:
 
 ## Getting a token (web app settings)
 
-Each signed-in user (member or admin) manages one personal token from the account/settings area of the web app, which calls these session-cookie routes (same Origin/JSON/`X-WW-Request: 1` rules as every other session mutation; all responses are `no-store`):
+Each approved user (member or admin) manages one personal token from the account/settings area of the web app, which calls these session-cookie routes (same Origin/JSON/`X-WW-Request: 1` rules as every other session mutation; all responses are `no-store`):
 
 | Method | Route                                     | Result                                                                                                                                            |
 | ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -37,7 +37,7 @@ curl -sS https://<your-host>/api/agent/v1/me \
 ```
 
 - Only the `Authorization: Bearer` header is consulted. Cookies are ignored and query-string tokens are never accepted.
-- The token is re-resolved on **every** request to a current app user and role; a revoked or replaced token, or a user who lost access, gets `401` immediately.
+- The token is re-resolved on **every** request to a current, approved app user and role; a revoked or replaced token, or a user who lost access (pending, declined or removed in the approval tree), gets `401` immediately.
 - Any missing, malformed, unknown, replaced or revoked token answers a generic `401` with `WWW-Authenticate: Bearer` and the fixed body `{"detail": "Agent token was not accepted."}`. Tokens are never echoed or logged.
 - The usual transport guards still apply: the configured `Host`, HTTPS (or the explicit loopback-HTTP development exception), and `Content-Type: application/json` with a body of at most 20 000 bytes on `PUT`. Because bearer requests ignore cookies, the session CSRF headers (`Origin`, `X-WW-Request`) are **not** required on agent routes. If a browser-originated request does carry an `Origin` header it must still be an allowed one.
 - Responses are `Cache-Control: no-store`.
@@ -177,4 +177,4 @@ Both answer with the resulting mark `{posting_id, state, viewed_at, updated_at}`
 - The plaintext token exists only in the reset response. Store it in a secret manager, never in a repository, prompt log or shared document.
 - Agents see exactly what the owning user can see as a member of the app, and only that user's marks. Other users' marks are never readable.
 - Nothing on this API contacts WaterlooWorks or any model provider; every read is served from the saved SQLite workspace.
-- Access removal follows the app's membership rules: a token stops working as soon as its user row no longer grants access.
+- Access removal follows the app's admission rules: a token stops working as soon as its user is no longer approved, and removal by the administrator deletes the token outright.
