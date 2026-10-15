@@ -1,5 +1,6 @@
 import type { components } from './api.generated';
 import { groupNumber } from './numberFormat';
+import { parseFormatting } from './richText';
 
 export type JobDetail = components['schemas']['JobDetailResponse'];
 export type JobAnalysis = components['schemas']['PostingAnalysisResponse'];
@@ -300,7 +301,12 @@ export function parseJobDetail(value: unknown, id: string): JobDetail {
     )
   )
     throw new Error('Invalid stored posting response.');
-  return value as JobDetail;
+  // Invalid or unexpected formatting never blocks the plain-text description.
+  const formatting =
+    content === null || !record(content) || !record(content.fields)
+      ? null
+      : parseFormatting(value.formatting, new Set(Object.keys(content.fields)));
+  return { ...(value as JobDetail), formatting };
 }
 async function fetchPostingResource<T>(
   id: string,
