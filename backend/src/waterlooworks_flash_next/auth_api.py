@@ -20,6 +20,7 @@ from waterlooworks_flash_next.app_auth import (
     AuthTransport,
     BootstrapRefused,
     FirebaseVerifier,
+    NewAccountHeld,
     SessionIdentity,
     SessionStore,
     TokenExchange,
@@ -150,6 +151,15 @@ def install_auth(
         return JSONResponse(
             status_code=403,
             content={"detail": "First administrator must be the configured owner."},
+        )
+
+    @app.exception_handler(NewAccountHeld)
+    async def new_account_held(request: Request, error: NewAccountHeld) -> JSONResponse:
+        # Fixed text; never echo the attempted identity.
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "This account is waiting for approval."},
+            headers={"Cache-Control": "no-store"},
         )
 
     def set_cookie(request: Request, response: Response, cookie: str, ttl: int) -> None:
