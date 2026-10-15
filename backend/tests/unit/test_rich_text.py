@@ -5,6 +5,7 @@ posting fixtures, network access or raw HTML storage.
 """
 
 import json
+import sqlite3
 from typing import Any, cast
 
 import pytest
@@ -17,13 +18,15 @@ from waterlooworks_flash_next.content import (
     extract_content_with_formatting,
 )
 from waterlooworks_flash_next.content_storage import EXTRACTOR_VERSION
-from waterlooworks_flash_next.database import canonical_snapshot
+from waterlooworks_flash_next.database import StoredListing, canonical_snapshot
+from waterlooworks_flash_next.detail_fetch import DetailCollection, DetailSource
 from waterlooworks_flash_next.rich_text import (
     FORMAT_VERSION,
     MAX_LIST_DEPTH,
     Paragraph,
     safe_href,
 )
+from waterlooworks_flash_next.ww_pacing import PacingConfig, RequestGate
 
 REQUIRED = (
     "<div><span>Job Title:</span><p>Title</p></div>"
@@ -351,3 +354,25 @@ def test_unbalanced_markup_still_formats_within_the_field() -> None:
             )
         ]
     }
+
+
+def test_direct_detail_fetch_returns_formatting_with_the_content() -> None:
+    source = DetailSource(((("action", "a"), ("postingId", "0")),), {}, (), bool)
+    source.markup_index = 0
+    collection = DetailCollection(
+        source,
+        cast(sqlite3.Connection, None),
+        "control",
+        [],
+        lambda progress: None,
+        gate=RequestGate(PacingConfig(), daily_remaining=10),
+    )
+    collection._request = lambda *args: MARKUP  # type: ignore[method-assign]
+    posting = StoredListing(id="100001", title="Title", organization="Organization")
+    content, formatting = collection._content("control", posting)
+    assert content.fields == GOLDEN_FIELDS
+    assert formatting is not None and "Job Summary:" in formatting.fields
+    # The bootstrap's first capture hands over both and clears them.
+    source.first_content, source.first_formatting = content, formatting
+    assert collection._content("control", posting) == (content, formatting)
+    assert source.first_content is None and source.first_formatting is None

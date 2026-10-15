@@ -158,9 +158,8 @@ def test_first_content_reuse_never_calls_transport_or_counts_twice(
     monkeypatch.setattr(
         collection, "_request", lambda *args: pytest.fail("duplicate HTTP")
     )
-    assert collection._content("control", cast(StoredListing, sentinel)) is cast(
-        StoredPostingContent, sentinel
-    )
+    content, formatting = collection._content("control", cast(StoredListing, sentinel))
+    assert content is cast(StoredPostingContent, sentinel) and formatting is None
     assert source.first_content is None
     assert gate.requests == 0
 

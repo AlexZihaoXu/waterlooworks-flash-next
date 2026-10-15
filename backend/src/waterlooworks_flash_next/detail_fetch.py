@@ -17,7 +17,8 @@ from urllib.request import Request
 from waterlooworks_flash_next.content import (
     ContentError,
     StoredPostingContent,
-    extract_content,
+    StoredPostingFormatting,
+    extract_content_with_formatting,
 )
 from waterlooworks_flash_next.content_storage import (
     complete_content_attempt,
@@ -149,6 +150,7 @@ class DetailSource:
     markup_index: int | None = None
     used: bool = False
     first_content: StoredPostingContent | None = None
+    first_formatting: StoredPostingFormatting | None = None
 
     def confirm_capture(self) -> None:
         if not self.capture_check():
@@ -308,7 +310,9 @@ class DetailCollection:
             return 1
         return max(1, len(self.source.templates))
 
-    def _content(self, attempt_id: str, posting: StoredListing) -> StoredPostingContent:
+    def _content(
+        self, attempt_id: str, posting: StoredListing
+    ) -> tuple[StoredPostingContent, StoredPostingFormatting | None]:
         if self.source is None:
             if self.bootstrap is None:
                 raise DetailFetchError(FailureCategory.SCHEMA)
@@ -325,10 +329,12 @@ class DetailCollection:
             self.source.used = True
         if self.source.first_content is not None:
             content = self.source.first_content
+            formatting = self.source.first_formatting
             self.source.first_content = None
+            self.source.first_formatting = None
             if content.id != posting.id:
                 raise DetailFetchError(FailureCategory.SCHEMA)
-            return content
+            return content, formatting
         if not posting.title:
             raise DetailFetchError(FailureCategory.SCHEMA)
         candidates = (
@@ -354,7 +360,7 @@ class DetailCollection:
                     raise DetailFetchError(FailureCategory.SCHEMA)
                 continue
             try:
-                content = extract_content(
+                content, formatting = extract_content_with_formatting(
                     text,
                     posting.id,
                     posting.title,
@@ -366,7 +372,7 @@ class DetailCollection:
                     FailureCategory.SCHEMA
                 ) from None
             self.source.markup_index = index
-            return content
+            return content, formatting
         raise DetailFetchError(FailureCategory.SCHEMA)
 
     def run(self) -> None:
@@ -385,8 +391,10 @@ class DetailCollection:
             established = self.source is not None
             attempt_id = start_content_attempt(self.connection, self.run_id, posting.id)
             try:
-                content = self._content(attempt_id, posting)
-                complete_content_attempt(self.connection, attempt_id, content)
+                content, formatting = self._content(attempt_id, posting)
+                complete_content_attempt(
+                    self.connection, attempt_id, content, formatting
+                )
             except (RequestBudgetExhausted, CollectionInterrupted):
                 # Clean stop before the network: not a posting failure.
                 interrupt_content_attempt(self.connection, attempt_id)
