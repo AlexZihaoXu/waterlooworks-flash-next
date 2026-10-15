@@ -26,7 +26,9 @@ const running = refreshSnapshot({
 describe('phone top app bar', () => {
   it('keeps header, refresh status and the controls row in one top bar', () => {
     vi.stubGlobal('innerWidth', 390);
-    render(<App state={empty} refresh={running} />);
+    render(
+      <App state={empty} refresh={running} onOpenAdminSettings={() => {}} />,
+    );
     const bar = screen.getByRole('banner').closest('.app-bar') as HTMLElement;
     expect(bar).not.toBeNull();
     expect(bar).toContainElement(

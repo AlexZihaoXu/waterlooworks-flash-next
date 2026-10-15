@@ -139,8 +139,8 @@ const notice = {
   ],
 } as const;
 
-function LiveRefreshActivity() {
-  return <RefreshActivity refresh={use(RefreshContext)} />;
+function LiveRefreshActivity({ admin }: { admin: boolean }) {
+  return <RefreshActivity refresh={use(RefreshContext)} admin={admin} />;
 }
 
 export function App({
@@ -1815,7 +1815,7 @@ const WorkspaceView = memo(function WorkspaceView({
             data-scrolled={scrolled ? 'true' : 'false'}
           >
             {header}
-            <LiveRefreshActivity />
+            <LiveRefreshActivity admin={onOpenAdminSettings !== undefined} />
             {!signedOut && !detailOpen && compactSearchRow}
           </div>
           {notices}
@@ -1824,7 +1824,7 @@ const WorkspaceView = memo(function WorkspaceView({
         <>
           {header}
           {notices}
-          <LiveRefreshActivity />
+          <LiveRefreshActivity admin={onOpenAdminSettings !== undefined} />
         </>
       )}
 

@@ -122,11 +122,13 @@ function CompactRefreshStatus({
   running,
   progress,
   etaLabel,
+  admin,
 }: {
   refresh: RefreshSnapshot;
   running: boolean;
   progress: Progress;
   etaLabel: string;
+  admin: boolean;
 }) {
   const [limit, setLimit] = useState(LOG_STEP);
   const stageLabel = refreshStageLabel(
@@ -158,150 +160,155 @@ function CompactRefreshStatus({
           {stop ? ' · stopped early' : ''}
         </Typography>
       )}
-      <Drawer>
-        <Button
-          isIconOnly
-          size="lg"
-          variant="tertiary"
-          aria-label="Refresh details"
-          aria-haspopup="dialog"
-        >
-          <LuChevronUp aria-hidden="true" />
-        </Button>
-        <Drawer.Backdrop>
-          <Drawer.Content placement="bottom">
-            <Drawer.Dialog>
-              <Drawer.Handle />
-              <Drawer.CloseTrigger />
-              <Drawer.Header>
-                <Drawer.Heading>Refresh progress</Drawer.Heading>
-              </Drawer.Header>
-              <Drawer.Body>
-                <div className="stack refresh-details">
-                  <div className="stack-small">
-                    <Typography type="body-sm" weight="medium">
-                      {stageLabel}
-                    </Typography>
-                    {running && (
-                      <Typography type="body-xs" color="muted">
-                        {etaLabel}
+      {admin && (
+        <Drawer>
+          <Button
+            isIconOnly
+            size="lg"
+            variant="tertiary"
+            aria-label="Refresh details"
+            aria-haspopup="dialog"
+          >
+            <LuChevronUp aria-hidden="true" />
+          </Button>
+          <Drawer.Backdrop>
+            <Drawer.Content placement="bottom">
+              <Drawer.Dialog>
+                <Drawer.Handle />
+                <Drawer.CloseTrigger />
+                <Drawer.Header>
+                  <Drawer.Heading>Refresh progress</Drawer.Heading>
+                </Drawer.Header>
+                <Drawer.Body>
+                  <div className="stack refresh-details">
+                    <div className="stack-small">
+                      <Typography type="body-sm" weight="medium">
+                        {stageLabel}
                       </Typography>
-                    )}
-                    {stop && (
-                      <Typography type="body-xs" color="muted">
-                        {stop}
-                      </Typography>
-                    )}
-                  </div>
-                  {running && (
-                    <ProgressBar
-                      aria-label={progress.label}
-                      value={progress.value}
-                      maxValue={progress.maxValue}
-                      isIndeterminate={progress.isIndeterminate}
-                    >
-                      <ProgressBar.Output />
-                      <ProgressBar.Track>
-                        <ProgressBar.Fill />
-                      </ProgressBar.Track>
-                    </ProgressBar>
-                  )}
-                  <ul className="refresh-stats" aria-label="Refresh counters">
-                    {refreshStats(refresh).map((stat) => (
-                      <li key={stat.label}>
-                        <div className="refresh-stat">
-                          <Typography type="body-xs" color="muted">
-                            {stat.label}
-                          </Typography>
-                          <Typography type="body-sm" weight="semibold">
-                            {stat.value}
-                          </Typography>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="stack-small">
-                    <Typography type="h6" role="heading" aria-level={3}>
-                      Log · newest first
-                    </Typography>
-                    <div
-                      role="log"
-                      aria-label="Refresh log"
-                      aria-live="polite"
-                      aria-relevant="additions"
-                    >
-                      {shown.length ? (
-                        <ol className="refresh-log-list">
-                          {shown.map((log) => {
-                            const style = logPresentation[log.level];
-                            return (
-                              <li
-                                key={`${refresh.run_id}-${log.sequence}`}
-                                className="refresh-log-item"
-                              >
-                                <span className="refresh-log-meta">
-                                  <Typography type="body-xs" color="muted">
-                                    {new Date(log.at).toLocaleTimeString(
-                                      'en-GB',
-                                    )}
-                                  </Typography>
-                                  {style.muted ? (
-                                    <Typography type="body-xs" color="muted">
-                                      {log.level.toUpperCase()}
-                                    </Typography>
-                                  ) : (
-                                    <Chip
-                                      size="sm"
-                                      variant={style.variant}
-                                      color={style.color}
-                                    >
-                                      {log.level.toUpperCase()}
-                                    </Chip>
-                                  )}
-                                </span>
-                                <span className="refresh-log-message">
-                                  <Typography
-                                    type="body-sm"
-                                    color={style.muted ? 'muted' : 'default'}
-                                  >
-                                    {log.message}
-                                  </Typography>
-                                </span>
-                              </li>
-                            );
-                          })}
-                        </ol>
-                      ) : (
-                        <Typography type="body-sm" color="muted">
-                          Waiting for refresh progress.
+                      {running && (
+                        <Typography type="body-xs" color="muted">
+                          {etaLabel}
+                        </Typography>
+                      )}
+                      {stop && (
+                        <Typography type="body-xs" color="muted">
+                          {stop}
                         </Typography>
                       )}
                     </div>
-                    {older > 0 && (
-                      <Button
-                        fullWidth
-                        size="lg"
-                        variant="tertiary"
-                        onPress={() => setLimit((value) => value + LOG_STEP)}
+                    {running && (
+                      <ProgressBar
+                        aria-label={progress.label}
+                        value={progress.value}
+                        maxValue={progress.maxValue}
+                        isIndeterminate={progress.isIndeterminate}
                       >
-                        Show {Math.min(older, LOG_STEP)} older entries
-                      </Button>
+                        <ProgressBar.Output />
+                        <ProgressBar.Track>
+                          <ProgressBar.Fill />
+                        </ProgressBar.Track>
+                      </ProgressBar>
                     )}
+                    <ul className="refresh-stats" aria-label="Refresh counters">
+                      {refreshStats(refresh).map((stat) => (
+                        <li key={stat.label}>
+                          <div className="refresh-stat">
+                            <Typography type="body-xs" color="muted">
+                              {stat.label}
+                            </Typography>
+                            <Typography type="body-sm" weight="semibold">
+                              {stat.value}
+                            </Typography>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="stack-small">
+                      <Typography type="h6" role="heading" aria-level={3}>
+                        Log · newest first
+                      </Typography>
+                      <div
+                        role="log"
+                        aria-label="Refresh log"
+                        aria-live="polite"
+                        aria-relevant="additions"
+                      >
+                        {shown.length ? (
+                          <ol className="refresh-log-list">
+                            {shown.map((log) => {
+                              const style = logPresentation[log.level];
+                              return (
+                                <li
+                                  key={`${refresh.run_id}-${log.sequence}`}
+                                  className="refresh-log-item"
+                                >
+                                  <span className="refresh-log-meta">
+                                    <Typography type="body-xs" color="muted">
+                                      {new Date(log.at).toLocaleTimeString(
+                                        'en-GB',
+                                      )}
+                                    </Typography>
+                                    {style.muted ? (
+                                      <Typography type="body-xs" color="muted">
+                                        {log.level.toUpperCase()}
+                                      </Typography>
+                                    ) : (
+                                      <Chip
+                                        size="sm"
+                                        variant={style.variant}
+                                        color={style.color}
+                                      >
+                                        {log.level.toUpperCase()}
+                                      </Chip>
+                                    )}
+                                  </span>
+                                  <span className="refresh-log-message">
+                                    <Typography
+                                      type="body-sm"
+                                      color={style.muted ? 'muted' : 'default'}
+                                    >
+                                      {log.message}
+                                    </Typography>
+                                  </span>
+                                </li>
+                              );
+                            })}
+                          </ol>
+                        ) : (
+                          <Typography type="body-sm" color="muted">
+                            Waiting for refresh progress.
+                          </Typography>
+                        )}
+                      </div>
+                      {older > 0 && (
+                        <Button
+                          fullWidth
+                          size="lg"
+                          variant="tertiary"
+                          onPress={() => setLimit((value) => value + LOG_STEP)}
+                        >
+                          Show {Math.min(older, LOG_STEP)} older entries
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </Drawer.Body>
-            </Drawer.Dialog>
-          </Drawer.Content>
-        </Drawer.Backdrop>
-      </Drawer>
+                </Drawer.Body>
+              </Drawer.Dialog>
+            </Drawer.Content>
+          </Drawer.Backdrop>
+        </Drawer>
+      )}
     </div>
   );
 }
 
 export function RefreshActivity({
   refresh,
+  admin = false,
 }: {
   refresh: RefreshSnapshot | null;
+  /** Admins get the log and counters; members see timing and progress only. */
+  admin?: boolean;
 }) {
   const compact = useCompactLayout();
   const running = refreshRunning(refresh);
@@ -366,6 +373,7 @@ export function RefreshActivity({
           running={running}
           progress={progress}
           etaLabel={etaLabel}
+          admin={admin}
         />
       </RefreshPanel>
     );
@@ -387,62 +395,74 @@ export function RefreshActivity({
               <ProgressBar.Fill />
             </ProgressBar.Track>
           </ProgressBar>
-          <Typography type="body-sm" color="muted" role="status">
-            {analysisPhase ? (
-              <>
-                {displayNumber(refresh.analysis_completed ?? 0)} /{' '}
-                {displayNumber(refresh.analysis_total ?? 0)} processed ·{' '}
-                {displayNumber(refresh.analysis_accepted ?? 0)} accepted ·{' '}
-                {displayNumber(refresh.analysis_rejected ?? 0)} rejected ·{' '}
-                {displayNumber(refresh.analysis_failed ?? 0)} failed ·{' '}
-                {displayNumber(refresh.analysis_skipped ?? 0)} skipped ·{' '}
-                {displayNumber(refresh.analysis_cache_hits ?? 0)} cache hits
-              </>
-            ) : detailsPhase ? (
-              <>
-                {displayNumber(refresh.details_completed)} /{' '}
-                {displayNumber(refresh.details_total)} detail contents ·{' '}
-                {displayNumber(refresh.detail_requests)} requests ·{' '}
-                {displayNumber(refresh.detail_retries)} retries ·{' '}
-                {displayNumber(refresh.detail_bursts)} rest breaks
-                {refresh.detail_wait_seconds > 0 &&
-                  ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
-                {refresh.detail_limited && ' · Server verification cap'}
-              </>
-            ) : (
-              <>
-                {displayNumber(refresh.pages_completed)} /{' '}
-                {displayNumber(refresh.total_pages ?? 'unknown')} pages ·{' '}
-                {displayNumber(refresh.unique_postings)} postings ·{' '}
-                {displayNumber(refresh.records_received)} records ·{' '}
-                {displayNumber(refresh.duplicates)} duplicates
-                {refresh.detail_wait_seconds > 0 &&
-                  ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
-              </>
-            )}
-            {!analysisPhase &&
-              ` · ${displayNumber(refresh.ww_requests ?? 0)}${
-                refresh.ww_request_budget != null
-                  ? ` / ${displayNumber(refresh.ww_request_budget)}`
-                  : ''
-              } WaterlooWorks requests`}
-          </Typography>
+          {!admin ? (
+            <Typography type="body-sm" color="muted" role="status">
+              {analysisPhase
+                ? `${displayNumber(refresh.analysis_completed ?? 0)} / ${displayNumber(refresh.analysis_total ?? 0)} analysed`
+                : detailsPhase
+                  ? `${displayNumber(refresh.details_completed)} / ${displayNumber(refresh.details_total)} descriptions`
+                  : `${displayNumber(refresh.pages_completed)} / ${displayNumber(refresh.total_pages ?? 'unknown')} pages`}
+            </Typography>
+          ) : (
+            <Typography type="body-sm" color="muted" role="status">
+              {analysisPhase ? (
+                <>
+                  {displayNumber(refresh.analysis_completed ?? 0)} /{' '}
+                  {displayNumber(refresh.analysis_total ?? 0)} processed ·{' '}
+                  {displayNumber(refresh.analysis_accepted ?? 0)} accepted ·{' '}
+                  {displayNumber(refresh.analysis_rejected ?? 0)} rejected ·{' '}
+                  {displayNumber(refresh.analysis_failed ?? 0)} failed ·{' '}
+                  {displayNumber(refresh.analysis_skipped ?? 0)} skipped ·{' '}
+                  {displayNumber(refresh.analysis_cache_hits ?? 0)} cache hits
+                </>
+              ) : detailsPhase ? (
+                <>
+                  {displayNumber(refresh.details_completed)} /{' '}
+                  {displayNumber(refresh.details_total)} detail contents ·{' '}
+                  {displayNumber(refresh.detail_requests)} requests ·{' '}
+                  {displayNumber(refresh.detail_retries)} retries ·{' '}
+                  {displayNumber(refresh.detail_bursts)} rest breaks
+                  {refresh.detail_wait_seconds > 0 &&
+                    ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
+                  {refresh.detail_limited && ' · Server verification cap'}
+                </>
+              ) : (
+                <>
+                  {displayNumber(refresh.pages_completed)} /{' '}
+                  {displayNumber(refresh.total_pages ?? 'unknown')} pages ·{' '}
+                  {displayNumber(refresh.unique_postings)} postings ·{' '}
+                  {displayNumber(refresh.records_received)} records ·{' '}
+                  {displayNumber(refresh.duplicates)} duplicates
+                  {refresh.detail_wait_seconds > 0 &&
+                    ` · Scheduled wait ${refresh.detail_wait_seconds.toFixed(1)}s`}
+                </>
+              )}
+              {!analysisPhase &&
+                ` · ${displayNumber(refresh.ww_requests ?? 0)}${
+                  refresh.ww_request_budget != null
+                    ? ` / ${displayNumber(refresh.ww_request_budget)}`
+                    : ''
+                } WaterlooWorks requests`}
+            </Typography>
+          )}
         </div>
       </RefreshPanel>
-      <RefreshPanel visible={visible}>
-        <RefreshConsole
-          key={runId}
-          entries={entries}
-          status={[
-            refresh.status,
-            refreshStageLabel(refresh.stage, refresh.analysis_provider),
-            refreshStopLabel(refresh.pacing_stop),
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-          revision={`${runId}:${refresh.logs.at(-1)?.sequence ?? 0}`}
-        />
-      </RefreshPanel>
+      {admin && (
+        <RefreshPanel visible={visible}>
+          <RefreshConsole
+            key={runId}
+            entries={entries}
+            status={[
+              refresh.status,
+              refreshStageLabel(refresh.stage, refresh.analysis_provider),
+              refreshStopLabel(refresh.pacing_stop),
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            revision={`${runId}:${refresh.logs.at(-1)?.sequence ?? 0}`}
+          />
+        </RefreshPanel>
+      )}
     </>
   );
 }

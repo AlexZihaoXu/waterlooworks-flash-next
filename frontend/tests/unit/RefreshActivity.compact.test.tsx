@@ -30,7 +30,7 @@ const running = refreshSnapshot({
 describe('phone refresh status', () => {
   it('collapses to one short status row with a progress bar', () => {
     vi.stubGlobal('innerWidth', 390);
-    render(<RefreshActivity refresh={running} />);
+    render(<RefreshActivity refresh={running} admin />);
     const bar = screen.getByRole('progressbar', {
       name: /^AI extraction progress/,
     });
@@ -50,7 +50,7 @@ describe('phone refresh status', () => {
 
   it('expands to full stage text, labeled stats and a wrapped newest-first log', async () => {
     vi.stubGlobal('innerWidth', 390);
-    render(<RefreshActivity refresh={running} />);
+    render(<RefreshActivity refresh={running} admin />);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh details' }));
     const sheet = await screen.findByRole('dialog', {
       name: 'Refresh progress',
@@ -82,7 +82,7 @@ describe('phone refresh status', () => {
 
   it('keeps the inline progress and log console on wider screens', () => {
     vi.stubGlobal('innerWidth', 1024);
-    render(<RefreshActivity refresh={running} />);
+    render(<RefreshActivity refresh={running} admin />);
     expect(
       screen.getByText(`Extracting with ${provider} · ETA unavailable`),
     ).toBeInTheDocument();

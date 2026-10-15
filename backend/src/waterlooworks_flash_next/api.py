@@ -45,6 +45,7 @@ from waterlooworks_flash_next.app_auth import (
     COOKIE,
     AuthTransport,
     FirebaseVerifier,
+    SessionIdentity,
     SessionStore,
     require_admin,
     require_session,
@@ -95,6 +96,7 @@ from waterlooworks_flash_next.refresh import (
 )
 from waterlooworks_flash_next.refresh_schedule import RefreshScheduler, ScheduleStore
 from waterlooworks_flash_next.refresh_schedule_api import install_refresh_schedule
+from waterlooworks_flash_next.refresh_view import refresh_view
 from waterlooworks_flash_next.rich_text import FORMAT_VERSION
 from waterlooworks_flash_next.shutdown import ShutdownNotice
 from waterlooworks_flash_next.snapshot_cache import SnapshotCache
@@ -538,9 +540,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     @protected.get(
         "/api/refresh", response_model=RefreshSnapshot, operation_id="getRefresh"
     )
-    def refresh_status(response: Response) -> RefreshSnapshot:
+    def refresh_status(
+        response: Response,
+        identity: Annotated[SessionIdentity, Depends(require_session)],
+    ) -> RefreshSnapshot:
         response.headers["Cache-Control"] = "no-store"
-        return service.snapshot()
+        return refresh_view(service.snapshot(), identity.role)
 
     refresh_errors: dict[int | str, dict[str, Any]] = {
         **errors,
@@ -702,6 +707,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     )
     app.include_router(protected)
     app.state.event_streams = event_streams
+    app.state.refresh_service = service
     return app
 
 
@@ -728,9 +734,10 @@ async def session_event_stream(
         while not await request.is_disconnected():
             if shutdown is not None and shutdown.is_set():
                 break
-            if await asyncio.to_thread(sessions.lookup, cookie) is None:
+            identity = await asyncio.to_thread(sessions.lookup, cookie)
+            if identity is None:
                 break
-            payload = await asyncio.to_thread(_snapshot_json, service)
+            payload = await asyncio.to_thread(_snapshot_json, service, identity.role)
             if payload != previous:
                 yield prefix + "event: refresh\ndata: " + payload + "\n\n"
                 previous, prefix = payload, ""
@@ -744,5 +751,6 @@ async def session_event_stream(
             lease.release()
 
 
-def _snapshot_json(service: RefreshService) -> str:
-    return service.snapshot().model_dump_json()
+def _snapshot_json(service: RefreshService, role: str) -> str:
+    # Members never receive the log or diagnostics, only timing and progress.
+    return refresh_view(service.snapshot(), role).model_dump_json()
