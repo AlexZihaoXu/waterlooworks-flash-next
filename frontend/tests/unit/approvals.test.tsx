@@ -396,3 +396,34 @@ describe('admin settings: Approvals tab', () => {
     ).toBe(true);
   });
 });
+
+describe('phone layout', () => {
+  it('keeps the Approvals tab usable at 390px inside the full-screen sheet', async () => {
+    vi.stubGlobal('innerWidth', 390);
+    fakeServer({
+      'GET /api/approvals': () => ({
+        pending: [zac, devin],
+        approved_by_me: [],
+      }),
+    });
+    const dialog = await openApprovals();
+    expect(dialog).toHaveClass('admin-settings-dialog');
+    const waiting = await within(dialog).findByRole('list', {
+      name: 'People waiting for approval',
+    });
+    for (const person of ['Person Z', 'd@example.invalid']) {
+      expect(
+        within(waiting).getByRole('button', { name: `Approve ${person}` }),
+      ).toBeInTheDocument();
+      expect(
+        within(waiting).getByRole('button', { name: `Decline ${person}` }),
+      ).toBeInTheDocument();
+    }
+    // The pending count stays on the icon-only avatar trigger.
+    expect(
+      within(screen.getByRole('button', { name: 'Account menu' })).getByText(
+        '2',
+      ),
+    ).toBeInTheDocument();
+  });
+});
