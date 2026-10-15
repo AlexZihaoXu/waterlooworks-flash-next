@@ -57,7 +57,13 @@ class Recorder:
     ) -> None:
         self.failed.append((attempt_id, category))
 
-    def complete(self, connection: object, attempt_id: str, content: object) -> int:
+    def complete(
+        self,
+        connection: object,
+        attempt_id: str,
+        content: object,
+        formatting: object = None,
+    ) -> int:
         self.completed.append(attempt_id)
         return 1
 
@@ -84,10 +90,12 @@ def _collection(
         gate=control_gate(),
     )
 
-    def content(attempt_id: str, posting: StoredListing) -> StoredPostingContent:
+    def content(
+        attempt_id: str, posting: StoredListing
+    ) -> tuple[StoredPostingContent, None]:
         if posting.id in failures:
             raise failures[posting.id]
-        return cast(StoredPostingContent, SimpleNamespace(id=posting.id))
+        return cast(StoredPostingContent, SimpleNamespace(id=posting.id)), None
 
     collection._content = content  # type: ignore[method-assign]
     return collection
@@ -156,7 +164,9 @@ def test_unexpected_exceptions_still_abort_as_internal(
     recorder = Recorder(monkeypatch)
     collection = _collection(_postings(2), {})
 
-    def broken(attempt_id: str, posting: StoredListing) -> StoredPostingContent:
+    def broken(
+        attempt_id: str, posting: StoredListing
+    ) -> tuple[StoredPostingContent, None]:
         raise RuntimeError("control")
 
     collection._content = broken  # type: ignore[method-assign]

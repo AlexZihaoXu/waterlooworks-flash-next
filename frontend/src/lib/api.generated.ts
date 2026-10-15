@@ -1158,6 +1158,8 @@ export interface components {
       content: components['schemas']['StoredPostingContent'] | null;
       /** Content Observed At */
       content_observed_at: string | null;
+      /** @description Sanitized formatting (paragraphs, lists, bold/italic, http(s)/mailto links, line breaks) for labels of the saved content; null or a missing label means show the plain text. Never HTML. */
+      formatting: components['schemas']['StoredPostingFormatting'] | null;
       analysis: components['schemas']['PostingAnalysisResponse'];
     };
     /** AgentPostingPage */
@@ -1760,6 +1762,8 @@ export interface components {
       content: components['schemas']['StoredPostingContent'] | null;
       /** Content Observed At */
       content_observed_at: string | null;
+      /** @description Sanitized formatting (paragraphs, lists, bold/italic, http(s)/mailto links, line breaks) for labels of the saved content; null or a missing label means show the plain text. Never HTML. */
+      formatting: components['schemas']['StoredPostingFormatting'] | null;
     };
     JsonValue: unknown;
     /** KeywordIndexPosting */
@@ -1785,6 +1789,56 @@ export interface components {
       total_postings: number;
       /** Entries */
       entries: components['schemas']['KeywordIndexPosting'][];
+    };
+    /** LineBreak */
+    LineBreak: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'break';
+    };
+    /**
+     * LinkRun
+     * @description Opens in a new tab with rel="noopener noreferrer" when rendered.
+     */
+    LinkRun: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'link';
+      /** Href */
+      href: string;
+      /** Text */
+      text: string;
+      /**
+       * Bold
+       * @default false
+       */
+      bold: boolean;
+      /**
+       * Italic
+       * @default false
+       */
+      italic: boolean;
+    };
+    /**
+     * ListBlock
+     * @description Each item is a non-empty sequence of blocks (paragraphs or nested lists).
+     */
+    ListBlock: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'list';
+      /** Ordered */
+      ordered: boolean;
+      /** Items */
+      items: (
+        components['schemas']['Paragraph'] | components['schemas']['ListBlock']
+      )[][];
     };
     /** LoginResponse */
     LoginResponse: {
@@ -1928,6 +1982,20 @@ export interface components {
        * @default Known-cost stop threshold is not a hard monetary cap. In-flight requests can add charges. Unknown usage requires operator review before a new run. Only the 20 most recent runs are listed; older ledger records are retained.
        */
       warning: string;
+    };
+    /** Paragraph */
+    Paragraph: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'paragraph';
+      /** Content */
+      content: (
+        | components['schemas']['TextRun']
+        | components['schemas']['LinkRun']
+        | components['schemas']['LineBreak']
+      )[];
     };
     /** PostingAnalysisResponse */
     PostingAnalysisResponse: {
@@ -2596,6 +2664,45 @@ export interface components {
       fields: {
         [key: string]: string;
       };
+    };
+    /**
+     * StoredPostingFormatting
+     * @description Per-label sanitized formatting; labels without it show their plain text.
+     */
+    StoredPostingFormatting: {
+      /**
+       * Version
+       * @default rich-v1
+       * @constant
+       */
+      version: 'rich-v1';
+      /** Fields */
+      fields: {
+        [key: string]: (
+          | components['schemas']['Paragraph']
+          | components['schemas']['ListBlock']
+        )[];
+      };
+    };
+    /** TextRun */
+    TextRun: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'text';
+      /** Text */
+      text: string;
+      /**
+       * Bold
+       * @default false
+       */
+      bold: boolean;
+      /**
+       * Italic
+       * @default false
+       */
+      italic: boolean;
     };
     /** TokenExchange */
     TokenExchange: {

@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl
 from playwright.sync_api import Page, Route
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from waterlooworks_flash_next.content import extract_content
+from waterlooworks_flash_next.content import extract_content_with_formatting
 from waterlooworks_flash_next.database import StoredListing
 from waterlooworks_flash_next.detail_fetch import (
     MAX_DETAIL_BYTES,
@@ -424,8 +424,12 @@ def capture_detail_source(
             for key, value in form
             if key != "postingId"
         )
-        source.first_content = extract_content(
-            text, posting.id, posting.title or "", posting.organization, secrets=secrets
+        source.first_content, source.first_formatting = extract_content_with_formatting(
+            text,
+            posting.id,
+            posting.title or "",
+            posting.organization,
+            secrets=secrets,
         )
         source.markup_index = len(current.templates) - 1
         current.complete = True

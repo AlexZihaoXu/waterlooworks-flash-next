@@ -27,11 +27,11 @@ def _with_webhook(path: Path) -> tuple[sqlite3.Connection, int]:
 
 
 def test_fresh_database_reaches_v20_with_an_empty_announcement_table(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 20)
     connection = open_database(tmp_path / "fresh.sqlite3")
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 20
-    assert database.SCHEMA_VERSION == 20
     columns = {
         row[1]
         for row in connection.execute("PRAGMA table_info(discord_webhook_announced)")
@@ -64,6 +64,7 @@ def test_v19_database_migrates_to_v20_preserving_rows(
         if not str(row[1]).startswith("data_generation")
     }
     connection.close()
+    monkeypatch.setattr(database, "SCHEMA_VERSION", 20)
     connection = open_database(path)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == 20
     assert objects <= {

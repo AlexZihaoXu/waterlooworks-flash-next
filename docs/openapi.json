@@ -6065,6 +6065,17 @@
             ],
             "title": "Content Observed At"
           },
+          "formatting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoredPostingFormatting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sanitized formatting (paragraphs, lists, bold/italic, http(s)/mailto links, line breaks) for labels of the saved content; null or a missing label means show the plain text. Never HTML."
+          },
           "analysis": {
             "$ref": "#/components/schemas/PostingAnalysisResponse"
           }
@@ -6092,6 +6103,7 @@
           "viewed_at",
           "content",
           "content_observed_at",
+          "formatting",
           "analysis"
         ],
         "title": "AgentPostingDetail",
@@ -7707,6 +7719,17 @@
               }
             ],
             "title": "Content Observed At"
+          },
+          "formatting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoredPostingFormatting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sanitized formatting (paragraphs, lists, bold/italic, http(s)/mailto links, line breaks) for labels of the saved content; null or a missing label means show the plain text. Never HTML."
           }
         },
         "additionalProperties": false,
@@ -7716,7 +7739,8 @@
           "posting_id",
           "listing",
           "content",
-          "content_observed_at"
+          "content_observed_at",
+          "formatting"
         ],
         "title": "JobDetailResponse"
       },
@@ -7794,6 +7818,98 @@
         "type": "object",
         "required": ["revision", "run_id", "total_postings", "entries"],
         "title": "KeywordIndexResponse"
+      },
+      "LineBreak": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "break",
+            "title": "Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["type"],
+        "title": "LineBreak"
+      },
+      "LinkRun": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "link",
+            "title": "Type"
+          },
+          "href": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Href"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "bold": {
+            "type": "boolean",
+            "title": "Bold",
+            "default": false
+          },
+          "italic": {
+            "type": "boolean",
+            "title": "Italic",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["type", "href", "text", "bold", "italic"],
+        "title": "LinkRun",
+        "description": "Opens in a new tab with rel=\"noopener noreferrer\" when rendered."
+      },
+      "ListBlock": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "list",
+            "title": "Type"
+          },
+          "ordered": {
+            "type": "boolean",
+            "title": "Ordered"
+          },
+          "items": {
+            "items": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Paragraph"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ListBlock"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "type",
+                  "mapping": {
+                    "list": "#/components/schemas/ListBlock",
+                    "paragraph": "#/components/schemas/Paragraph"
+                  }
+                }
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["type", "ordered", "items"],
+        "title": "ListBlock",
+        "description": "Each item is a non-empty sequence of blocks (paragraphs or nested lists)."
       },
       "LoginResponse": {
         "properties": {
@@ -8226,6 +8342,46 @@
           "rolling_24h_total_usd"
         ],
         "title": "OpenAIUsageStatus"
+      },
+      "Paragraph": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "paragraph",
+            "title": "Type"
+          },
+          "content": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextRun"
+                },
+                {
+                  "$ref": "#/components/schemas/LinkRun"
+                },
+                {
+                  "$ref": "#/components/schemas/LineBreak"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "break": "#/components/schemas/LineBreak",
+                  "link": "#/components/schemas/LinkRun",
+                  "text": "#/components/schemas/TextRun"
+                }
+              }
+            },
+            "type": "array",
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["type", "content"],
+        "title": "Paragraph"
       },
       "PostingAnalysisResponse": {
         "properties": {
@@ -9781,6 +9937,74 @@
         "type": "object",
         "required": ["id", "fields"],
         "title": "StoredPostingContent"
+      },
+      "StoredPostingFormatting": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "rich-v1",
+            "title": "Version",
+            "default": "rich-v1"
+          },
+          "fields": {
+            "additionalProperties": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Paragraph"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ListBlock"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "type",
+                  "mapping": {
+                    "list": "#/components/schemas/ListBlock",
+                    "paragraph": "#/components/schemas/Paragraph"
+                  }
+                }
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["version", "fields"],
+        "title": "StoredPostingFormatting",
+        "description": "Per-label sanitized formatting; labels without it show their plain text."
+      },
+      "TextRun": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "text",
+            "title": "Type"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "bold": {
+            "type": "boolean",
+            "title": "Bold",
+            "default": false
+          },
+          "italic": {
+            "type": "boolean",
+            "title": "Italic",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["type", "text", "bold", "italic"],
+        "title": "TextRun"
       },
       "TokenExchange": {
         "properties": {

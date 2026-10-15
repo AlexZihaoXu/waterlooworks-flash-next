@@ -175,6 +175,7 @@ class RequestGate:
         self.config = config
         self._should_stop = should_stop
         daily = max(0, daily_remaining)
+        self.daily_budget = daily
         self.budget = min(config.request_cap, daily)
         self.stop_reason: StopReason = (
             "request_cap" if config.request_cap <= daily else "daily_cap"
@@ -199,6 +200,16 @@ class RequestGate:
     @property
     def remaining(self) -> int:
         return max(0, self.budget - self.requests)
+
+    @property
+    def daily_remaining(self) -> int:
+        """Rolling 24-hour budget left after this run's requests so far."""
+        return max(0, self.daily_budget - self.requests)
+
+    @property
+    def run_remaining(self) -> int:
+        """Per-run cap left, ignoring the rolling budget."""
+        return max(0, self.config.request_cap - self.requests)
 
     def expected_seconds_per_request(self, request_seconds: float) -> float:
         """Mean wall time per request: duration + mean gap + amortized rest."""

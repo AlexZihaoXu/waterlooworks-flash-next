@@ -52,6 +52,10 @@ from waterlooworks_flash_next.app_auth import (
 from waterlooworks_flash_next.auth_api import install_auth
 from waterlooworks_flash_next.compensation_sort import read_compensation_sorts
 from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.content_storage import (
+    FORMATTING_JOIN,
+    formatting_from_row,
+)
 from waterlooworks_flash_next.country_inference import read_country_inferences
 from waterlooworks_flash_next.credentials import (
     AdminCredentialStatus,
@@ -86,10 +90,12 @@ from waterlooworks_flash_next.refresh import (
     RefreshService,
     RunOutcome,
     configured_detail_limit,
+    configured_format_backfill,
     configured_full_refetch,
 )
 from waterlooworks_flash_next.refresh_schedule import RefreshScheduler, ScheduleStore
 from waterlooworks_flash_next.refresh_schedule_api import install_refresh_schedule
+from waterlooworks_flash_next.rich_text import FORMAT_VERSION
 from waterlooworks_flash_next.shutdown import ShutdownNotice
 from waterlooworks_flash_next.snapshot_cache import SnapshotCache
 from waterlooworks_flash_next.targeted_disciplines import read_targeted_disciplines
@@ -117,6 +123,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if database_path is None
         else False
     )
+    format_backfill = configured_format_backfill(
+        os.environ.get("WW_FORMAT_BACKFILL_PER_RUN") if database_path is None else None
+    )
     # Fails closed at startup with a fixed message on an invalid value.
     pacing = (
         PacingConfig.from_environment() if database_path is None else PacingConfig()
@@ -127,6 +136,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         detail_limit=detail_limit,
         full_refetch=full_refetch,
         pacing=pacing,
+        format_backfill=format_backfill,
     )
     scheduler = RefreshScheduler(
         ScheduleStore(path),
@@ -389,10 +399,11 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             connection.execute("BEGIN")
             countries = read_country_inferences(connection, posting_id)
             row = connection.execute(
-                "SELECT p.listing_json, c.content_json, c.last_seen_at "
-                "FROM postings p LEFT JOIN posting_contents c "
-                "ON c.posting_id=p.posting_id WHERE p.posting_id=?",
-                (posting_id,),
+                "SELECT p.listing_json, c.content_json, c.last_seen_at, "
+                "f.blocks_json FROM postings p LEFT JOIN posting_contents c "
+                f"ON c.posting_id=p.posting_id {FORMATTING_JOIN} "
+                "WHERE p.posting_id=?",
+                (FORMAT_VERSION, posting_id),
             ).fetchone()
             if row is None:
                 raise HTTPException(
@@ -400,13 +411,19 @@ def create_app(database_path: Path | None = None) -> FastAPI:
                     "Stored posting not found.",
                     headers={"Cache-Control": "no-store"},
                 )
+            content = (
+                StoredPostingContent.model_validate_json(row["content_json"])
+                if row["content_json"] is not None
+                else None
+            )
             return JobDetailResponse(
                 posting_id=posting_id,
                 listing=StoredListing.model_validate_json(row["listing_json"]),
-                content=StoredPostingContent.model_validate_json(row["content_json"])
-                if row["content_json"] is not None
-                else None,
+                content=content,
                 content_observed_at=row["last_seen_at"],
+                formatting=formatting_from_row(content, row["blocks_json"])
+                if content is not None
+                else None,
                 country_inference=countries.get(posting_id, CountryInference()),
             )
         except HTTPException:

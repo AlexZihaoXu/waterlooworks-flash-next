@@ -33,6 +33,7 @@ import {
   formatCount,
 } from '../lib/workspace';
 import { ApplicationTrend } from './ApplicationTrend';
+import { richDescription } from './richDescription';
 import {
   presentRate,
   presentSummary,
@@ -173,6 +174,7 @@ export function JobDetailContent({
     content,
     content_observed_at: observed,
     country_inference: countryInference,
+    formatting,
     analysis,
     history,
   } = state.data;
@@ -613,7 +615,14 @@ export function JobDetailContent({
                     {section.fields.length === 1 &&
                     section.title === section.fields[0][0].replace(/:$/, '') ? (
                       <div className="detail-value">
-                        <Typography>{section.fields[0][1]}</Typography>
+                        {formatting?.fields[section.fields[0][0]] ? (
+                          richDescription(
+                            formatting.fields[section.fields[0][0]],
+                            'body',
+                          )
+                        ) : (
+                          <Typography>{section.fields[0][1]}</Typography>
+                        )}
                       </div>
                     ) : (
                       <dl className="posting-source-facts">
@@ -621,7 +630,7 @@ export function JobDetailContent({
                           <div
                             key={label}
                             className={
-                              text.length > 180
+                              text.length > 180 || formatting?.fields[label]
                                 ? 'posting-field-wide'
                                 : undefined
                             }
@@ -632,7 +641,14 @@ export function JobDetailContent({
                               </Typography>
                             </dt>
                             <dd>
-                              <Typography type="body-sm">{text}</Typography>
+                              {formatting?.fields[label] ? (
+                                richDescription(
+                                  formatting.fields[label],
+                                  'body-sm',
+                                )
+                              ) : (
+                                <Typography type="body-sm">{text}</Typography>
+                              )}
                             </dd>
                           </div>
                         ))}

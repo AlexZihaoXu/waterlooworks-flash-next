@@ -298,6 +298,159 @@ def analysis_batches(ids: list[str]) -> list[list[str]]:
     ]
 
 
+DEFAULT_FORMAT_BACKFILL_PER_RUN = 20
+MAX_FORMAT_BACKFILL_PER_RUN = 100
+# Rolling 24-hour requests a formatting backfill must always leave unused.
+FORMAT_BACKFILL_RESERVE = 300
+
+
+def configured_format_backfill(value: str | None) -> int:
+    """Server-only WW_FORMAT_BACKFILL_PER_RUN (0 disables); never from a client."""
+    if value is None:
+        return DEFAULT_FORMAT_BACKFILL_PER_RUN
+    if (
+        not value.isascii()
+        or not value.isdigit()
+        or len(value) > 3
+        or not 0 <= int(value) <= MAX_FORMAT_BACKFILL_PER_RUN
+    ):
+        raise ValueError("WW_FORMAT_BACKFILL_PER_RUN must be an integer from 0 to 100.")
+    return int(value)
+
+
+def format_backfill_candidates(
+    connection: sqlite3.Connection,
+    listings: list[StoredListing],
+    exclude: set[str],
+) -> list[StoredListing]:
+    """Listed postings whose saved text lacks formatting, newest sighting first.
+
+    Only content from the current extractor qualifies (anything else is
+    re-fetched as a normal detail anyway). Formatting counts only for the
+    current content hash and format version. A posting whose latest attempt
+    failed validation on the unchanged listing revision would fail again, so
+    it waits for a listing change like any other detail.
+    """
+    from waterlooworks_flash_next.content_storage import (
+        EXTRACTOR_VERSION,
+        FORMATTING_JOIN,
+    )
+    from waterlooworks_flash_next.rich_text import FORMAT_VERSION
+
+    found: list[StoredListing] = []
+    first_seen: dict[str, str] = {}
+    for listing in listings:
+        if listing.id in exclude:
+            continue
+        row = connection.execute(
+            "SELECT p.content_hash,p.first_seen_at FROM postings p "
+            "JOIN posting_contents c ON c.posting_id=p.posting_id "
+            f"{FORMATTING_JOIN} WHERE p.posting_id=? AND c.extractor_version=? "
+            "AND f.posting_id IS NULL",
+            (FORMAT_VERSION, listing.id, EXTRACTOR_VERSION),
+        ).fetchone()
+        if row is None:
+            continue
+        latest = connection.execute(_LATEST_ATTEMPT, (listing.id,)).fetchone()
+        if detail_skip_reason(
+            str(row[0]), tuple(latest) if latest is not None else None
+        ):
+            continue
+        first_seen[listing.id] = str(row[1])
+        found.append(listing)
+    return sorted(
+        found, key=lambda item: _sighting(first_seen.get(item.id)), reverse=True
+    )
+
+
+def format_backfill_allowance(
+    per_run: int,
+    candidates: int,
+    *,
+    daily_remaining: int,
+    run_remaining: int,
+    queued: int,
+) -> int:
+    """How many formatting re-fetches this run may add after its new details.
+
+    ``queued`` new-detail requests plus two overhead requests (the bootstrap's
+    metadata read and a possibly already-saved visible lead) are expected
+    first. Backfill never takes the rolling 24-hour budget below
+    FORMAT_BACKFILL_RESERVE, nor the per-run cap below zero.
+    """
+    from waterlooworks_flash_next.detail_fetch import DetailCollection
+
+    expected = queued + DetailCollection.BOOTSTRAP_REQUESTS
+    room = min(
+        daily_remaining - expected - FORMAT_BACKFILL_RESERVE,
+        run_remaining - expected,
+    )
+    return max(0, min(per_run, candidates, room))
+
+
+@dataclass(frozen=True)
+class DetailPlan:
+    queue: list[StoredListing]
+    limited: bool
+    skipped: dict[str, int]
+    # Saved listed postings without current formatting.
+    backfill_missing: int
+    # Of those, re-fetched in this run's queue.
+    backfill_queued: int
+    # Wanted this run (up to the per-run setting) but held back for the reserve.
+    backfill_deferred: int
+
+
+def plan_detail_queue(
+    connection: sqlite3.Connection,
+    listings: list[StoredListing],
+    visible_ids: list[str],
+    *,
+    detail_limit: int | None,
+    full_refetch: bool,
+    backfill_per_run: int,
+    daily_remaining: int,
+    run_remaining: int,
+) -> DetailPlan:
+    """New and outdated details first, then a bounded formatting backfill.
+
+    The first queued posting must be visible on the board's first page for
+    the bootstrap title click (``lead_with_visible``); a backfill re-fetch is
+    an ordinary detail request whose identical text only refreshes formatting.
+    """
+    eligible, skipped = select_detail_queue(
+        connection, listings, full_refetch=full_refetch
+    )
+    candidates = (
+        []
+        if full_refetch
+        else format_backfill_candidates(
+            connection, listings, {item.id for item in eligible}
+        )
+    )
+    allowed = format_backfill_allowance(
+        backfill_per_run,
+        len(candidates),
+        daily_remaining=daily_remaining,
+        run_remaining=run_remaining,
+        queued=len(eligible),
+    )
+    backfill = candidates[:allowed]
+    queue, _ = lead_with_visible(
+        eligible + backfill, listings, visible_ids, detail_limit
+    )
+    queued = {item.id for item in queue}
+    backfill_ids = {item.id for item in backfill}
+    return DetailPlan(
+        queue=queue,
+        limited=any(item.id not in queued for item in eligible),
+        skipped=skipped,
+        backfill_missing=len(candidates),
+        backfill_queued=len(queued & backfill_ids),
+        backfill_deferred=min(backfill_per_run, len(candidates)) - allowed,
+    )
+
+
 def configured_full_refetch(value: str | None) -> bool:
     """Server-only full detail refetch switch; never accepted from a client."""
     if value is None or value == "0":
@@ -473,8 +626,10 @@ class RefreshService:
         detail_limit: int | None = None,
         full_refetch: bool = False,
         pacing: PacingConfig | None = None,
+        format_backfill: int = DEFAULT_FORMAT_BACKFILL_PER_RUN,
     ) -> None:
         self.path = path
+        self.format_backfill = format_backfill
         self.pacing = pacing or PacingConfig()
         self.project_root = project_root
         self.detail_limit = detail_limit
@@ -1156,15 +1311,17 @@ class RefreshService:
                 save_listings(
                     connection, run_id, listings, received_at=collection.received_at
                 )
-                eligible, skipped = select_detail_queue(
-                    connection, listings, full_refetch=self.full_refetch
-                )
-                queue, limited = lead_with_visible(
-                    eligible,
+                plan = plan_detail_queue(
+                    connection,
                     listings,
                     [row.posting_id() for row in source.first_page.data],
-                    self.detail_limit,
+                    detail_limit=self.detail_limit,
+                    full_refetch=self.full_refetch,
+                    backfill_per_run=self.format_backfill,
+                    daily_remaining=gate.daily_remaining,
+                    run_remaining=gate.run_remaining,
                 )
+                queue, limited, skipped = plan.queue, plan.limited, plan.skipped
                 with connection:
                     connection.execute(
                         "UPDATE collection_runs SET pages_completed=?,"
@@ -1200,6 +1357,21 @@ class RefreshService:
                     self.emit(
                         f"{skipped[SAVED]} postings skipped: their description "
                         "is already saved."
+                    )
+                if plan.backfill_missing:
+                    self.emit(
+                        "Description formatting backfill: "
+                        f"{plan.backfill_queued} saved postings queued; "
+                        f"{plan.backfill_deferred} skipped to keep "
+                        f"{FORMAT_BACKFILL_RESERVE} requests of the rolling "
+                        "24-hour budget in reserve; "
+                        f"{plan.backfill_missing - plan.backfill_queued} "
+                        "still without formatting."
+                        if self.format_backfill
+                        else "Description formatting backfill: off "
+                        "(WW_FORMAT_BACKFILL_PER_RUN=0); "
+                        f"{plan.backfill_missing} saved postings without "
+                        "formatting."
                     )
                 if skipped.get(FAILED_SAME_REVISION):
                     self.emit(

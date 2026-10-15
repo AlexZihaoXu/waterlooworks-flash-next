@@ -179,8 +179,10 @@ def test_detail_pass_stops_between_postings(monkeypatch: pytest.MonkeyPatch) -> 
         started.append(posting)
         return posting
 
-    def content(attempt_id: str, posting: StoredListing) -> StoredPostingContent:
-        return cast(StoredPostingContent, SimpleNamespace(id=posting.id))
+    def content(
+        attempt_id: str, posting: StoredListing
+    ) -> tuple[StoredPostingContent, None]:
+        return cast(StoredPostingContent, SimpleNamespace(id=posting.id)), None
 
     monkeypatch.setattr(detail_fetch, "start_content_attempt", start)
     monkeypatch.setattr(

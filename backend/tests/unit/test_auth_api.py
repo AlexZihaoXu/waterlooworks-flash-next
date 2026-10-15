@@ -407,6 +407,7 @@ def test_current_challenge_is_admin_only_and_never_in_refresh_events(
         detail_limit: int | None = None,
         full_refetch: bool = False,
         pacing: PacingConfig | None = None,
+        format_backfill: int = 20,
     ) -> RefreshService:
         service = RefreshService(
             path,
@@ -414,6 +415,7 @@ def test_current_challenge_is_admin_only_and_never_in_refresh_events(
             detail_limit=detail_limit,
             full_refetch=full_refetch,
             pacing=pacing,
+            format_backfill=format_backfill,
         )
         services.append(service)
         return service

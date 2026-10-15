@@ -1,4 +1,4 @@
-"""SQLite v4: plain-text content is independent of v3 metadata-only snapshots."""
+"""SQLite v4/v21: plain-text content and the formatting kept beside it."""
 
 import sqlite3
 
@@ -144,3 +144,36 @@ def migrate_content(connection: sqlite3.Connection) -> None:
         connection.execute(
             f"ALTER TABLE collection_runs ADD COLUMN {name} {declaration}"
         )
+
+
+def migrate_content_formatting(connection: sqlite3.Connection) -> None:
+    """Schema v21: sanitized formatting beside, never inside, saved content.
+
+    Caller owns the transaction. One current row per posting, bound to the
+    content hash it was captured with; ``posting_contents`` and the content
+    revisions are untouched, so analysis keyed to the hash stays valid.
+    ``blocks_json`` maps reviewed labels to whitelisted blocks, never HTML.
+    """
+    connection.execute("""
+        CREATE TABLE posting_content_formatting (
+            posting_id TEXT PRIMARY KEY NOT NULL
+                REFERENCES posting_contents(posting_id),
+            content_hash TEXT NOT NULL CHECK(length(content_hash)=64
+                AND content_hash NOT GLOB '*[^0-9a-f]*'),
+            format_version TEXT NOT NULL
+                CHECK(length(format_version) BETWEEN 1 AND 32),
+            blocks_json TEXT NOT NULL CHECK(json_valid(blocks_json))
+                CHECK(json_type(blocks_json)='object')
+                CHECK(length(blocks_json)<=2000000),
+            captured_at TEXT NOT NULL CHECK(datetime(captured_at) IS NOT NULL),
+            run_id TEXT NOT NULL REFERENCES collection_runs(id)
+        ) STRICT
+    """)
+    for operation in ("INSERT", "UPDATE"):
+        connection.execute(f"""
+            CREATE TRIGGER content_formatting_matches_current_{operation.lower()}
+            BEFORE {operation} ON posting_content_formatting
+            WHEN NOT EXISTS(SELECT 1 FROM posting_contents
+                WHERE posting_id=NEW.posting_id AND content_hash=NEW.content_hash)
+            BEGIN SELECT RAISE(ABORT,'Formatting must match current content'); END
+        """)

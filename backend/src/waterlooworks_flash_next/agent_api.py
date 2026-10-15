@@ -40,6 +40,10 @@ from waterlooworks_flash_next.api_models import (
 from waterlooworks_flash_next.api_tokens import AgentIdentity, TokenStore, token_digest
 from waterlooworks_flash_next.app_auth import FirebaseVerifier
 from waterlooworks_flash_next.content import StoredPostingContent
+from waterlooworks_flash_next.content_storage import (
+    FORMATTING_JOIN,
+    formatting_from_row,
+)
 from waterlooworks_flash_next.incidents import suppressed_failure
 from waterlooworks_flash_next.posting_marks import (
     MarkStore,
@@ -48,6 +52,7 @@ from waterlooworks_flash_next.posting_marks import (
 )
 from waterlooworks_flash_next.refresh import RefreshService
 from waterlooworks_flash_next.request_limits import RequestLimiter
+from waterlooworks_flash_next.rich_text import FORMAT_VERSION
 
 AGENT_PREFIX = "/api/agent/v1/"
 RATE_LIMIT = 60
@@ -268,22 +273,29 @@ def install_agent_api(
             try:
                 connection.execute("BEGIN")
                 row = connection.execute(
-                    "SELECT c.content_json, c.last_seen_at FROM postings p "
+                    "SELECT c.content_json, c.last_seen_at, f.blocks_json "
+                    "FROM postings p "
                     "LEFT JOIN posting_contents c ON c.posting_id=p.posting_id "
-                    "WHERE p.posting_id=?",
-                    (posting_id,),
+                    f"{FORMATTING_JOIN} WHERE p.posting_id=?",
+                    (FORMAT_VERSION, posting_id),
                 ).fetchone()
                 if row is None:
                     raise UnknownPosting(NOT_FOUND)
                 analysis = read_analysis(connection, posting_id)
             finally:
                 connection.close()
+            content = (
+                StoredPostingContent.model_validate_json(row["content_json"])
+                if row["content_json"] is not None
+                else None
+            )
             return AgentPostingDetail(
                 **summarize(summary, mark).model_dump(),
-                content=StoredPostingContent.model_validate_json(row["content_json"])
-                if row["content_json"] is not None
-                else None,
+                content=content,
                 content_observed_at=row["last_seen_at"],
+                formatting=formatting_from_row(content, row["blocks_json"])
+                if content is not None
+                else None,
                 analysis=analysis,
             )
 

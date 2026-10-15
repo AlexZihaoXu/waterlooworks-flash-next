@@ -23,7 +23,10 @@ from waterlooworks_flash_next.compact_history import (
     migrate_compact_history,
     store_payload,
 )
-from waterlooworks_flash_next.content_schema import migrate_content
+from waterlooworks_flash_next.content_schema import (
+    migrate_content,
+    migrate_content_formatting,
+)
 from waterlooworks_flash_next.country_schema import migrate_country_inference
 from waterlooworks_flash_next.credentials import migrate_credentials
 from waterlooworks_flash_next.data_generation import ensure_data_generation
@@ -41,7 +44,7 @@ from waterlooworks_flash_next.refresh_schedule_schema import migrate_refresh_sch
 from waterlooworks_flash_next.runtime_secrets import is_private_owned_file
 from waterlooworks_flash_next.source_extraction_schema import migrate_source_extraction
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 class DatabaseError(Exception):
@@ -534,6 +537,15 @@ def open_database(path: Path) -> sqlite3.Connection:
                 if connection.execute("PRAGMA user_version").fetchone()[0] == 19:
                     migrate_discord_announced(connection)
                     connection.execute("PRAGMA user_version = 20")
+        if (
+            SCHEMA_VERSION >= 21
+            and connection.execute("PRAGMA user_version").fetchone()[0] == 20
+        ):
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("PRAGMA user_version").fetchone()[0] == 20:
+                    migrate_content_formatting(connection)
+                    connection.execute("PRAGMA user_version = 21")
         # Idempotent cache-invalidation triggers, outside the versioned contract.
         ensure_data_generation(connection)
         connection.execute("PRAGMA journal_mode = WAL")

@@ -810,6 +810,17 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Native layout around saved description formatting (Typography.Prose). */
+.rich-text {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.rich-text-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+}
 .detail-tabs-list {
   max-width: 100%;
   overflow-x: auto;
