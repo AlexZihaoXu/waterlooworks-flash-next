@@ -728,7 +728,8 @@ async def session_event_stream(
         while not await request.is_disconnected():
             if shutdown is not None and shutdown.is_set():
                 break
-            if await asyncio.to_thread(sessions.lookup, cookie) is None:
+            identity = await asyncio.to_thread(sessions.lookup, cookie)
+            if identity is None or identity.approval != "approved":
                 break
             payload = await asyncio.to_thread(_snapshot_json, service)
             if payload != previous:

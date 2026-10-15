@@ -16,6 +16,7 @@ from waterlooworks_flash_next.api_models import RefreshRequest
 from waterlooworks_flash_next.app_auth import (
     COOKIE,
     MAX_TTL,
+    AccountNotApproved,
     AuthError,
     AuthTransport,
     BootstrapRefused,
@@ -25,7 +26,7 @@ from waterlooworks_flash_next.app_auth import (
     SessionStore,
     TokenExchange,
     require_firebase_ready,
-    require_session,
+    require_signed_in,
 )
 from waterlooworks_flash_next.incidents import (
     bind_request,
@@ -150,7 +151,10 @@ def install_auth(
         # Fixed text; never echo the attempted identity or the configured pin.
         return JSONResponse(
             status_code=403,
-            content={"detail": "First administrator must be the configured owner."},
+            content={
+                "detail": "First administrator must be the configured owner.",
+                "code": "owner_required",
+            },
         )
 
     @app.exception_handler(NewAccountHeld)
@@ -158,7 +162,21 @@ def install_auth(
         # Fixed text; never echo the attempted identity.
         return JSONResponse(
             status_code=403,
-            content={"detail": "This account is waiting for approval."},
+            content={
+                "detail": "This account is waiting for approval.",
+                "code": "account_held",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.exception_handler(AccountNotApproved)
+    async def account_not_approved(
+        request: Request, error: AccountNotApproved
+    ) -> JSONResponse:
+        # Declined or removed: fixed text, no session, no new admission row.
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "This account is not approved.", "code": "not_approved"},
             headers={"Cache-Control": "no-store"},
         )
 
@@ -211,6 +229,7 @@ def install_auth(
                 verified.expires,
                 auth_time=verified.auth_time,
                 email=verified.email,
+                profile=verified.profile,
             )
         except sqlite3.OperationalError:
             raise AuthBusy from None
@@ -231,8 +250,9 @@ def install_auth(
         operation_id="getAuthSession",
     )
     def session(
-        identity: Annotated[SessionIdentity, Depends(require_session)],
+        identity: Annotated[SessionIdentity, Depends(require_signed_in)],
     ) -> SessionIdentity:
+        # Pending users read their own admission state here; nothing else.
         return identity
 
     @app.get(
@@ -246,7 +266,7 @@ def install_auth(
     )
     async def profile(
         request: Request,
-        identity: Annotated[SessionIdentity, Depends(require_session)],
+        identity: Annotated[SessionIdentity, Depends(require_signed_in)],
     ) -> AccountProfile:
         if request.query_params:
             raise HTTPException(400, "Profile parameters are not accepted.")

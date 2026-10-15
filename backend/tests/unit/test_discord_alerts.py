@@ -25,6 +25,7 @@ from waterlooworks_flash_next.api_models import (
     CountryInference,
     PostingResponse,
 )
+from waterlooworks_flash_next.approvals import ApprovalStore
 from waterlooworks_flash_next.compensation_sort import compensation_sort_for
 from waterlooworks_flash_next.database import (
     StoredListing,
@@ -558,6 +559,7 @@ def path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         connection.execute("INSERT INTO app_users VALUES ('u1','admin',1)")
         connection.execute("INSERT INTO app_users VALUES ('u2','member',1)")
     connection.close()
+    ApprovalStore(database).approve("u1", "u2")
     return database
 
 

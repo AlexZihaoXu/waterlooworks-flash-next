@@ -1,5 +1,6 @@
 """Empty databases/random secrets; freshness uses primitives, not SDK stubs."""
 
+import hashlib
 import secrets
 import sqlite3
 from pathlib import Path
@@ -300,9 +301,20 @@ def test_schema13_preserves_schema12_pair_and_session(
     from waterlooworks_flash_next import database
     from waterlooworks_flash_next.credentials import CredentialPair, CredentialStore
 
+    path = tmp_path / "legacy.sqlite3"
     with monkeypatch.context() as legacy:
         legacy.setattr(database, "SCHEMA_VERSION", 13)
-        path, sessions, cookie, _ = setup_store(tmp_path, monkeypatch)
+        open_database(path).close()
+    monkeypatch.setenv("WW_CREDENTIALS_KEY", Fernet.generate_key().decode())
+    sessions = SessionStore(path, bootstrap=BootstrapOwner(uid="owner"))
+    cookie = secrets.token_urlsafe(32)
+    with sqlite3.connect(path) as db:
+        # The owner signed in on the schema13 database: structural rows only.
+        db.execute("INSERT INTO app_users VALUES ('owner','admin',100)")
+        db.execute(
+            "INSERT INTO app_sessions VALUES (?,'owner',1000)",
+            (hashlib.sha256(cookie.encode()).hexdigest(),),
+        )
     store = CredentialStore(path)
     pair = CredentialPair(
         username=SecretStr(secrets.token_urlsafe()),

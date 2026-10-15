@@ -5,7 +5,12 @@ import time
 from pathlib import Path
 
 import pytest
-from auth_support import AUTH_HEADERS, configuration_ready, session_client
+from auth_support import (
+    AUTH_HEADERS,
+    approve_member,
+    configuration_ready,
+    session_client,
+)
 from fastapi.testclient import TestClient
 
 from waterlooworks_flash_next.api import create_app
@@ -125,6 +130,7 @@ def test_member_cannot_mutate_and_logout_invalidates_cookie(tmp_path: Path) -> N
         member = store.issue(cookie, "ordinary-uid", now + 300, auth_time=now)
         cookie = member.cookie
         assert member.identity.role == "member"
+        approve_member(path, "ordinary-uid")
         client.cookies.clear()
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         assert client.get("/api/workspace").json()["manual_refresh_available"] is False
@@ -288,6 +294,7 @@ def test_workspace_cache_never_shares_admin_capability(
         member_cookie = store.issue(
             member_cookie, "member-uid", now + 300, auth_time=now
         ).cookie
+        approve_member(path, "member-uid")
         # All provisioning precedes these reads; the global snapshot stays cached.
         for cookie, expected in (
             (admin_cookie, True),

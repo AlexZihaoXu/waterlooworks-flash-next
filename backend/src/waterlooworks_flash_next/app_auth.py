@@ -50,7 +50,11 @@ class BootstrapRefused(AuthError):
 
 
 class NewAccountHeld(AuthError):
-    """WW_HOLD_NEW_USERS=1: an unknown identity may not become a member."""
+    """WW_HOLD_NEW_USERS=1: an unknown identity may not even become pending."""
+
+
+class AccountNotApproved(AuthError):
+    """The identity was declined or removed; nothing is created or changed."""
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,15 @@ class VerifiedGoogleIdentity:
     expires: int
     auth_time: Any
     email: str | None  # Present only when Google marked it verified.
+    # Optional display fields from the token, for the admission snapshot only.
+    display_name: str | None = field(default=None, repr=False)
+    photo_url: str | None = field(default=None, repr=False)
+
+    @property
+    def profile(self) -> AccountProfile:
+        return AccountProfile(
+            display_name=self.display_name, email=self.email, photo_url=self.photo_url
+        )
 
 
 class FirebaseVerifier:
@@ -207,8 +220,18 @@ class FirebaseVerifier:
                 and claims.get("email_verified") is True
                 else None
             )
+            name, picture = claims.get("name"), claims.get("picture")
+            shown = AccountProfile(
+                display_name=name if isinstance(name, str) else None,
+                photo_url=picture if isinstance(picture, str) else None,
+            )
             return VerifiedGoogleIdentity(
-                uid, expires, claims.get("auth_time"), verified_email
+                uid,
+                expires,
+                claims.get("auth_time"),
+                verified_email,
+                shown.display_name,
+                shown.photo_url,
             )
         except Exception:
             raise AuthError("Google authentication was not accepted.") from None
@@ -234,9 +257,15 @@ class FirebaseVerifier:
             self._app = None
 
 
+ApprovalState = Literal["pending", "approved"]
+
+
 class SessionIdentity(BaseModel):
     uid: str
     role: Literal["admin", "member"]
+    # Admission: a pending user has a session for the waiting screen only.
+    # Declined and removed users never resolve to a session at all.
+    approval: ApprovalState
     expires_at: int
 
 
@@ -314,12 +343,17 @@ class SessionStore:
         *,
         auth_time: int,
         email: str | None = None,
+        profile: AccountProfile | None = None,
         now: int | None = None,
     ) -> IssuedSession:
         """Internal primitive: caller must have verified Google identity first.
 
         `email` is passed only when Google marked it verified. An empty user
-        table admits only the pinned owner, as admin; otherwise nobody.
+        table admits only the pinned owner, as admin; otherwise nobody. Any
+        later identity becomes a pending member (unless WW_HOLD_NEW_USERS=1)
+        whose session serves only the waiting screen until an approved user
+        admits it. `profile` refreshes the admission snapshot approvers see.
+        A declined or removed identity is refused without any change.
         Every call mints a fresh token in the same transaction: a prepared
         value is deleted (never authenticated), a renewed one keeps only a
         short grace. Logout deletes the presented row, so an in-flight token
@@ -347,11 +381,13 @@ class SessionStore:
                 if session is None or session["uid"] not in (None, uid):
                     raise AuthError("Authentication session expired.")
                 user = connection.execute(
-                    "SELECT role FROM app_users WHERE uid=?", (uid,)
+                    "SELECT u.role, a.status FROM app_users u "
+                    "JOIN user_approvals a ON a.uid=u.uid WHERE u.uid=?",
+                    (uid,),
                 ).fetchone()
                 if user is None:
                     if connection.execute("SELECT 1 FROM app_users LIMIT 1").fetchone():
-                        # Interim gate until approvals exist: never admit strangers.
+                        # Emergency switch: refuse even a pending admission row.
                         if os.environ.get("WW_HOLD_NEW_USERS") == "1":
                             raise NewAccountHeld(
                                 "This account is waiting for approval."
@@ -364,11 +400,22 @@ class SessionStore:
                                 "First administrator must be the configured owner."
                             )
                         role = "admin"
+                    # The schema trigger adds the admission row: admin approved
+                    # as the root, anyone else pending until someone admits them.
                     connection.execute(
                         "INSERT INTO app_users VALUES (?, ?, ?)", (uid, role, now)
                     )
+                    approval = "approved" if role == "admin" else "pending"
                 else:
-                    role = user["role"]
+                    role, approval = user["role"], user["status"]
+                    if approval not in ("pending", "approved"):
+                        raise AccountNotApproved("This account is not approved.")
+                if profile is not None:
+                    connection.execute(
+                        "UPDATE user_approvals SET display_name=?, email=?, "
+                        "photo_url=? WHERE uid=?",
+                        (profile.display_name, profile.email, profile.photo_url, uid),
+                    )
                 connection.execute(
                     "INSERT INTO app_sessions VALUES (?, ?, ?)",
                     (_digest(fresh), uid, expires),
@@ -398,6 +445,7 @@ class SessionStore:
                 SessionIdentity(
                     uid=uid,
                     role=cast(Literal["admin", "member"], role),
+                    approval=cast(ApprovalState, approval),
                     expires_at=expires,
                 ),
             )
@@ -423,10 +471,14 @@ class SessionStore:
         now = int(time.time()) if now is None else now
         connection = self._connect(readonly=True)
         try:
+            # Declined/removed users are excluded here, whatever a stale
+            # session row says: every route re-resolves through this query.
             row = connection.execute(
-                "SELECT u.uid, u.role, s.expires_at FROM app_sessions s "
-                "JOIN app_users u ON u.uid=s.uid "
-                "WHERE s.token_hash=? AND s.expires_at>?",
+                "SELECT u.uid, u.role, a.status AS approval, s.expires_at "
+                "FROM app_sessions s JOIN app_users u ON u.uid=s.uid "
+                "JOIN user_approvals a ON a.uid=u.uid "
+                "WHERE s.token_hash=? AND s.expires_at>? "
+                "AND a.status IN ('pending', 'approved')",
                 (_digest(cookie), now),
             ).fetchone()
             return SessionIdentity(**dict(row)) if row else None
@@ -537,16 +589,27 @@ def require_firebase_ready(request: Request) -> None:
         raise HTTPException(503, "Authentication configuration unavailable.") from None
 
 
-def require_session(
+def require_signed_in(
     request: Request,
     cookie: Annotated[str | None, Security(SESSION_COOKIE)],
     _: None = Depends(require_firebase_ready),
 ) -> SessionIdentity:
+    """Any live session, pending included: only for the session's own
+    status, profile and sign-out. Everything else uses ``require_session``."""
     identity = request.app.state.sessions.lookup(cookie)
     if identity is None:
         raise HTTPException(401, "Sign in to continue.")
     request.state.identity = identity
     return identity  # type: ignore[no-any-return]
+
+
+def require_session(
+    identity: Annotated[SessionIdentity, Depends(require_signed_in)],
+) -> SessionIdentity:
+    """An approved app user. Pending users get a fixed 403 everywhere else."""
+    if identity.approval != "approved":
+        raise HTTPException(403, "Approval required.")
+    return identity
 
 
 def require_admin(

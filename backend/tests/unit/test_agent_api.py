@@ -11,13 +11,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from auth_support import session_client
+from auth_support import approve_member, session_client
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from waterlooworks_flash_next.agent_api import RATE_LIMIT, RATE_WINDOW_SECONDS
 from waterlooworks_flash_next.api import create_app
 from waterlooworks_flash_next.app_auth import COOKIE, SessionStore
+from waterlooworks_flash_next.approvals import ApprovalStore
 from waterlooworks_flash_next.database import (
     StoredListing,
     open_database,
@@ -49,6 +50,7 @@ def agent_client(
             cookie = store.issue(
                 store.prepare(None), "member-uid", now + 300, auth_time=now
             ).cookie
+            approve_member(path, "member-uid")
             client.cookies.clear()
             client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         token = client.post("/api/account/api-token/reset", json={}).json()["token"]
@@ -217,13 +219,21 @@ def test_token_dies_when_the_user_loses_access(tmp_path: Path) -> None:
     path = tmp_path / "db.sqlite3"
     with agent_client(path, member=True) as (client, _token):
         assert client.get(f"{BASE}/me").json()["role"] == "member"
-        connection = open_database(path)
-        with connection:
-            # No removal path exists today; simulate one to prove the recheck.
-            connection.execute("DROP TRIGGER app_users_immutable_delete")
-            connection.execute("DELETE FROM app_sessions WHERE uid='member-uid'")
-            connection.execute("DELETE FROM app_users WHERE uid='member-uid'")
-        connection.close()
+        # The administrator removes the member: the token stops at once.
+        ApprovalStore(path).remove("internal-session-test", "member-uid")
+        assert client.get(f"{BASE}/me").status_code == 401
+
+
+def test_token_of_a_pending_user_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "db.sqlite3"
+    with agent_client(path, member=True) as (client, _token):
+        assert client.get(f"{BASE}/me").status_code == 200
+        with open_database(path) as connection:
+            # A migrated or reinstated member waits again: no agent access.
+            connection.execute(
+                "UPDATE user_approvals SET status='pending', parent_uid=NULL, "
+                "decided_by=NULL, decided_at=NULL WHERE uid='member-uid'"
+            )
         assert client.get(f"{BASE}/me").status_code == 401
 
 
