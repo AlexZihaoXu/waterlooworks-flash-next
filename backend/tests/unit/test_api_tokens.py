@@ -161,3 +161,25 @@ def test_request_limiter_bounds_tracked_keys() -> None:
     # Expired windows are forgotten rather than retained forever.
     assert limiter.admit("d", now=100.0) is None
     assert limiter.tracked_keys == 1
+
+
+def test_unknown_tokens_never_wait_on_the_write_lock(tmp_path: Path) -> None:
+    # A flood of guesses must not queue behind (or block) real writers.
+    import sqlite3
+
+    path = tmp_path / "db.sqlite3"
+    _users(path)
+    store = TokenStore(path)
+    issued = store.reset("member", now=1_700_000_000)
+    assert store.authenticate(issued.token, now=1_700_000_000) is not None
+    writer = sqlite3.connect(path, isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        assert store.authenticate("wwf_" + "A" * 43) is None
+        # A recently used token resolves without touching last_used_at.
+        assert store.authenticate(issued.token, now=1_700_000_001) == AgentIdentity(
+            uid="member", role="member"
+        )
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()

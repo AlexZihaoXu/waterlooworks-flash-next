@@ -144,24 +144,34 @@ class TokenStore:
             return None
         now = int(time.time()) if now is None else now
         digest = token_digest(token)
-        connection = self._connect()
+        # Look up on a read-only connection so guesses never take (or wait
+        # on) the write lock; write only to throttle-stamp last_used_at.
+        connection = self._connect(readonly=True)
         try:
-            with connection:
-                connection.execute("BEGIN IMMEDIATE")
-                row = connection.execute(
-                    "SELECT t.uid, t.token_hash, u.role FROM api_tokens t "
-                    "JOIN app_users u ON u.uid=t.uid "
-                    "JOIN user_approvals a ON a.uid=t.uid "
-                    "WHERE t.token_hash=? AND a.status='approved'",
-                    (digest,),
-                ).fetchone()
-                if row is None or not hmac.compare_digest(row["token_hash"], digest):
-                    return None
-                connection.execute(
-                    "UPDATE api_tokens SET last_used_at=? WHERE uid=? AND "
-                    "(last_used_at IS NULL OR last_used_at<=?)",
-                    (now, row["uid"], now - LAST_USED_THROTTLE_SECONDS),
-                )
-                return AgentIdentity(uid=row["uid"], role=row["role"])
+            row = connection.execute(
+                "SELECT t.uid, t.token_hash, t.last_used_at, u.role FROM api_tokens t "
+                "JOIN app_users u ON u.uid=t.uid "
+                "JOIN user_approvals a ON a.uid=t.uid "
+                "WHERE t.token_hash=? AND a.status='approved'",
+                (digest,),
+            ).fetchone()
         finally:
             connection.close()
+        if row is None or not hmac.compare_digest(row["token_hash"], digest):
+            return None
+        last_used = row["last_used_at"]
+        if last_used is None or last_used <= now - LAST_USED_THROTTLE_SECONDS:
+            connection = self._connect()
+            try:
+                with connection:
+                    connection.execute(
+                        "UPDATE api_tokens SET last_used_at=? WHERE uid=? AND "
+                        "token_hash=? AND (last_used_at IS NULL OR last_used_at<=?)",
+                        (now, row["uid"], digest, now - LAST_USED_THROTTLE_SECONDS),
+                    )
+            except sqlite3.OperationalError:
+                # A busy database only delays the usage stamp.
+                pass
+            finally:
+                connection.close()
+        return AgentIdentity(uid=row["uid"], role=row["role"])

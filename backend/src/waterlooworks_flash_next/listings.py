@@ -223,9 +223,10 @@ class ListingRow(BaseModel):
         if len(ids) != 1 or isinstance(ids[0], bool):
             raise ListingFetchError("Listing row has an invalid posting ID.")
         value = ids[0]
-        if not isinstance(value, (str, int)) or not str(value).strip().isdigit():
+        text = str(value).strip() if isinstance(value, (str, int)) else ""
+        if not (text.isascii() and text.isdigit()):
             raise ListingFetchError("Listing row has an invalid posting ID.")
-        return str(value).strip()
+        return text
 
 
 class ListingPage(BaseModel):
