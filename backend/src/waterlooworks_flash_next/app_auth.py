@@ -31,6 +31,8 @@ from waterlooworks_flash_next.runtime_secrets import (
 PROJECT_ID = "alex-xu-central"
 COOKIE = "ww_session"
 MAX_TTL = 3600
+# New sign-ins are refused while this many accounts already wait for approval.
+MAX_PENDING_ACCOUNTS = 25
 # Absolute app-session bound measured from the Google sign-in (`auth_time`).
 # Renewal never extends past it; afterwards a fresh Google popup is required.
 SESSION_ABSOLUTE_LIFETIME = 12 * 3600
@@ -389,6 +391,15 @@ class SessionStore:
                     if connection.execute("SELECT 1 FROM app_users LIMIT 1").fetchone():
                         # Emergency switch: refuse even a pending admission row.
                         if os.environ.get("WW_HOLD_NEW_USERS") == "1":
+                            raise NewAccountHeld(
+                                "This account is waiting for approval."
+                            )
+                        # Throwaway Google accounts cannot grow the
+                        # Approvals queue (or the database) without bound.
+                        waiting = connection.execute(
+                            "SELECT count(*) FROM user_approvals WHERE status='pending'"
+                        ).fetchone()[0]
+                        if waiting >= MAX_PENDING_ACCOUNTS:
                             raise NewAccountHeld(
                                 "This account is waiting for approval."
                             )

@@ -337,6 +337,28 @@ def test_held_server_refuses_new_accounts_but_keeps_existing_ones(
     assert again.identity.role == "admin"
 
 
+def test_pending_queue_is_capped_against_throwaway_account_floods(
+    tmp_path: Path,
+) -> None:
+    from waterlooworks_flash_next.app_auth import MAX_PENDING_ACCOUNTS
+
+    path = tmp_path / "db.sqlite3"
+    open_database(path).close()
+    store = SessionStore(path, bootstrap=BootstrapOwner(uid="owner-uid", email=None))
+    store.issue(store.prepare(None, now=100), "owner-uid", 500, auth_time=100, now=100)
+    for index in range(MAX_PENDING_ACCOUNTS):
+        store.issue(
+            store.prepare(None, now=100), f"p{index}", 500, auth_time=100, now=100
+        )
+    with pytest.raises(NewAccountHeld):
+        store.issue(
+            store.prepare(None, now=100), "one-too-many", 500, auth_time=100, now=100
+        )
+    assert _user_count(path) == MAX_PENDING_ACCOUNTS + 1
+    # Someone already pending can still sign in and wait.
+    store.issue(store.prepare(None, now=101), "p0", 500, auth_time=101, now=101)
+
+
 def _admission(path: Path, uid: str) -> tuple[object, ...]:
     with sqlite3.connect(path) as connection:
         return tuple(
