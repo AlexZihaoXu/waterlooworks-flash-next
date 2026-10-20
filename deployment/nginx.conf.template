@@ -18,18 +18,36 @@ http {
     fastcgi_temp_path /tmp/fastcgi_temp;
     uwsgi_temp_path /tmp/uwsgi_temp;
     scgi_temp_path /tmp/scgi_temp;
-    # Anonymous auth endpoints (prepare/exchange) get a request-rate bound;
-    # every other URI maps to an empty key, which limit_req never limits.
-    # The cookie-gated session check and logout stay unlimited so a flood on
-    # prepare can never 429 (and so sign out) already signed-in users.
-    # Behind the operator TLS terminator all clients may share one peer
-    # address, so this is an aggregate backend guard: per-client limits
-    # belong at the terminator (see docs/deployment.md).
-    map $uri $ww_auth_limit_key {
-        ~^/api/auth/(prepare|exchange)$ $binary_remote_addr;
+    # The operator terminator admits only Cloudflare for this host (see
+    # docs/deployment.md), and Cloudflare overwrites CF-Connecting-IP with the
+    # visitor's address, so it tells clients apart. A missing or malformed
+    # value (local access) falls back to the peer address.
+    map $http_cf_connecting_ip $ww_client {
+        "~^[0-9A-Fa-f:.]{2,45}$" $http_cf_connecting_ip;
+        default $binary_remote_addr;
+    }
+    # Anonymous auth endpoints (prepare/exchange) are bounded per client and,
+    # as a backstop, in total; every other URI maps to an empty key, which
+    # limit_req never limits. The cookie-gated session check and logout stay
+    # unlimited so a flood on prepare can never 429 (and so sign out)
+    # already signed-in users.
+    map $uri $ww_auth_client_key {
+        ~^/api/auth/(prepare|exchange)$ $ww_client;
         default "";
     }
-    limit_req_zone $ww_auth_limit_key zone=ww_auth:1m rate=5r/s;
+    map $uri $ww_auth_total_key {
+        ~^/api/auth/(prepare|exchange)$ auth;
+        default "";
+    }
+    # Agent API callers (bearer tokens and the public docs) per client; the
+    # backend adds its own per-token budget.
+    map $uri $ww_agent_client_key {
+        ~^/api/agent/ $ww_client;
+        default "";
+    }
+    limit_req_zone $ww_auth_client_key zone=ww_auth_client:10m rate=2r/s;
+    limit_req_zone $ww_auth_total_key zone=ww_auth_total:1m rate=20r/s;
+    limit_req_zone $ww_agent_client_key zone=ww_agent:10m rate=5r/s;
     limit_req_status 429;
     server {
         listen 8080;
@@ -52,7 +70,9 @@ http {
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
         add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
         location ~ ^/api(/|$) {
-            limit_req zone=ww_auth burst=20 nodelay;
+            limit_req zone=ww_auth_client burst=20 nodelay;
+            limit_req zone=ww_auth_total burst=60 nodelay;
+            limit_req zone=ww_agent burst=30 nodelay;
             proxy_pass http://backend:8787;
             proxy_http_version 1.1;
             proxy_set_header Connection "";

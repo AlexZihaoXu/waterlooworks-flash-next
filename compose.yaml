@@ -37,6 +37,14 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # Ceilings so a flood cannot exhaust the shared host.
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
 
   backend:
     profiles: [prod]
@@ -93,6 +101,15 @@ services:
       - seccomp=./deployment/chromium-seccomp.json
     deploy:
       replicas: 1
+    # Ceilings so a runaway browser or flood cannot exhaust the shared host;
+    # Chromium threads count toward pids_limit.
+    mem_limit: 4g
+    pids_limit: 2048
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: unless-stopped
     stop_grace_period: 190s
     healthcheck:

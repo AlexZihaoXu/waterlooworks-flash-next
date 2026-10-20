@@ -224,22 +224,32 @@ test('nginx sends strict browser security headers on every response', () => {
   assert.match(header('Permissions-Policy'), /geolocation=\(\)/);
 });
 
-test('nginx rate-limits the anonymous auth endpoints', () => {
+test('nginx rate-limits the anonymous auth endpoints per client and in total', () => {
   const nginx = read('deployment/nginx.conf.template');
+  // Cloudflare is the only admitted peer, so CF-Connecting-IP names the visitor;
+  // anything that is not a plain IP literal falls back to the peer address.
+  assert.match(
+    nginx,
+    /map \$http_cf_connecting_ip \$ww_client \{\s+"~\^\[0-9A-Fa-f:\.\]\{2,45\}\$" \$http_cf_connecting_ip;\s+default \$binary_remote_addr;\s+\}/,
+  );
   // Only anonymous prepare/exchange get a non-empty key; empty keys are never
   // limited, so cookie-gated session checks and logout cannot be 429ed by a flood.
   assert.match(
     nginx,
-    /map \$uri \$ww_auth_limit_key \{\s+~\^\/api\/auth\/\(prepare\|exchange\)\$ \$binary_remote_addr;\s+default "";\s+\}/,
+    /map \$uri \$ww_auth_client_key \{\s+~\^\/api\/auth\/\(prepare\|exchange\)\$ \$ww_client;\s+default "";\s+\}/,
   );
-  assert.doesNotMatch(nginx, /~\^\/api\/auth\/ /);
   assert.match(
     nginx,
-    /limit_req_zone \$ww_auth_limit_key zone=ww_auth:\d+m rate=\d+r\/s;/,
+    /map \$uri \$ww_auth_total_key \{\s+~\^\/api\/auth\/\(prepare\|exchange\)\$ auth;\s+default "";\s+\}/,
   );
+  assert.match(nginx, /map \$uri \$ww_agent_client_key \{\s+~\^\/api\/agent\/ \$ww_client;\s+default "";\s+\}/);
+  assert.doesNotMatch(nginx, /~\^\/api\/auth\/ /);
+  for (const zone of ['ww_auth_client', 'ww_auth_total', 'ww_agent'])
+    assert.match(nginx, new RegExp(`limit_req_zone \\$\\w+ zone=${zone}:\\d+m rate=\\d+r/s;`));
   assert.match(nginx, /limit_req_status 429;/);
   const api = nginx.split(/location ~ \^\/\(?api/)[1].split('}')[0];
-  assert.match(api, /limit_req zone=ww_auth burst=\d+ nodelay;/);
+  for (const zone of ['ww_auth_client', 'ww_auth_total', 'ww_agent'])
+    assert.match(api, new RegExp(`limit_req zone=${zone} burst=\\d+ nodelay;`));
 });
 
 test('build context excludes private input and secret-bearing files', () => {
@@ -260,4 +270,14 @@ test('build context excludes private input and secret-bearing files', () => {
     assert.ok(exclusions.includes(item), item);
   assert.doesNotMatch(read('backend/Dockerfile'), /COPY \. /);
   assert.doesNotMatch(read('frontend/Dockerfile'), /ARG .*KEY|ARG .*SECRET/);
+});
+
+test('containers have memory, process and log-size ceilings', () => {
+  const compose = read('compose.yaml');
+  for (const name of ['frontend-prod', 'backend']) {
+    const service = compose.split(new RegExp(`\\n  ${name}:`))[1].split(/\n  [a-z-]+:\n|\nvolumes:/)[0];
+    assert.match(service, /\n    mem_limit: \d+[mg]\n/, name);
+    assert.match(service, /\n    pids_limit: \d+\n/, name);
+    assert.match(service, /\n    logging:\n      driver: json-file\n      options:\n        max-size: '10m'\n        max-file: '3'\n/, name);
+  }
 });
