@@ -80,7 +80,11 @@ TEST_DESCRIPTION = (
 
 _NUMBER = re.compile(r"\A[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _MARKDOWN = re.compile(r"([\\*_~`|>\[\]()#:<@-])")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
+# Controls, line/paragraph separators, and bidi/zero-width marks that could
+# make a scraped title render deceptively.
+_CONTROL = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]"
+)
 _HOSTNAME = re.compile(r"\A[a-z0-9]+(?:[.-][a-z0-9]+)*\Z", re.ASCII)
 _PERIODS = {"hour": "hr", "day": "day", "week": "wk", "month": "mo", "year": "yr"}
 

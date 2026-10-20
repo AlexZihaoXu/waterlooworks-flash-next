@@ -359,11 +359,16 @@ def install_agent_api(
         except UnknownPosting:
             raise HTTPException(404, NOT_FOUND, headers=no_store_headers) from None
 
+    # The guide is public; read it once rather than on every request.
+    guide_cache: list[str | None] = []
+
     def guide_text() -> str | None:
-        try:
-            return guide.read_text(encoding="utf-8") if guide else None
-        except OSError:
-            return None
+        if not guide_cache:
+            try:
+                guide_cache.append(guide.read_text(encoding="utf-8") if guide else None)
+            except OSError:
+                return None
+        return guide_cache[0]
 
     public = APIRouter(prefix=AGENT_PREFIX.rstrip("/"), tags=["agent"])
     schema_cache: list[dict[str, Any]] = []

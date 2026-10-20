@@ -840,3 +840,9 @@ def test_send_test_posts_the_fixed_test_message_to_the_callers_webhook(
         1,
     )
     connection.close()
+
+
+def test_source_text_drops_bidi_and_zero_width_characters() -> None:
+    title = "Safe‮txt.exe⁦x⁩​‏End"
+    embed = build_alert([posting("8", title=title)], 1, base_url=BASE)["embeds"][0]
+    assert embed["title"] == "Safe txt.exe x End"
