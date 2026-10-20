@@ -1,12 +1,11 @@
 """Members see refresh timing and progress, never the log or diagnostics."""
 
-import time
 from pathlib import Path
 
-from auth_support import session_client
+from auth_support import member_cookie, session_client
 
 from waterlooworks_flash_next.api_models import RefreshSnapshot, ScheduledFailureNotice
-from waterlooworks_flash_next.app_auth import COOKIE, SessionStore
+from waterlooworks_flash_next.app_auth import COOKIE
 from waterlooworks_flash_next.refresh_view import MEMBER_FIELDS, member_refresh_view
 
 PROGRESS = {
@@ -74,11 +73,7 @@ def test_refresh_routes_hide_the_log_from_members(tmp_path: Path) -> None:
         assert admin["logs"]
         streamed = client.get("/api/refresh/events?once=true").text
         assert "Generic progress line." in streamed
-        store = SessionStore(path)
-        now = int(time.time())
-        cookie = store.issue(
-            store.prepare(None), "member-uid", now + 300, auth_time=now
-        ).cookie
+        cookie = member_cookie(path)
         client.cookies.clear()
         client.cookies.set(COOKIE, cookie, domain="localhost.local", path="/api")
         member = client.get("/api/refresh").json()

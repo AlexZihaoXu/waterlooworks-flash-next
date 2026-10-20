@@ -180,15 +180,6 @@ def install_auth(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.exception_handler(NewAccountHeld)
-    async def new_account_held(request: Request, error: NewAccountHeld) -> JSONResponse:
-        # Fixed text; never echo the attempted identity.
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "This account is waiting for approval."},
-            headers={"Cache-Control": "no-store"},
-        )
-
     def set_cookie(request: Request, response: Response, cookie: str, ttl: int) -> None:
         transport = cast(AuthTransport, app.state.transport)
         response.set_cookie(
