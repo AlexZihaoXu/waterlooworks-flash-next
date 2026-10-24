@@ -18,11 +18,11 @@ it('collapses the pay-sorting method into a HeroUI Disclosure', async () => {
   );
   const trigger = screen.getByRole('button', { name: 'How pay sorting works' });
   expect(trigger).toHaveAttribute('aria-expanded', 'false');
-  const collapsed = screen.queryByText(/Highest first within comparable/);
+  const collapsed = screen.queryByText(/Other currencies are ranked in CAD/);
   if (collapsed) expect(collapsed).not.toBeVisible();
   fireEvent.click(trigger);
   expect(trigger).toHaveAttribute('aria-expanded', 'true');
   expect(
-    await screen.findByText(/Highest first within comparable/),
+    await screen.findByText(/Other currencies are ranked in CAD/),
   ).toBeVisible();
 });
