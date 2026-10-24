@@ -770,14 +770,14 @@ const WorkspaceView = memo(function WorkspaceView({
           <Disclosure.Content>
             <Disclosure.Body>
               <Typography type="body-xs" color="muted">
-                Highest first within comparable currency / pay-period groups.
-                Average = (minimum + maximum) ÷ 2; tiers use outer bounds.
-                Weekly/monthly/yearly pay uses stated hours or 40h/week, with 52
-                weeks/year. Currency conversion follows your display setting
-                using dated FX. Unspecified currencies count as CAD for sorting
-                and colors; * marks that assumption. Missing salary sorts as
-                zero; unknown units and disputed pay remain unranked. Colors use
-                maximum CAD/hour pay.
+                Highest first. Average = (minimum + maximum) ÷ 2; tiers use
+                outer bounds. Weekly/monthly/yearly pay uses stated hours or
+                40h/week, with 52 weeks/year. Other currencies are ranked in CAD
+                using dated FX, whatever your display currency; without FX they
+                sort in their own group. Unspecified currencies count as CAD for
+                sorting and colors; * marks that assumption. Missing salary
+                sorts as zero; unknown units and disputed pay remain unranked.
+                Colors use maximum CAD/hour pay.
               </Typography>
             </Disclosure.Body>
           </Disclosure.Content>

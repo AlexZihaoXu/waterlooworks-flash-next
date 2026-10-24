@@ -155,8 +155,12 @@ export function compensationForSorting(
       currency: rate.currency ?? 'CAD',
     })),
   };
+  // Rank in CAD whatever the display currency, so USD and CAD pay interleave
+  // by value instead of sorting as separate currency groups. Without FX the
+  // original currency is kept and the comparator falls back to grouping.
   return (
-    presentSummary(assumed, preferences, fx).summary ?? {
+    presentSummary(assumed, { ...preferences, currency: 'CAD' }, fx)
+      .summary ?? {
       ...assumed,
       minimum: null,
       maximum: null,

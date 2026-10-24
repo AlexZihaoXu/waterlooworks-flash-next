@@ -43,9 +43,11 @@ it('defaults currency to CAD before FX and marks display assumptions without cha
   Object.freeze(pay);
   const preferences = { format: 'month' as const, currency: 'USD' as const };
   const fx = { as_of: '', cad_per_unit: { CAD: '1', USD: '2' } };
+  // Ranking always converts to CAD so currencies interleave by value; the
+  // display setting only changes how pay is shown.
   const sorted = compensationForSorting(pay, preferences, fx)!;
-  expect(sorted.currency).toBe('USD');
-  expect(sorted.minimum).toBe('4200.' + '0'.repeat(36));
+  expect(sorted.currency).toBe('CAD');
+  expect(sorted.minimum).toBe('8400.' + '0'.repeat(36));
   const displayed = presentSummary(pay, preferences, fx);
   expect(displayed.summary?.currency).toBe('USD');
   expect(displayed.label).toBe('4,200 USD/mo*');
@@ -93,4 +95,45 @@ it('retains open-bound meaning and does not assume daily working hours', () => {
   expect(hourlyTier({ ...fixed, minimum: '200', period: 'day' }).label).toBe(
     '200 CAD/day',
   );
+});
+
+it('ranks USD pay among CAD pay by converted value, whatever the display currency', () => {
+  const rate = (minimum: string, maximum: string, currency: string) => ({
+    ...fixed,
+    bound_type: 'range' as const,
+    period: 'hour' as const,
+    minimum,
+    maximum,
+    currency,
+    payout_frequency: null,
+    eligibility: null,
+    source_field: '',
+    evidence_text: '',
+  });
+  const posting = (minimum: string, maximum: string, currency: string) => ({
+    minimum,
+    maximum,
+    average: null,
+    currency,
+    period: 'hour' as const,
+    needs_review: false,
+    estimated: false,
+    assumed_hours: false,
+    annualized: false,
+    hours_per_week: [],
+    source_rates: [rate(minimum, maximum, currency)],
+  });
+  const fx = { as_of: '', cad_per_unit: { CAD: '1', USD: '1.4' } };
+  const usd = posting('55', '70', 'USD');
+  const cad = posting('40', '50', 'CAD');
+  for (const currency of ['original', 'CAD', 'USD'] as const) {
+    const preferences = { format: 'hour' as const, currency };
+    expect(
+      compareCompensation(
+        compensationForSorting(usd, preferences, fx),
+        compensationForSorting(cad, preferences, fx),
+        'maximum',
+      ),
+    ).toBeLessThan(0);
+  }
 });
