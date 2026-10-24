@@ -39,7 +39,9 @@ import {
   Breadcrumbs,
   Button,
   Card,
+  Checkbox,
   Chip,
+  Description,
   Disclosure,
   Drawer,
   Dropdown,
@@ -89,7 +91,12 @@ import {
   sortPostings,
   type PostingSort,
 } from '../lib/sorting';
-import { deadlineBadge, exactDeadline, parseDeadline } from '../lib/deadlines';
+import {
+  deadlineBadge,
+  exactDeadline,
+  isDeadlinePassed,
+  parseDeadline,
+} from '../lib/deadlines';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { groupedOptionRows } from '../lib/optionGroups';
 import { FilterOptionList } from './FilterOptionList';
@@ -309,6 +316,7 @@ const WorkspaceView = memo(function WorkspaceView({
   const [markFilters, setMarkFilters] = useState<MarkFilters>(
     initialView.marks,
   );
+  const [hideExpired, setHideExpired] = useState(initialView.hideExpired);
   const [pagination, setPagination] = useState({
     page: initialView.page,
     query: initialView.query,
@@ -333,6 +341,7 @@ const WorkspaceView = memo(function WorkspaceView({
       setQuery(next.query);
       setFilters(next.filters);
       setMarkFilters(next.marks);
+      setHideExpired(next.hideExpired);
       setSort(next.sort);
       setPagination({ page: next.page, query: next.query });
       setPickerOpen(false);
@@ -519,11 +528,31 @@ const WorkspaceView = memo(function WorkspaceView({
     [presentedPostings, appliedQuery, activeFilters],
   );
   const markMap = marks.marks;
+  const markMatched = useMemo(
+    () => filterByMarks(searched, markMap, markFilters),
+    [searched, markMap, markFilters],
+  );
+  const expiredCount = useMemo(
+    () =>
+      markMatched.filter((posting) =>
+        isDeadlinePassed(posting.listing.deadline, now),
+      ).length,
+    [markMatched, now],
+  );
   const filtered = useMemo(
     () =>
-      sortPostings(filterByMarks(searched, markMap, markFilters), sort, now),
-    [searched, markMap, markFilters, sort, now],
+      sortPostings(
+        hideExpired
+          ? markMatched.filter(
+              (posting) => !isDeadlinePassed(posting.listing.deadline, now),
+            )
+          : markMatched,
+        sort,
+        now,
+      ),
+    [markMatched, hideExpired, sort, now],
   );
+  const expiredHidden = hideExpired ? expiredCount : 0;
   const hiddenCount = useMemo(
     () => hiddenNotInterested(searched, markMap, markFilters),
     [searched, markMap, markFilters],
@@ -538,6 +567,7 @@ const WorkspaceView = memo(function WorkspaceView({
       query: appliedQuery,
       filters,
       marks: markFilters,
+      hideExpired,
       sort,
       page: currentPage,
     });
@@ -554,7 +584,16 @@ const WorkspaceView = memo(function WorkspaceView({
       readBrowseUrl(window.location.search),
     );
     navigation.current = false;
-  }, [connected, query, appliedQuery, filters, markFilters, sort, currentPage]);
+  }, [
+    connected,
+    query,
+    appliedQuery,
+    filters,
+    markFilters,
+    hideExpired,
+    sort,
+    currentPage,
+  ]);
   const visible = filtered.slice(
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
@@ -593,6 +632,7 @@ const WorkspaceView = memo(function WorkspaceView({
     appliedQuery,
     activeFilters,
     markFilters,
+    hideExpired,
     sort,
     reducedMotion,
   ]);
@@ -650,7 +690,7 @@ const WorkspaceView = memo(function WorkspaceView({
       </Select.Popover>
     </Select>
   );
-  const countText = `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'}${hiddenCount ? ` · ${hiddenCount.toLocaleString('en-CA')} not interested hidden` : ''}`;
+  const countText = `${filtered.length.toLocaleString('en-CA')} ${hasFilters ? (filtered.length === 1 ? 'result' : 'results') : filtered.length === 1 ? 'posting' : 'postings'}${hiddenCount ? ` · ${hiddenCount.toLocaleString('en-CA')} not interested hidden` : ''}${expiredHidden ? ` · ${expiredHidden.toLocaleString('en-CA')} past deadline hidden` : ''}`;
   // Marks: optimistic changes, an Undo toast when a posting leaves the list,
   // and a rollback notice when the server refuses a change.
   const notSaved = () =>
@@ -765,11 +805,13 @@ const WorkspaceView = memo(function WorkspaceView({
                 (!Object.values(activeFilters).some(
                   (values) => values.length > 0,
                 ) &&
-                  markFilterTotal === 0)
+                  markFilterTotal === 0 &&
+                  hideExpired)
               }
               onPress={() => {
                 setFilters(emptyFilters);
                 setMarkFilters(defaultMarkFilters);
+                setHideExpired(true);
                 setPage(1);
               }}
             >
@@ -845,6 +887,29 @@ const WorkspaceView = memo(function WorkspaceView({
               </div>
             ))}
           </div>
+          <Checkbox
+            variant="secondary"
+            isSelected={hideExpired}
+            isDisabled={!connected}
+            onChange={(selected) => {
+              setHideExpired(selected);
+              setPage(1);
+            }}
+          >
+            <Checkbox.Content>
+              <Checkbox.Control>
+                <Checkbox.Indicator />
+              </Checkbox.Control>
+              Hide passed deadlines
+            </Checkbox.Content>
+            {expiredCount > 0 && (
+              <Description>
+                {expiredCount.toLocaleString('en-CA')}{' '}
+                {expiredCount === 1 ? 'posting' : 'postings'} past deadline
+                {hideExpired ? ' hidden' : ''}
+              </Description>
+            )}
+          </Checkbox>
         </Card.Content>
       </Card>
       <MarkFiltersCard
@@ -1875,6 +1940,7 @@ const WorkspaceView = memo(function WorkspaceView({
                         setQuery('');
                         setFilters(emptyFilters);
                         setMarkFilters(defaultMarkFilters);
+                        setHideExpired(true);
                         setPage(1);
                       }}
                     >

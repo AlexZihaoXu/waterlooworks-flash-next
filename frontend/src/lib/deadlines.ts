@@ -40,6 +40,12 @@ export function parseDeadline(value: unknown): number | null {
   }
 }
 
+/** Verified deadline at or before now; unknown deadlines never count as passed. */
+export function isDeadlinePassed(value: unknown, now: number): boolean {
+  const deadline = parseDeadline(value);
+  return deadline !== null && deadline <= now;
+}
+
 export function deadlineBadge(
   deadline: number | null,
   now: number,

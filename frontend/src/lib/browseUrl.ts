@@ -13,6 +13,8 @@ export type BrowseView = {
   filters: PostingFilters;
   /** Per-user mark filters; not-interested postings stay hidden by default. */
   marks: MarkFilters;
+  /** Postings whose verified deadline has passed stay hidden by default. */
+  hideExpired: boolean;
 };
 const filterParameters = {
   organization: 'organization',
@@ -31,6 +33,7 @@ export function readBrowseUrl(search: string): BrowseView {
       : 1;
   const rawSort = params.get('sort') ?? 'id';
   const rawViewed = params.get('viewed');
+  const shown = params.getAll('show');
   const values = (key: string) => [
     ...new Set(
       params
@@ -56,8 +59,9 @@ export function readBrowseUrl(search: string): BrowseView {
         rawViewed === 'viewed' || rawViewed === 'unviewed'
           ? rawViewed
           : defaultMarkFilters.viewed,
-      hideNotInterested: !params.getAll('show').includes('not_interested'),
+      hideNotInterested: !shown.includes('not_interested'),
     },
+    hideExpired: !shown.includes('expired'),
   };
 }
 
@@ -84,6 +88,7 @@ export function writeBrowseUrl(href: string, view: BrowseView): string {
   if (view.marks.viewed !== 'any')
     url.searchParams.set('viewed', view.marks.viewed);
   if (!view.marks.hideNotInterested)
-    url.searchParams.set('show', 'not_interested');
+    url.searchParams.append('show', 'not_interested');
+  if (!view.hideExpired) url.searchParams.append('show', 'expired');
   return url.pathname + url.search + url.hash;
 }

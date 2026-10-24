@@ -21,7 +21,24 @@ describe('browse URL', () => {
         work_arrangement: ['Remote'],
       },
       marks: defaultMarkFilters,
+      hideExpired: true,
     });
+  });
+  it('hides passed deadlines by default and keeps the opt-out in the URL', () => {
+    expect(readBrowseUrl('').hideExpired).toBe(true);
+    const shown = readBrowseUrl('?show=expired&show=not_interested');
+    expect(shown.hideExpired).toBe(false);
+    expect(shown.marks.hideNotInterested).toBe(false);
+    expect(writeBrowseUrl('https://local.invalid/', shown)).toBe(
+      '/?show=not_interested&show=expired',
+    );
+    expect(
+      writeBrowseUrl('https://local.invalid/?show=expired', {
+        ...shown,
+        marks: defaultMarkFilters,
+        hideExpired: true,
+      }),
+    ).toBe('/');
   });
   it('restores mark filters, keeping not-interested postings hidden by default', () => {
     expect(readBrowseUrl('').marks).toEqual(defaultMarkFilters);

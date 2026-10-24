@@ -3,6 +3,7 @@ import {
   deadlineBadge,
   parseDeadline,
   compareRemaining,
+  isDeadlinePassed,
 } from '../../src/lib/deadlines';
 
 // Calendar and duration arithmetic only, not fabricated postings or API responses.
@@ -88,5 +89,17 @@ describe('deadline handling', () => {
     expect(compareRemaining(20, 0, 10)).toBeLessThan(0);
     expect(compareRemaining(0, null, 10)).toBeLessThan(0);
     expect(compareRemaining(null, null, 10)).toBe(0);
+  });
+});
+
+describe('passed deadlines', () => {
+  it('counts only verified deadlines at or before now as passed', () => {
+    const now = Date.UTC(2026, 0, 15, 14);
+    expect(isDeadlinePassed('Jan 15, 2026 09:00 AM', now)).toBe(true);
+    expect(isDeadlinePassed('Jan 15, 2026 09:00 AM', now - 1)).toBe(false);
+    expect(isDeadlinePassed('Jan 14, 2026 11:59 PM', now)).toBe(true);
+    // Unknown or unparseable deadlines are never hidden.
+    for (const value of [undefined, null, '', 'ASAP', 42])
+      expect(isDeadlinePassed(value, now)).toBe(false);
   });
 });
